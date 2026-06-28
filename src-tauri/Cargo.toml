@@ -1,0 +1,58 @@
+[package]
+name = "galaxyas-pos"
+version = "0.1.0"
+description = "GalaxyAS POS - Offline-first multi-store Point of Sale"
+authors = ["GalaxyAS"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "galaxyas_pos_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+
+# Database (Rust-native SQLite per the architecture plan).
+rusqlite = { version = "0.32", features = ["bundled", "uuid", "serde_json"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
+refinery = { version = "0.8", features = ["rusqlite"] }
+
+# Serialization / IDs / time.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v7", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Networking for sync (rustls keeps the bundle small, avoids OpenSSL).
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+
+# Auth / hashing.
+argon2 = "0.5"
+rand = "0.8"
+
+# Logging.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+thiserror = "2"
+
+[features]
+# This feature is used for production builds or when a dev server is not specified, DO NOT REMOVE!!
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

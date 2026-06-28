@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+.pnp/
+.pnp.js
+
+# Build output
+build/
+dist/
+.svelte-kit/
+desktop/src-tauri/target/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# SQLite local DB
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.swp
