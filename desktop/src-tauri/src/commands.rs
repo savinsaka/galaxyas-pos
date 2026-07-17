@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use rusqlite::Connection;
@@ -8,20 +9,70 @@ use tauri::State;
 use crate::db;
 use crate::error::{AppError, AppResult};
 use crate::models::{
-    DiscountPeriod, DiscountPeriodInput, Product, ProductInput, ProductWithStock, SaleInput,
-    StockMovement, StockMovementInput, SyncResult, Transaction, TransactionDetail, User, UserInput,
+    BrandSalesRow, CloseShiftInput, Customer, CustomerInput, DiscountPeriod, DiscountPeriodInput,
+    Expense, ExpenseInput, OpenShiftInput, Product, ProductInput, ProductSalesRow,
+    ProductWithStock, SaleInput, Shift, StockMovement, StockMovementInput, StoreInfo, SyncResult,
+    Transaction, TransactionDetail, User, UserInput,
 };
+use crate::stores;
 use crate::sync;
 
-/// State global aplikasi: koneksi SQLite tunggal yang dijaga Mutex.
+/// State global aplikasi: koneksi SQLite (toko aktif) dijaga Mutex, bisa
+/// di-swap saat pindah toko lewat `select_store`. `conn` dibungkus `Arc` agar
+/// bisa dibagi dengan thread server "Server Pusat" (`lan::start`) tanpa
+/// mengubah cara command lain memakainya (`state.lock()` tetap sama).
 pub struct AppState {
-    pub conn: Mutex<Connection>,
+    pub conn: Arc<Mutex<Connection>>,
+    pub data_dir: PathBuf,
+    /// Terisi bila mode klien "Server Pusat" aktif: command yang di-proxy
+    /// memanggil host lewat HTTP alih-alih SQLite lokal.
+    pub remote: Mutex<Option<crate::lan::RemoteConfig>>,
+    /// Handle thread server Server Pusat, bila PC ini bertindak sebagai host.
+    pub lan: Mutex<Option<crate::lan::LanServerHandle>>,
 }
 
 impl AppState {
     fn lock(&self) -> AppResult<std::sync::MutexGuard<'_, Connection>> {
         self.conn.lock().map_err(|_| AppError::Other("gagal mengunci database".into()))
     }
+
+    fn remote_config(&self) -> Option<crate::lan::RemoteConfig> {
+        self.remote.lock().ok().and_then(|g| g.clone())
+    }
+}
+
+// ---------- Multi-database (toko) ----------
+
+#[tauri::command]
+pub fn list_stores(state: State<'_, AppState>) -> AppResult<Vec<StoreInfo>> {
+    stores::list_stores(&state.data_dir)
+}
+
+#[tauri::command]
+pub fn current_store(state: State<'_, AppState>) -> AppResult<StoreInfo> {
+    stores::current_store(&state.data_dir)
+}
+
+#[tauri::command]
+pub fn create_store(state: State<'_, AppState>, name: String) -> AppResult<StoreInfo> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(AppError::Other("Nama toko wajib diisi.".into()));
+    }
+    stores::create_store(&state.data_dir, name.to_string())
+}
+
+/// Pindah toko aktif: buka koneksi baru ke database toko tsb (inisialisasi
+/// skema bila baru), lalu tukar koneksi yang dipakai seluruh command lain.
+#[tauri::command]
+pub fn select_store(state: State<'_, AppState>, id: String) -> AppResult<StoreInfo> {
+    let info = stores::set_active(&state.data_dir, &id)?;
+    let path = stores::db_path(&state.data_dir, &info);
+    let new_conn = Connection::open(&path)?;
+    db::init_schema(&new_conn)?;
+    db::seed_defaults(&new_conn)?;
+    *state.lock()? = new_conn;
+    Ok(info)
 }
 
 // ---------- Pengaturan ----------
@@ -41,54 +92,138 @@ pub fn update_setting(state: State<'_, AppState>, key: String, value: String) ->
 // ---------- Barang & stok ----------
 
 #[tauri::command]
-pub fn list_products(
+pub async fn list_products(
     state: State<'_, AppState>,
     search: Option<String>,
     include_inactive: Option<bool>,
+    limit: Option<i64>,
 ) -> AppResult<Vec<ProductWithStock>> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "list_products", serde_json::json!({
+            "search": search, "include_inactive": include_inactive, "limit": limit
+        })).await;
+    }
     let conn = state.lock()?;
-    db::list_products(&conn, search, include_inactive.unwrap_or(false))
+    db::list_products(&conn, search, include_inactive.unwrap_or(false), limit)
+}
+
+/// Versi paginasi untuk tabel Data Barang: filter merek, sort, limit/offset,
+/// plus total baris (untuk kontrol halaman) agar tidak me-render semua data.
+#[tauri::command]
+pub async fn list_products_page(
+    state: State<'_, AppState>,
+    search: Option<String>,
+    include_inactive: Option<bool>,
+    brand: Option<String>,
+    sort_by: Option<String>,
+    sort_dir: Option<String>,
+    limit: i64,
+    offset: i64,
+) -> AppResult<crate::models::ProductPage> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "list_products_page", serde_json::json!({
+            "search": search, "include_inactive": include_inactive, "brand": brand,
+            "sort_by": sort_by, "sort_dir": sort_dir, "limit": limit, "offset": offset
+        })).await;
+    }
+    let conn = state.lock()?;
+    db::list_products_page(
+        &conn,
+        search,
+        include_inactive.unwrap_or(false),
+        brand,
+        sort_by,
+        sort_dir,
+        limit,
+        offset,
+    )
 }
 
 #[tauri::command]
-pub fn save_product(state: State<'_, AppState>, input: ProductInput) -> AppResult<Product> {
+pub async fn save_product(state: State<'_, AppState>, input: ProductInput) -> AppResult<Product> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "save_product", serde_json::json!({ "input": input })).await;
+    }
     let conn = state.lock()?;
     db::upsert_product(&conn, input)
 }
 
 #[tauri::command]
-pub fn toggle_product_active(
+pub async fn toggle_product_active(
     state: State<'_, AppState>,
     id: String,
     active: bool,
 ) -> AppResult<()> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "toggle_product_active", serde_json::json!({
+            "id": id, "active": active
+        })).await;
+    }
     let conn = state.lock()?;
     db::set_product_active(&conn, &id, active)
 }
 
 #[tauri::command]
-pub fn delete_product(state: State<'_, AppState>, id: String) -> AppResult<()> {
+pub async fn delete_product(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "delete_product", serde_json::json!({ "id": id })).await;
+    }
     let conn = state.lock()?;
     db::delete_product(&conn, &id)
 }
 
+/// Cari & non-aktifkan (soft-delete) barang dengan barcode kembar, sisakan
+/// satu yang paling baru diubah. Dipakai setelah import batch yang berulang.
 #[tauri::command]
-pub fn find_by_barcode(
+pub async fn dedupe_products(state: State<'_, AppState>) -> AppResult<crate::models::DedupeResult> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "dedupe_products", serde_json::json!({})).await;
+    }
+    let conn = state.lock()?;
+    db::dedupe_products_by_barcode(&conn)
+}
+
+/// Hapus seluruh data barang/stok/transaksi/diskon/merek. Akun & pengaturan
+/// toko tetap dipertahankan. Aksi ini tidak bisa dibatalkan.
+#[tauri::command]
+pub fn reset_data(state: State<'_, AppState>, confirm: String) -> AppResult<()> {
+    if confirm.trim() != "HAPUS SEMUA DATA" {
+        return Err(AppError::Other("Konfirmasi tidak sesuai.".into()));
+    }
+    let conn = state.lock()?;
+    db::reset_data(&conn)
+}
+
+#[tauri::command]
+pub async fn find_by_barcode(
     state: State<'_, AppState>,
     barcode: String,
 ) -> AppResult<Option<ProductWithStock>> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "find_by_barcode", serde_json::json!({ "barcode": barcode })).await;
+    }
     let conn = state.lock()?;
     db::find_by_barcode(&conn, &barcode)
 }
 
 #[tauri::command]
-pub fn adjust_stock(state: State<'_, AppState>, product_id: String, delta: f64) -> AppResult<f64> {
+pub async fn adjust_stock(state: State<'_, AppState>, product_id: String, delta: f64) -> AppResult<f64> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "adjust_stock", serde_json::json!({
+            "product_id": product_id, "delta": delta
+        })).await;
+    }
     let conn = state.lock()?;
     db::adjust_stock(&conn, &product_id, delta)
 }
 
 #[tauri::command]
-pub fn set_stock(state: State<'_, AppState>, product_id: String, qty: f64) -> AppResult<f64> {
+pub async fn set_stock(state: State<'_, AppState>, product_id: String, qty: f64) -> AppResult<f64> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "set_stock", serde_json::json!({
+            "product_id": product_id, "qty": qty
+        })).await;
+    }
     let conn = state.lock()?;
     db::set_stock(&conn, &product_id, qty)
 }
@@ -96,57 +231,102 @@ pub fn set_stock(state: State<'_, AppState>, product_id: String, qty: f64) -> Ap
 // ---------- Penjualan / kasir ----------
 
 #[tauri::command]
-pub fn checkout(state: State<'_, AppState>, sale: SaleInput) -> AppResult<TransactionDetail> {
+pub async fn checkout(state: State<'_, AppState>, sale: SaleInput) -> AppResult<TransactionDetail> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "checkout", serde_json::json!({ "sale": sale })).await;
+    }
     let mut conn = state.lock()?;
     db::create_sale(&mut conn, sale)
 }
 
 #[tauri::command]
-pub fn list_transactions(
+pub async fn list_transactions(
     state: State<'_, AppState>,
+    from: Option<String>,
+    to: Option<String>,
     limit: Option<i64>,
 ) -> AppResult<Vec<Transaction>> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "list_transactions", serde_json::json!({
+            "from": from, "to": to, "limit": limit
+        })).await;
+    }
     let conn = state.lock()?;
-    db::list_transactions(&conn, limit.unwrap_or(100))
+    db::list_transactions(&conn, from, to, limit.unwrap_or(100))
 }
 
 #[tauri::command]
-pub fn get_transaction(
+pub async fn get_transaction(
     state: State<'_, AppState>,
     id: String,
 ) -> AppResult<Option<TransactionDetail>> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "get_transaction", serde_json::json!({ "id": id })).await;
+    }
     let conn = state.lock()?;
     db::get_transaction(&conn, &id)
 }
 
 #[tauri::command]
-pub fn delete_transaction(state: State<'_, AppState>, id: String) -> AppResult<()> {
+pub async fn delete_transaction(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "delete_transaction", serde_json::json!({ "id": id })).await;
+    }
     let mut conn = state.lock()?;
     db::delete_transaction(&mut conn, &id)
+}
+
+#[tauri::command]
+pub async fn update_transaction(
+    state: State<'_, AppState>,
+    id: String,
+    input: SaleInput,
+) -> AppResult<TransactionDetail> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "update_transaction", serde_json::json!({
+            "id": id, "input": input
+        })).await;
+    }
+    let mut conn = state.lock()?;
+    db::update_transaction(&mut conn, &id, input)
 }
 
 // ---------- Pengguna / hak akses ----------
 
 #[tauri::command]
-pub fn login(state: State<'_, AppState>, username: String, pin: String) -> AppResult<Option<User>> {
+pub async fn login(state: State<'_, AppState>, username: String, pin: String) -> AppResult<Option<User>> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "login", serde_json::json!({
+            "username": username, "pin": pin
+        })).await;
+    }
     let conn = state.lock()?;
     db::login(&conn, &username, &pin)
 }
 
 #[tauri::command]
-pub fn list_users(state: State<'_, AppState>) -> AppResult<Vec<User>> {
+pub async fn list_users(state: State<'_, AppState>) -> AppResult<Vec<User>> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "list_users", serde_json::json!({})).await;
+    }
     let conn = state.lock()?;
     db::list_users(&conn)
 }
 
 #[tauri::command]
-pub fn save_user(state: State<'_, AppState>, input: UserInput) -> AppResult<User> {
+pub async fn save_user(state: State<'_, AppState>, input: UserInput) -> AppResult<User> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "save_user", serde_json::json!({ "input": input })).await;
+    }
     let conn = state.lock()?;
     db::save_user(&conn, input)
 }
 
 #[tauri::command]
-pub fn delete_user(state: State<'_, AppState>, id: String) -> AppResult<()> {
+pub async fn delete_user(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "delete_user", serde_json::json!({ "id": id })).await;
+    }
     let conn = state.lock()?;
     db::delete_user(&conn, &id)
 }
@@ -154,51 +334,139 @@ pub fn delete_user(state: State<'_, AppState>, id: String) -> AppResult<()> {
 // ---------- Pergerakan stok ----------
 
 #[tauri::command]
-pub fn create_stock_movement(
+pub async fn create_stock_movement(
     state: State<'_, AppState>,
     input: StockMovementInput,
 ) -> AppResult<StockMovement> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "create_stock_movement", serde_json::json!({ "input": input })).await;
+    }
     let conn = state.lock()?;
     db::create_stock_movement(&conn, input)
 }
 
 #[tauri::command]
-pub fn list_stock_movements(
+pub async fn list_stock_movements(
     state: State<'_, AppState>,
     kind: Option<String>,
     from: Option<String>,
     to: Option<String>,
     limit: Option<i64>,
 ) -> AppResult<Vec<StockMovement>> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "list_stock_movements", serde_json::json!({
+            "kind": kind, "from": from, "to": to, "limit": limit
+        })).await;
+    }
     let conn = state.lock()?;
     db::list_stock_movements(&conn, kind, from, to, limit.unwrap_or(500))
 }
 
 #[tauri::command]
-pub fn delete_stock_movement(state: State<'_, AppState>, id: i64) -> AppResult<()> {
+pub async fn delete_stock_movement(state: State<'_, AppState>, id: i64) -> AppResult<()> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "delete_stock_movement", serde_json::json!({ "id": id })).await;
+    }
     let mut conn = state.lock()?;
     db::delete_stock_movement(&mut conn, id)
+}
+
+// ---------- Batch Item Masuk / Keluar ----------
+
+#[tauri::command]
+pub async fn create_stock_movement_batch(
+    state: State<'_, AppState>,
+    input: crate::models::StockMovementBatchInput,
+) -> AppResult<crate::models::StockMovementBatchDetail> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "create_stock_movement_batch", serde_json::json!({ "input": input })).await;
+    }
+    let mut conn = state.lock()?;
+    db::create_stock_movement_batch(&mut conn, input)
+}
+
+#[tauri::command]
+pub async fn list_stock_movement_batches(
+    state: State<'_, AppState>,
+    kind: Option<String>,
+    from: Option<String>,
+    to: Option<String>,
+    limit: Option<i64>,
+) -> AppResult<Vec<crate::models::StockMovementBatch>> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "list_stock_movement_batches", serde_json::json!({
+            "kind": kind, "from": from, "to": to, "limit": limit
+        })).await;
+    }
+    let conn = state.lock()?;
+    db::list_stock_movement_batches(&conn, kind, from, to, limit.unwrap_or(500))
+}
+
+#[tauri::command]
+pub async fn get_stock_movement_batch(
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<Option<crate::models::StockMovementBatchDetail>> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "get_stock_movement_batch", serde_json::json!({ "id": id })).await;
+    }
+    let conn = state.lock()?;
+    db::get_stock_movement_batch(&conn, &id)
+}
+
+#[tauri::command]
+pub async fn update_stock_movement_batch(
+    state: State<'_, AppState>,
+    id: String,
+    items: Vec<crate::models::StockMovementBatchItemInput>,
+    note: Option<String>,
+) -> AppResult<crate::models::StockMovementBatchDetail> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "update_stock_movement_batch", serde_json::json!({
+            "id": id, "items": items, "note": note
+        })).await;
+    }
+    let mut conn = state.lock()?;
+    db::update_stock_movement_batch(&mut conn, &id, items, note)
+}
+
+#[tauri::command]
+pub async fn delete_stock_movement_batch(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "delete_stock_movement_batch", serde_json::json!({ "id": id })).await;
+    }
+    let mut conn = state.lock()?;
+    db::delete_stock_movement_batch(&mut conn, &id)
 }
 
 // ---------- Diskon periodik ----------
 
 #[tauri::command]
-pub fn list_discounts(state: State<'_, AppState>) -> AppResult<Vec<DiscountPeriod>> {
+pub async fn list_discounts(state: State<'_, AppState>) -> AppResult<Vec<DiscountPeriod>> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "list_discounts", serde_json::json!({})).await;
+    }
     let conn = state.lock()?;
     db::list_discounts(&conn)
 }
 
 #[tauri::command]
-pub fn save_discount(
+pub async fn save_discount(
     state: State<'_, AppState>,
     input: DiscountPeriodInput,
 ) -> AppResult<DiscountPeriod> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "save_discount", serde_json::json!({ "input": input })).await;
+    }
     let conn = state.lock()?;
     db::save_discount(&conn, input)
 }
 
 #[tauri::command]
-pub fn delete_discount(state: State<'_, AppState>, id: String) -> AppResult<()> {
+pub async fn delete_discount(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "delete_discount", serde_json::json!({ "id": id })).await;
+    }
     let conn = state.lock()?;
     db::delete_discount(&conn, &id)
 }
@@ -206,24 +474,207 @@ pub fn delete_discount(state: State<'_, AppState>, id: String) -> AppResult<()> 
 // ---------- Merek (brand) ----------
 
 #[tauri::command]
-pub fn list_brands(state: State<'_, AppState>) -> AppResult<Vec<crate::models::Brand>> {
+pub async fn list_brands(state: State<'_, AppState>) -> AppResult<Vec<crate::models::Brand>> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "list_brands", serde_json::json!({})).await;
+    }
     let conn = state.lock()?;
     db::list_brands(&conn)
 }
 
 #[tauri::command]
-pub fn save_brand(
+pub async fn save_brand(
     state: State<'_, AppState>,
     input: crate::models::BrandInput,
 ) -> AppResult<crate::models::Brand> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "save_brand", serde_json::json!({ "input": input })).await;
+    }
     let conn = state.lock()?;
     db::save_brand(&conn, input)
 }
 
 #[tauri::command]
-pub fn delete_brand(state: State<'_, AppState>, id: String) -> AppResult<()> {
+pub async fn delete_brand(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "delete_brand", serde_json::json!({ "id": id })).await;
+    }
     let conn = state.lock()?;
     db::delete_brand(&conn, &id)
+}
+
+// ---------- Pelanggan ----------
+
+#[tauri::command]
+pub async fn list_customers(
+    state: State<'_, AppState>,
+    search: Option<String>,
+    include_inactive: Option<bool>,
+) -> AppResult<Vec<Customer>> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "list_customers", serde_json::json!({
+            "search": search, "include_inactive": include_inactive
+        })).await;
+    }
+    let conn = state.lock()?;
+    db::list_customers(&conn, search, include_inactive.unwrap_or(false))
+}
+
+#[tauri::command]
+pub async fn save_customer(state: State<'_, AppState>, input: CustomerInput) -> AppResult<Customer> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "save_customer", serde_json::json!({ "input": input })).await;
+    }
+    let conn = state.lock()?;
+    db::upsert_customer(&conn, input)
+}
+
+#[tauri::command]
+pub async fn delete_customer(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "delete_customer", serde_json::json!({ "id": id })).await;
+    }
+    let conn = state.lock()?;
+    db::delete_customer(&conn, &id)
+}
+
+// ---------- Pengeluaran (Kas Keluar) ----------
+
+#[tauri::command]
+pub async fn list_expenses(
+    state: State<'_, AppState>,
+    from: Option<String>,
+    to: Option<String>,
+) -> AppResult<Vec<Expense>> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "list_expenses", serde_json::json!({
+            "from": from, "to": to
+        })).await;
+    }
+    let conn = state.lock()?;
+    db::list_expenses(&conn, from, to)
+}
+
+#[tauri::command]
+pub async fn save_expense(state: State<'_, AppState>, input: ExpenseInput) -> AppResult<Expense> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "save_expense", serde_json::json!({ "input": input })).await;
+    }
+    let conn = state.lock()?;
+    db::save_expense(&conn, input)
+}
+
+#[tauri::command]
+pub async fn delete_expense(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "delete_expense", serde_json::json!({ "id": id })).await;
+    }
+    let conn = state.lock()?;
+    db::delete_expense(&conn, &id)
+}
+
+// ---------- Shift kasir (buka/tutup, rekonsiliasi) ----------
+
+#[tauri::command]
+pub async fn get_active_shift(state: State<'_, AppState>) -> AppResult<Option<Shift>> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "get_active_shift", serde_json::json!({})).await;
+    }
+    let conn = state.lock()?;
+    db::get_active_shift(&conn)
+}
+
+#[tauri::command]
+pub async fn open_shift(state: State<'_, AppState>, input: OpenShiftInput) -> AppResult<Shift> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "open_shift", serde_json::json!({ "input": input })).await;
+    }
+    let conn = state.lock()?;
+    db::open_shift(&conn, input)
+}
+
+#[tauri::command]
+pub async fn close_shift(state: State<'_, AppState>, input: CloseShiftInput) -> AppResult<Shift> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "close_shift", serde_json::json!({ "input": input })).await;
+    }
+    let conn = state.lock()?;
+    db::close_shift(&conn, input)
+}
+
+#[tauri::command]
+pub async fn list_shifts(state: State<'_, AppState>, limit: Option<i64>) -> AppResult<Vec<Shift>> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "list_shifts", serde_json::json!({ "limit": limit })).await;
+    }
+    let conn = state.lock()?;
+    db::list_shifts(&conn, limit.unwrap_or(100))
+}
+
+// ---------- Laporan per barang / per merek ----------
+
+#[tauri::command]
+pub async fn product_sales_report(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+    brands: Vec<String>,
+) -> AppResult<Vec<ProductSalesRow>> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "product_sales_report", serde_json::json!({
+            "from": from, "to": to, "brands": brands
+        })).await;
+    }
+    let conn = state.lock()?;
+    db::product_sales_report(&conn, &from, &to, &brands)
+}
+
+#[tauri::command]
+pub async fn brand_sales_report(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+    brands: Vec<String>,
+) -> AppResult<Vec<BrandSalesRow>> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "brand_sales_report", serde_json::json!({
+            "from": from, "to": to, "brands": brands
+        })).await;
+    }
+    let conn = state.lock()?;
+    db::brand_sales_report(&conn, &from, &to, &brands)
+}
+
+#[tauri::command]
+pub async fn sales_item_detail_report(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+    brands: Vec<String>,
+) -> AppResult<Vec<crate::models::SalesItemDetailRow>> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "sales_item_detail_report", serde_json::json!({
+            "from": from, "to": to, "brands": brands
+        })).await;
+    }
+    let conn = state.lock()?;
+    db::sales_item_detail_report(&conn, &from, &to, &brands)
+}
+
+#[tauri::command]
+pub async fn daily_sales_report(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+    brands: Vec<String>,
+) -> AppResult<Vec<crate::models::DailySalesRow>> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "daily_sales_report", serde_json::json!({
+            "from": from, "to": to, "brands": brands
+        })).await;
+    }
+    let conn = state.lock()?;
+    db::daily_sales_report(&conn, &from, &to, &brands)
 }
 
 // ---------- File & Printer (sistem) ----------
@@ -296,13 +747,18 @@ pub fn print_text_to(printer: Option<String>, text: String) -> AppResult<()> {
         let path = dir.join("struk_print.txt");
         std::fs::write(&path, text.as_bytes())?;
 
+        // Get-Content (Windows PowerShell 5.1) membaca file sebagai ANSI secara
+        // default sehingga teks UTF-8 tercetak acak. Paksa baca sebagai UTF-8.
         let ps = match printer {
             Some(p) if !p.trim().is_empty() => format!(
-                "Get-Content -Raw -LiteralPath '{}' | Out-Printer -Name '{}'",
+                "Get-Content -Raw -Encoding UTF8 -LiteralPath '{}' | Out-Printer -Name '{}'",
                 path.display(),
                 p.replace('\'', "''")
             ),
-            _ => format!("Get-Content -Raw -LiteralPath '{}' | Out-Printer", path.display()),
+            _ => format!(
+                "Get-Content -Raw -Encoding UTF8 -LiteralPath '{}' | Out-Printer",
+                path.display()
+            ),
         };
         let mut cmd = std::process::Command::new("powershell");
         cmd.args(["-NoProfile", "-Command", &ps]);
@@ -314,6 +770,85 @@ pub fn print_text_to(printer: Option<String>, text: String) -> AppResult<()> {
         let _ = (printer, text);
     }
     Ok(())
+}
+
+/// Cetak byte ESC/POS mentah langsung ke spooler (RAW), untuk struk thermal
+/// dengan format/autocut yang stabil (tidak melalui driver GDI Out-Printer).
+#[tauri::command]
+pub fn print_escpos_to(printer: Option<String>, bytes: Vec<u8>) -> AppResult<()> {
+    #[cfg(target_os = "windows")]
+    {
+        crate::winprint::print_raw(printer.as_deref(), &bytes)?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (printer, bytes);
+    }
+    Ok(())
+}
+
+// ---------- Window cetak terpisah ----------
+
+/// Konten cetak yang dititipkan ke window print terpisah, diambil sekali oleh
+/// halaman `print.html` saat window tersebut dimuat.
+#[derive(Clone, serde::Serialize)]
+pub struct PrintPayload {
+    pub html: String,
+    pub css: String,
+}
+
+#[derive(Default)]
+pub struct PrintPayloadState(pub Mutex<HashMap<String, PrintPayload>>);
+
+/// Buka window baru khusus preview/cetak (title bar & tombol tutup sendiri,
+/// terpisah dari window utama) — supaya tombol X window utama tidak pernah
+/// tertumpuk dialog cetak bawaan OS.
+///
+/// PENTING: command ini WAJIB `async`. Membuat WebviewWindow dari command
+/// sinkron menyebabkan deadlock di Windows (event loop webview2 menunggu
+/// command selesai, command menunggu window jadi) — ini penyebab freeze
+/// "not responding" pada percobaan pertama fitur ini.
+#[tauri::command]
+pub async fn open_print_window(
+    app: tauri::AppHandle,
+    html: String,
+    css: String,
+    title: String,
+    width: f64,
+    height: f64,
+) -> AppResult<()> {
+    use tauri::Manager;
+
+    let label = format!("print-{}", uuid::Uuid::new_v4().simple());
+    {
+        let state = app.state::<PrintPayloadState>();
+        let mut map = state
+            .0
+            .lock()
+            .map_err(|_| AppError::Other("gagal mengunci payload cetak".into()))?;
+        map.insert(label.clone(), PrintPayload { html, css });
+    }
+
+    let url = format!("print.html?label={label}");
+    tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App(url.into()))
+        .title(title)
+        .inner_size(width, height)
+        .center()
+        .build()
+        .map_err(|e| AppError::Other(format!("gagal membuka window cetak: {e}")))?;
+
+    Ok(())
+}
+
+/// Diambil oleh window cetak saat dimuat; sekali diambil, payload dihapus dari state.
+#[tauri::command]
+pub fn take_print_payload(state: State<'_, PrintPayloadState>, label: String) -> AppResult<PrintPayload> {
+    state
+        .0
+        .lock()
+        .map_err(|_| AppError::Other("gagal mengunci payload cetak".into()))?
+        .remove(&label)
+        .ok_or_else(|| AppError::Other("payload cetak tidak ditemukan (window mungkin dimuat ulang)".into()))
 }
 
 // ---------- Sinkronisasi (manual) ----------
@@ -404,4 +939,139 @@ pub async fn sync_all(state: State<'_, AppState>) -> AppResult<SyncResult> {
         skipped: push_res.skipped + pull_res.skipped,
         message: format!("{} {}", push_res.message, pull_res.message),
     })
+}
+
+// ---------- Server Pusat (LAN) ----------
+
+/// Port tetap untuk Server Pusat (dipakai host maupun ditampilkan ke user
+/// saat pairing manual bila diperlukan).
+const LAN_SERVER_PORT: u16 = 8899;
+
+#[tauri::command]
+pub fn list_servers(state: State<'_, AppState>) -> AppResult<Vec<crate::servers::ServerInfo>> {
+    crate::servers::list_servers(&state.data_dir)
+}
+
+#[tauri::command]
+pub fn current_server(state: State<'_, AppState>) -> AppResult<crate::servers::ServerInfo> {
+    crate::servers::current_server(&state.data_dir)
+}
+
+/// Cek keterjangkauan + validitas kode pairing sebuah Server Pusat, dipakai
+/// layar "+ Tambah Server" sebelum menyimpan.
+#[tauri::command]
+pub async fn ping_server(host: String, port: u16, token: String) -> AppResult<String> {
+    crate::lan::health_check(&host, port, &token).await
+}
+
+#[tauri::command]
+pub async fn add_server(
+    state: State<'_, AppState>,
+    name: String,
+    host: String,
+    port: u16,
+    token: String,
+) -> AppResult<crate::servers::ServerInfo> {
+    // Validasi keterjangkauan + kode pairing sebelum disimpan ke registry.
+    crate::lan::health_check(&host, port, &token).await?;
+    crate::servers::add_server(&state.data_dir, name, host, port, token)
+}
+
+/// Pindah server aktif (lokal <-> salah satu remote tersimpan). Men-set/
+/// meng-clear `AppState.remote` supaya command yang di-proxy langsung
+/// mengarah ke tempat yang benar setelahnya.
+#[tauri::command]
+pub fn select_server(state: State<'_, AppState>, id: String) -> AppResult<crate::servers::ServerInfo> {
+    let info = crate::servers::set_active(&state.data_dir, &id)?;
+    let mut remote = state
+        .remote
+        .lock()
+        .map_err(|_| AppError::Other("gagal mengunci state".into()))?;
+    *remote = if info.is_remote() {
+        Some(crate::lan::RemoteConfig {
+            base_url: format!(
+                "http://{}:{}",
+                info.host.clone().unwrap_or_default(),
+                info.port.unwrap_or(LAN_SERVER_PORT)
+            ),
+            token: info.token.clone().unwrap_or_default(),
+        })
+    } else {
+        None
+    };
+    Ok(info)
+}
+
+#[tauri::command]
+pub fn remove_server(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    crate::servers::remove_server(&state.data_dir, &id)
+}
+
+#[derive(serde::Serialize)]
+pub struct LanServerStatus {
+    pub enabled: bool,
+    pub port: u16,
+    pub token: String,
+    pub local_ip: Option<String>,
+}
+
+fn lan_status_snapshot(state: &State<'_, AppState>) -> AppResult<LanServerStatus> {
+    let conn = state.lock()?;
+    let enabled = db::get_setting(&conn, "lan_server_enabled")?.as_deref() == Some("1");
+    let token = db::get_setting(&conn, "lan_server_token")?.unwrap_or_default();
+    drop(conn);
+    let local_ip = local_ip_address::local_ip().ok().map(|ip| ip.to_string());
+    Ok(LanServerStatus { enabled, port: LAN_SERVER_PORT, token, local_ip })
+}
+
+#[tauri::command]
+pub fn lan_server_status(state: State<'_, AppState>) -> AppResult<LanServerStatus> {
+    lan_status_snapshot(&state)
+}
+
+/// Nyalakan/matikan server host "Server Pusat" pada PC ini. Menghasilkan
+/// token pairing baru bila belum ada token tersimpan.
+#[tauri::command]
+pub fn set_lan_server_enabled(state: State<'_, AppState>, enabled: bool) -> AppResult<LanServerStatus> {
+    // Hentikan instance lama (bila ada) sebelum mengubah pengaturan.
+    {
+        let mut lan = state.lan.lock().map_err(|_| AppError::Other("gagal mengunci state".into()))?;
+        if let Some(handle) = lan.take() {
+            handle.stop();
+        }
+    }
+    let conn = state.lock()?;
+    db::set_setting(&conn, "lan_server_enabled", if enabled { "1" } else { "0" })?;
+    let mut token = db::get_setting(&conn, "lan_server_token")?.unwrap_or_default();
+    if enabled && token.is_empty() {
+        token = crate::lan::generate_token();
+        db::set_setting(&conn, "lan_server_token", &token)?;
+    }
+    drop(conn);
+    if enabled {
+        let handle = crate::lan::start(state.conn.clone(), LAN_SERVER_PORT, token)?;
+        let mut lan = state.lan.lock().map_err(|_| AppError::Other("gagal mengunci state".into()))?;
+        *lan = Some(handle);
+    }
+    lan_status_snapshot(&state)
+}
+
+/// Buat token pairing baru (mis. dicurigai bocor) dan restart server bila
+/// sedang aktif, supaya token lama langsung tidak berlaku lagi.
+#[tauri::command]
+pub fn regenerate_lan_token(state: State<'_, AppState>) -> AppResult<LanServerStatus> {
+    let new_token = crate::lan::generate_token();
+    let conn = state.lock()?;
+    db::set_setting(&conn, "lan_server_token", &new_token)?;
+    let was_enabled = db::get_setting(&conn, "lan_server_enabled")?.as_deref() == Some("1");
+    drop(conn);
+    if was_enabled {
+        let mut lan = state.lan.lock().map_err(|_| AppError::Other("gagal mengunci state".into()))?;
+        if let Some(handle) = lan.take() {
+            handle.stop();
+        }
+        let handle = crate::lan::start(state.conn.clone(), LAN_SERVER_PORT, new_token)?;
+        *lan = Some(handle);
+    }
+    lan_status_snapshot(&state)
 }

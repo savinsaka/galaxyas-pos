@@ -2,6 +2,10 @@
   import { api } from "$lib/api";
   import { setUser } from "$lib/stores/auth";
   import { showToast, toastError } from "$lib/toast";
+  import { currentStore } from "$lib/stores/activeStore";
+  import { currentServer } from "$lib/stores/activeServer";
+
+  let { onChangeStore, onChangeServer }: { onChangeStore?: () => void; onChangeServer?: () => void } = $props();
 
   let username = $state("admin");
   let pin = $state("");
@@ -29,7 +33,14 @@
 <div class="login-screen">
   <form class="login-card" onsubmit={submit}>
     <div class="login-logo">GALAX<b>YAS</b> POS</div>
-    <div class="login-sub">Masuk untuk melanjutkan</div>
+    <div class="login-sub">
+      Masuk untuk melanjutkan
+      {#if $currentServer?.kind === "remote"}
+        <span class="text-dim"> · 🖧 {$currentServer.name}</span>
+      {:else if $currentStore}
+        <span class="text-dim"> · {$currentStore.name}</span>
+      {/if}
+    </div>
 
     <div class="field">
       <label>Username</label>
@@ -44,5 +55,15 @@
       {busy ? "Memproses…" : "Masuk"}
     </button>
     <div class="login-sub" style="margin:1rem 0 0;">Default: <code>admin</code> / PIN <code>1234</code></div>
+    {#if onChangeStore}
+      <button type="button" class="btn-ghost" style="width:100%; margin-top:0.6rem;" onclick={onChangeStore}>
+        🏪 Ganti Toko
+      </button>
+    {/if}
+    {#if onChangeServer}
+      <button type="button" class="btn-ghost" style="width:100%; margin-top:0.4rem;" onclick={onChangeServer}>
+        🖧 Ganti Server
+      </button>
+    {/if}
   </form>
 </div>

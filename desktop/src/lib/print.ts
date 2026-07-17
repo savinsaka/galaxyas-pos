@@ -1,10 +1,86 @@
-/** Cetak isi workspace aktif sebagai laporan (menyembunyikan ribbon/tab). */
-export function printReport() {
-  document.body.classList.add("printing-report");
-  const cleanup = () => {
-    document.body.classList.remove("printing-report");
-    window.removeEventListener("afterprint", cleanup);
-  };
-  window.addEventListener("afterprint", cleanup);
-  setTimeout(() => window.print(), 60);
+import { api } from "$lib/api";
+import { toastError } from "$lib/toast";
+
+/**
+ * Cetak lewat window Tauri terpisah: konten di-clone + seluruh CSS aplikasi
+ * diserialisasi, dititip ke backend, lalu window `print.html` mengambilnya
+ * dan memanggil window.print() dari sana. Window ini punya title bar dan
+ * tombol ✕ sendiri, jadi dialog print tidak pernah menutupi tombol ✕
+ * window utama. (Freeze pada percobaan pertama fitur ini disebabkan command
+ * `open_print_window` yang sinkron — sudah dibuat async di backend.)
+ */
+
+/** Ambil seluruh CSS aplikasi yang aktif (termasuk gaya ter-scope Svelte). */
+function currentAppCss(): string {
+  let out = "";
+  for (const sheet of Array.from(document.styleSheets)) {
+    try {
+      for (const rule of Array.from(sheet.cssRules)) out += rule.cssText + "\n";
+    } catch {
+      // Stylesheet lintas origin — tidak ada di build lokal, lewati saja.
+    }
+  }
+  return out;
+}
+
+async function openPrintWindow(html: string, css: string, title: string, width: number, height: number) {
+  try {
+    await api.openPrintWindow(html, css, title, width, height);
+  } catch (e) {
+    toastError(e);
+  }
+}
+
+const REPORT_OVERRIDES = `
+  @page { size: A4; margin: 15mm; }
+  body { margin: 0; }
+  #print-root {
+    background: #fff !important; color: #000 !important;
+    font-family: Georgia, "Times New Roman", serif; font-size: 10.5pt;
+  }
+  #print-root .no-print, #print-root button { display: none !important; }
+  #print-root .print-header { display: block !important; margin-bottom: 8mm; }
+  #print-root .print-header h1 { font-size: 16pt !important; margin: 0 0 1.5mm !important; }
+  #print-root .print-header .print-subtitle { font-size: 10pt !important; color: #333 !important; margin-bottom: 1mm; }
+  #print-root .print-header .print-meta { font-size: 8.5pt !important; color: #555 !important; }
+  #print-root .print-header hr { border: none; border-top: 1px solid #000; margin-top: 3mm; }
+  #print-root .card {
+    border: 1px solid #999 !important; box-shadow: none !important;
+    border-radius: 0 !important; background: #fff !important; break-inside: avoid;
+  }
+  #print-root h1, #print-root h2, #print-root h3 { color: #000 !important; }
+  #print-root table { width: 100%; border-collapse: collapse !important; }
+  #print-root th, #print-root td {
+    border: 1px solid #000 !important; background: transparent !important; color: #000 !important;
+    position: static !important;
+  }
+  #print-root thead th { background: #eee !important; }
+  #print-root .text-dim { color: #444 !important; }
+  #print-root .badge, #print-root .disc-badge, #print-root .stock-badge {
+    border: 1px solid #000 !important; background: #fff !important; color: #000 !important; border-radius: 0 !important;
+  }
+`;
+
+/** Cetak isi elemen `elementId` sebagai dokumen laporan A4 di window terpisah. */
+export function printElement(elementId: string, title = "Cetak Laporan") {
+  const source = document.getElementById(elementId);
+  if (!source) return;
+  const clone = source.cloneNode(true) as HTMLElement;
+  clone.id = "print-root";
+  openPrintWindow(clone.outerHTML, currentAppCss() + REPORT_OVERRIDES, title, 980, 760);
+}
+
+/** Cetak isi elemen `elementId` sebagai struk thermal (lebar kertas dalam mm) di window terpisah. */
+export function printReceiptElement(elementId: string, widthMm: number, title = "Cetak Struk") {
+  const source = document.getElementById(elementId);
+  if (!source) return;
+  const clone = source.cloneNode(true) as HTMLElement;
+  clone.id = "print-root";
+  const overrides = `
+    @page { size: ${widthMm}mm auto; margin: 0; }
+    body { margin: 0; background: #fff; }
+    #content-wrap { display: flex; justify-content: center; }
+    #print-root { background: #fff !important; color: #000 !important; }
+  `;
+  openPrintWindow(clone.outerHTML, currentAppCss() + overrides, title, widthMm >= 80 ? 460 : 380, 700);
 }

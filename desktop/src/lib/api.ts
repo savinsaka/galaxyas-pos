@@ -2,14 +2,34 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   Brand,
   BrandInput,
+  BrandSalesRow,
+  CloseShiftInput,
+  Customer,
+  CustomerInput,
+  DailySalesRow,
+  DedupeResult,
   DiscountPeriod,
   DiscountPeriodInput,
+  Expense,
+  ExpenseInput,
+  LanServerStatus,
+  OpenShiftInput,
   Product,
   ProductInput,
+  ProductPage,
+  ProductSalesRow,
   ProductWithStock,
   SaleInput,
+  SalesItemDetailRow,
+  ServerInfo,
+  Shift,
   StockMovement,
   StockMovementInput,
+  StockMovementBatch,
+  StockMovementBatchDetail,
+  StockMovementBatchInput,
+  StockMovementBatchItemInput,
+  StoreInfo,
   SyncResult,
   Transaction,
   TransactionDetail,
@@ -19,18 +39,44 @@ import type {
 
 /** Wrapper terketik untuk semua command Tauri (backend Rust lokal). */
 export const api = {
+  // Multi-database (toko)
+  listStores: () => invoke<StoreInfo[]>("list_stores"),
+  currentStore: () => invoke<StoreInfo>("current_store"),
+  createStore: (name: string) => invoke<StoreInfo>("create_store", { name }),
+  selectStore: (id: string) => invoke<StoreInfo>("select_store", { id }),
+
   // Pengaturan
   getSettings: () => invoke<Record<string, string>>("get_settings"),
   updateSetting: (key: string, value: string) =>
     invoke<void>("update_setting", { key, value }),
 
   // Barang & stok
-  listProducts: (search = "", includeInactive = false) =>
-    invoke<ProductWithStock[]>("list_products", { search, includeInactive }),
+  listProducts: (search = "", includeInactive = false, limit?: number) =>
+    invoke<ProductWithStock[]>("list_products", { search, includeInactive, limit }),
+  listProductsPage: (opts: {
+    search?: string;
+    includeInactive?: boolean;
+    brand?: string | null;
+    sortBy?: string;
+    sortDir?: "asc" | "desc";
+    limit: number;
+    offset: number;
+  }) =>
+    invoke<ProductPage>("list_products_page", {
+      search: opts.search ?? "",
+      includeInactive: opts.includeInactive ?? false,
+      brand: opts.brand ?? null,
+      sortBy: opts.sortBy ?? "name",
+      sortDir: opts.sortDir ?? "asc",
+      limit: opts.limit,
+      offset: opts.offset,
+    }),
   saveProduct: (input: ProductInput) => invoke<Product>("save_product", { input }),
   toggleProductActive: (id: string, active: boolean) =>
     invoke<void>("toggle_product_active", { id, active }),
   deleteProduct: (id: string) => invoke<void>("delete_product", { id }),
+  dedupeProducts: () => invoke<DedupeResult>("dedupe_products"),
+  resetData: (confirm: string) => invoke<void>("reset_data", { confirm }),
   findByBarcode: (barcode: string) =>
     invoke<ProductWithStock | null>("find_by_barcode", { barcode }),
   adjustStock: (productId: string, delta: number) =>
@@ -40,11 +86,13 @@ export const api = {
 
   // Penjualan / kasir
   checkout: (sale: SaleInput) => invoke<TransactionDetail>("checkout", { sale }),
-  listTransactions: (limit = 100) =>
-    invoke<Transaction[]>("list_transactions", { limit }),
+  listTransactions: (from: string | null = null, to: string | null = null, limit = 100) =>
+    invoke<Transaction[]>("list_transactions", { from, to, limit }),
   getTransaction: (id: string) =>
     invoke<TransactionDetail | null>("get_transaction", { id }),
   deleteTransaction: (id: string) => invoke<void>("delete_transaction", { id }),
+  updateTransaction: (id: string, sale: SaleInput) =>
+    invoke<TransactionDetail>("update_transaction", { id, input: sale }),
 
   // Pengguna / hak akses
   login: (username: string, pin: string) =>
@@ -65,6 +113,22 @@ export const api = {
   deleteStockMovement: (id: number) =>
     invoke<void>("delete_stock_movement", { id }),
 
+  // Batch Item Masuk / Keluar (satu transaksi = banyak barang)
+  createStockMovementBatch: (input: StockMovementBatchInput) =>
+    invoke<StockMovementBatchDetail>("create_stock_movement_batch", { input }),
+  listStockMovementBatches: (
+    kind: "in" | "out" | null = null,
+    from: string | null = null,
+    to: string | null = null,
+    limit = 500,
+  ) => invoke<StockMovementBatch[]>("list_stock_movement_batches", { kind, from, to, limit }),
+  getStockMovementBatch: (id: string) =>
+    invoke<StockMovementBatchDetail | null>("get_stock_movement_batch", { id }),
+  updateStockMovementBatch: (id: string, items: StockMovementBatchItemInput[], note: string | null) =>
+    invoke<StockMovementBatchDetail>("update_stock_movement_batch", { id, items, note }),
+  deleteStockMovementBatch: (id: string) =>
+    invoke<void>("delete_stock_movement_batch", { id }),
+
   // Diskon periodik
   listDiscounts: () => invoke<DiscountPeriod[]>("list_discounts"),
   saveDiscount: (input: DiscountPeriodInput) =>
@@ -76,15 +140,61 @@ export const api = {
   saveBrand: (input: BrandInput) => invoke<Brand>("save_brand", { input }),
   deleteBrand: (id: string) => invoke<void>("delete_brand", { id }),
 
+  // Pelanggan
+  listCustomers: (search = "", includeInactive = false) =>
+    invoke<Customer[]>("list_customers", { search, includeInactive }),
+  saveCustomer: (input: CustomerInput) => invoke<Customer>("save_customer", { input }),
+  deleteCustomer: (id: string) => invoke<void>("delete_customer", { id }),
+
+  // Pengeluaran (Kas Keluar)
+  listExpenses: (from: string | null = null, to: string | null = null) =>
+    invoke<Expense[]>("list_expenses", { from, to }),
+  saveExpense: (input: ExpenseInput) => invoke<Expense>("save_expense", { input }),
+  deleteExpense: (id: string) => invoke<void>("delete_expense", { id }),
+
+  // Shift kasir (buka/tutup, rekonsiliasi)
+  getActiveShift: () => invoke<Shift | null>("get_active_shift"),
+  openShift: (input: OpenShiftInput) => invoke<Shift>("open_shift", { input }),
+  closeShift: (input: CloseShiftInput) => invoke<Shift>("close_shift", { input }),
+  listShifts: (limit = 100) => invoke<Shift[]>("list_shifts", { limit }),
+
+  // Laporan per barang / per merek
+  productSalesReport: (from: string, to: string, brands: string[] = []) =>
+    invoke<ProductSalesRow[]>("product_sales_report", { from, to, brands }),
+  brandSalesReport: (from: string, to: string, brands: string[] = []) =>
+    invoke<BrandSalesRow[]>("brand_sales_report", { from, to, brands }),
+  salesItemDetailReport: (from: string, to: string, brands: string[] = []) =>
+    invoke<SalesItemDetailRow[]>("sales_item_detail_report", { from, to, brands }),
+  dailySalesReport: (from: string, to: string, brands: string[] = []) =>
+    invoke<DailySalesRow[]>("daily_sales_report", { from, to, brands }),
+
   // Sistem: file & printer
   writeTempFile: (fileName: string, bytes: number[]) =>
     invoke<string>("write_temp_file", { fileName, bytes }),
   listPrinters: () => invoke<string[]>("list_printers"),
   printTextTo: (printer: string | null, text: string) =>
     invoke<void>("print_text_to", { printer, text }),
+  printEscposTo: (printer: string | null, bytes: Uint8Array) =>
+    invoke<void>("print_escpos_to", { printer, bytes: Array.from(bytes) }),
+  openPrintWindow: (html: string, css: string, title: string, width: number, height: number) =>
+    invoke<void>("open_print_window", { html, css, title, width, height }),
 
   // Sinkronisasi (manual)
   syncPush: () => invoke<SyncResult>("sync_push"),
   syncPull: () => invoke<SyncResult>("sync_pull"),
   syncAll: () => invoke<SyncResult>("sync_all"),
+
+  // Server Pusat (multi-kasir LAN)
+  listServers: () => invoke<ServerInfo[]>("list_servers"),
+  currentServer: () => invoke<ServerInfo>("current_server"),
+  pingServer: (host: string, port: number, token: string) =>
+    invoke<string>("ping_server", { host, port, token }),
+  addServer: (name: string, host: string, port: number, token: string) =>
+    invoke<ServerInfo>("add_server", { name, host, port, token }),
+  selectServer: (id: string) => invoke<ServerInfo>("select_server", { id }),
+  removeServer: (id: string) => invoke<void>("remove_server", { id }),
+  lanServerStatus: () => invoke<LanServerStatus>("lan_server_status"),
+  setLanServerEnabled: (enabled: boolean) =>
+    invoke<LanServerStatus>("set_lan_server_enabled", { enabled }),
+  regenerateLanToken: () => invoke<LanServerStatus>("regenerate_lan_token"),
 };

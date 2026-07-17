@@ -1,5 +1,5 @@
 <script lang="ts">
-  import StockMovementList from "$lib/components/StockMovementList.svelte";
+  import BatchStockEntry from "$lib/components/BatchStockEntry.svelte";
 </script>
 
-<StockMovementList kind="in" title="Daftar Item Masuk" />
+<BatchStockEntry kind="in" title="Tambah Item Masuk" />

@@ -3,15 +3,27 @@
   import { RIBBON, type RibbonAction } from "$lib/ribbon";
   import { currentUser, logout } from "$lib/stores/auth";
   import { tabs, openTab, closeAllTabs } from "$lib/stores/tabs";
+  import { isRemoteClient } from "$lib/stores/activeServer";
 
   let activeCatKey = $state("master");
 
+  // Sync In/Out cuma relevan untuk PC yang punya SQLite lokal sendiri (Server
+  // Lokal atau Server Pusat) — di PC client (konek ke Server Pusat) data
+  // memang sudah live-shared, jadi sync manual disembunyikan agar tidak chaos.
   const visibleCats = $derived(
     RIBBON.filter(
       (c) =>
         $currentUser &&
         ($currentUser.role === "admin" || $currentUser.permissions.includes(c.perm)),
-    ),
+    ).map((c) => ({
+      ...c,
+      groups: c.groups
+        .map((g) => ({
+          ...g,
+          actions: g.actions.filter((a) => !($isRemoteClient && a.key === "sync")),
+        }))
+        .filter((g) => g.actions.length > 0),
+    })),
   );
 
   $effect(() => {

@@ -34,13 +34,21 @@
 
   async function save(e: Event) {
     e.preventDefault();
-    if (!form.name.trim()) {
-      showToast("Nama barang wajib diisi.", "error");
-      return;
-    }
+    const bc = form.barcode?.trim() ?? "";
+    if (!form.name.trim()) { showToast("Nama barang wajib diisi.", "error"); return; }
+    if (!bc) { showToast("Barcode wajib diisi.", "error"); return; }
+    if (!form.brand?.trim()) { showToast("Merek wajib diisi.", "error"); return; }
+    if ((form.sell_price ?? 0) <= 0) { showToast("Harga jual harus lebih dari 0.", "error"); return; }
+    if ((form.cost_price ?? 0) <= 0) { showToast("Harga pokok harus lebih dari 0.", "error"); return; }
     busy = true;
     try {
-      const saved = await api.saveProduct(form);
+      // Cek duplikat barcode di produk lain
+      const existing = await api.findByBarcode(bc);
+      if (existing && existing.id !== (form.id ?? "")) {
+        showToast(`Barcode "${bc}" sudah dipakai oleh "${existing.name}".`, "error");
+        return;
+      }
+      const saved = await api.saveProduct({ ...form, barcode: bc });
       showToast("Barang tersimpan.", "success");
       onSaved(saved);
       if (resetAfterSave) form = blank();
@@ -59,8 +67,8 @@
       <input bind:value={form.name} />
     </div>
     <div>
-      <label>Barcode</label>
-      <input bind:value={form.barcode} />
+      <label>Barcode *</label>
+      <input bind:value={form.barcode} placeholder="Wajib & unik" />
     </div>
     <div>
       <label>Satuan</label>
@@ -71,16 +79,16 @@
       <input bind:value={form.category} />
     </div>
     <div>
-      <label>Merek</label>
+      <label>Merek *</label>
       <BrandPicker bind:value={form.brand} />
     </div>
     <div>
-      <label>Harga Pokok</label>
-      <input type="number" min="0" bind:value={form.cost_price} />
+      <label>Harga Pokok *</label>
+      <input type="number" min="1" bind:value={form.cost_price} />
     </div>
     <div>
-      <label>Harga Jual</label>
-      <input type="number" min="0" bind:value={form.sell_price} />
+      <label>Harga Jual *</label>
+      <input type="number" min="1" bind:value={form.sell_price} />
     </div>
     <div>
       <label>Default Diskon (Rp)</label>

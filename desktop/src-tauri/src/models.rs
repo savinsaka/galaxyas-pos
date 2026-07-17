@@ -27,6 +27,14 @@ pub struct ProductWithStock {
     pub stock_qty: f64,
 }
 
+/// Satu halaman hasil `list_products_page`, plus total baris cocok (untuk
+/// kontrol paginasi di UI).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProductPage {
+    pub items: Vec<ProductWithStock>,
+    pub total: i64,
+}
+
 /// Payload satu item dalam transaksi penjualan dari frontend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SaleItemInput {
@@ -45,6 +53,14 @@ pub struct SaleInput {
     pub payment_method: String, // Tunai | QRIS | Transfer | Kartu
     pub paid: f64,
     pub items: Vec<SaleItemInput>,
+    #[serde(default)]
+    pub customer_id: Option<String>,
+    #[serde(default)]
+    pub shift_id: Option<String>,
+    /// Override waktu transaksi (ISO-8601), dipakai admin untuk mencatat
+    /// transaksi mundur (tanggal kemarin dsb). Kosong = pakai waktu sekarang.
+    #[serde(default)]
+    pub created_at: Option<String>,
 }
 
 /// Ringkasan transaksi tersimpan (untuk struk & history).
@@ -60,6 +76,10 @@ pub struct Transaction {
     pub change: f64,
     pub payment_method: String,
     pub created_at: String,
+    #[serde(default)]
+    pub customer_id: Option<String>,
+    #[serde(default)]
+    pub shift_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +118,9 @@ pub struct ProductInput {
 
 fn default_true() -> bool {
     true
+}
+fn default_one() -> i64 {
+    1
 }
 
 /// Hasil ringkas operasi sinkronisasi yang dikembalikan ke UI.
@@ -155,6 +178,65 @@ pub struct StockMovementInput {
     pub qty: f64,
     pub note: Option<String>,
     pub user_id: Option<String>,
+    /// Override waktu pergerakan (ISO-8601), dipakai admin untuk mencatat
+    /// mundur (tanggal kemarin dsb). Kosong = pakai waktu sekarang.
+    #[serde(default)]
+    pub created_at: Option<String>,
+}
+
+// ---------- Batch Item Masuk / Keluar ----------
+
+/// Satu baris barang di dalam batch (input saat simpan/edit).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StockMovementBatchItemInput {
+    pub product_id: String,
+    pub qty: f64,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StockMovementBatchInput {
+    pub kind: String, // in | out
+    pub note: Option<String>,
+    pub user_id: Option<String>,
+    pub items: Vec<StockMovementBatchItemInput>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+}
+
+/// Barang dalam batch, versi tersimpan (ikut nama barang untuk ditampilkan).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StockMovementBatchItem {
+    pub product_id: String,
+    pub product_name: String,
+    pub qty: f64,
+    pub note: Option<String>,
+}
+
+/// Ringkasan batch untuk daftar (Daftar Item Masuk/Keluar) — agregat, bukan per barang.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StockMovementBatch {
+    pub id: String,
+    pub no: String,
+    pub kind: String,
+    pub note: Option<String>,
+    pub user_id: Option<String>,
+    pub created_at: String,
+    pub item_count: i64,
+    pub total_qty: f64,
+}
+
+/// Detail batch lengkap dengan seluruh barangnya, untuk lihat/edit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StockMovementBatchDetail {
+    pub id: String,
+    pub no: String,
+    pub kind: String,
+    pub note: Option<String>,
+    pub user_id: Option<String>,
+    pub created_at: String,
+    pub items: Vec<StockMovementBatchItem>,
 }
 
 // ---------- Diskon periodik ----------
@@ -162,19 +244,25 @@ pub struct StockMovementInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscountPeriod {
     pub id: String,
+    #[serde(default)]
+    pub code: String,             // kode grup diskon, mis. "PROMO-LEBARAN"
     pub scope: String,            // item | brand
     pub target: String,           // product_id atau nama brand
     pub target_label: Option<String>,
     pub discount_type: String,    // amount | percent
     pub value: f64,
-    pub days: String,             // "everyday" atau csv "mon,tue,..."
+    pub days: String,             // "everyday" atau csv hari
     pub is_active: bool,
+    #[serde(default = "default_one")]
+    pub priority: i64,
     pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiscountPeriodInput {
     pub id: Option<String>,
+    #[serde(default)]
+    pub code: String,
     pub scope: String,
     pub target: String,
     pub target_label: Option<String>,
@@ -183,6 +271,171 @@ pub struct DiscountPeriodInput {
     pub days: String,
     #[serde(default = "default_true")]
     pub is_active: bool,
+    #[serde(default = "default_one")]
+    pub priority: i64,
+}
+
+// ---------- Barang duplikat (dedupe barcode) ----------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DedupeDetail {
+    pub barcode: String,
+    pub kept_name: String,
+    pub removed_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DedupeResult {
+    pub groups: i64,
+    pub removed: i64,
+    pub details: Vec<DedupeDetail>,
+}
+
+// ---------- Pelanggan ----------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Customer {
+    pub id: String,
+    pub name: String,
+    pub phone: Option<String>,
+    pub email: Option<String>,
+    pub address: Option<String>,
+    pub note: Option<String>,
+    pub is_active: bool,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomerInput {
+    pub id: Option<String>,
+    pub name: String,
+    pub phone: Option<String>,
+    pub email: Option<String>,
+    pub address: Option<String>,
+    pub note: Option<String>,
+    #[serde(default = "default_true")]
+    pub is_active: bool,
+}
+
+// ---------- Pengeluaran (Kas Keluar) ----------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Expense {
+    pub id: String,
+    pub date: String, // YYYY-MM-DD
+    pub category: String,
+    pub amount: f64,
+    pub note: Option<String>,
+    pub user_id: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExpenseInput {
+    pub id: Option<String>,
+    pub date: String,
+    pub category: String,
+    pub amount: f64,
+    pub note: Option<String>,
+    pub user_id: Option<String>,
+}
+
+// ---------- Shift kasir (buka/tutup, rekonsiliasi) ----------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Shift {
+    pub id: String,
+    pub user_id: String,
+    pub user_name: String,
+    pub opening_cash: f64,
+    pub closing_cash: Option<f64>,
+    pub expected_cash: Option<f64>,
+    pub difference: Option<f64>,
+    pub note: Option<String>,
+    pub opened_at: String,
+    pub closed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenShiftInput {
+    pub user_id: String,
+    pub user_name: String,
+    pub opening_cash: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloseShiftInput {
+    pub id: String,
+    pub closing_cash: f64,
+    pub note: Option<String>,
+}
+
+/// Ringkasan rekonsiliasi shift: total transaksi + tunai selama shift, dipakai
+/// untuk hitung `expected_cash` sebelum shift ditutup.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ShiftSummary {
+    pub transaction_count: i64,
+    pub total_sales: f64,
+    pub cash_sales: f64,
+    pub non_cash_sales: f64,
+}
+
+// ---------- Laporan per barang / per merek ----------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProductSalesRow {
+    pub product_id: String,
+    pub name: String,
+    pub brand: Option<String>,
+    pub qty: f64,
+    pub gross: f64,
+    pub discount: f64,
+    pub net: f64,
+    pub cogs: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrandSalesRow {
+    pub brand: String,
+    pub qty: f64,
+    pub gross: f64,
+    pub discount: f64,
+    pub net: f64,
+}
+
+/// Satu baris item terjual (Laporan Item Detail) — satu baris per transaction_item.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SalesItemDetailRow {
+    pub invoice_no: String,
+    pub created_at: String,
+    pub cashier_id: String,
+    pub product_id: String,
+    pub name: String,
+    pub brand: Option<String>,
+    pub qty: f64,
+    pub price: f64,
+    pub discount: f64,
+    pub net: f64,
+}
+
+/// Rekap penjualan item per hari (Laporan Item Per Hari).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DailySalesRow {
+    pub day: String,
+    pub qty: f64,
+    pub gross: f64,
+    pub discount: f64,
+    pub net: f64,
+}
+
+// ---------- Multi-database (toko) ----------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoreInfo {
+    pub id: String,
+    pub name: String,
+    pub file: String,
+    pub created_at: String,
 }
 
 // ---------- Merek (brand) ----------

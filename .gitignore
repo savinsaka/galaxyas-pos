@@ -40,3 +40,11 @@ Thumbs.db
 # IDE
 .idea/
 *.swp
+
+# Personal/local Claude Code permissions (machine-specific, not shared)
+.claude/settings.local.json
+
+# Leftover scaffold from an initial `cargo tauri init`/`tauri icon` run at the
+# repo root before the real app was set up under desktop/ — not part of the app.
+/src-tauri/
+/icon/

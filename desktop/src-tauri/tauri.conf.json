@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "desktop",
+  "productName": "GALAXYAS POS",
   "version": "0.1.0",
-  "identifier": "com.savin.desktop",
+  "identifier": "com.galaxyas.pos",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -10,11 +10,15 @@
     "frontendDist": "../build"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
-        "title": "desktop",
-        "width": 800,
-        "height": 600
+        "title": "GALAXYAS POS",
+        "width": 1280,
+        "height": 720,
+        "minWidth": 900,
+        "minHeight": 600,
+        "maximized": true
       }
     ],
     "security": {

@@ -13,7 +13,7 @@
   {:else}
     {#each $tabs as tab (tab.id)}
       {@const Comp = VIEW_REGISTRY[tab.viewKey]}
-      <div style:display={tab.id === $activeTabId ? "block" : "none"}>
+      <div style:display={tab.id === $activeTabId ? "block" : "none"} style="height:100%;">
         {#if Comp}
           <Comp {...(tab.props ?? {})} />
         {:else}

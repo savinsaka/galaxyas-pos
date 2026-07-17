@@ -27,6 +27,11 @@ export function openTab(opts: OpenTabOptions): string {
   if (opts.singleton) {
     const existing = get(tabs).find((t) => t.viewKey === opts.viewKey);
     if (existing) {
+      // Refresh judul & props (mis. transaksi yang diedit berbeda dari sebelumnya)
+      // supaya tab singleton yang di-refokus tidak menampilkan data basi.
+      tabs.update((list) =>
+        list.map((t) => (t.id === existing.id ? { ...t, title: opts.title, props: opts.props } : t)),
+      );
       activeTabId.set(existing.id);
       return existing.id;
     }

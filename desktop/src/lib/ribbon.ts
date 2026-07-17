@@ -47,6 +47,7 @@ export const RIBBON: RibbonCategory[] = [
         actions: [
           { key: "daftar-merek", label: "Daftar Merek", icon: "🏭", viewKey: "daftar-merek", title: "Daftar Merek", singleton: true },
           { key: "diskon", label: "Diskon Periodik", icon: "🏷️", viewKey: "diskon", title: "Diskon Periodik", singleton: true },
+          { key: "daftar-pelanggan", label: "Pelanggan", icon: "🧑‍🤝‍🧑", viewKey: "daftar-pelanggan", title: "Manajemen Pelanggan", singleton: true },
         ],
       },
       {
@@ -69,6 +70,18 @@ export const RIBBON: RibbonCategory[] = [
           { key: "tambah-kasir", label: "Tambah Kasir", icon: "🛒", viewKey: "kasir-pos", title: "Kasir", singleton: false },
         ],
       },
+      {
+        label: "Shift",
+        actions: [
+          { key: "shift-kasir", label: "Buka/Tutup Kasir", icon: "🕒", viewKey: "shift-kasir", title: "Manajemen Shift", singleton: true },
+        ],
+      },
+      {
+        label: "Kas",
+        actions: [
+          { key: "pengeluaran", label: "Pengeluaran", icon: "💸", viewKey: "pengeluaran", title: "Pengeluaran (Kas Keluar)", singleton: true },
+        ],
+      },
     ],
   },
   {
@@ -85,8 +98,10 @@ export const RIBBON: RibbonCategory[] = [
       {
         label: "Pergerakan",
         actions: [
-          { key: "item-masuk", label: "Item Masuk", icon: "⬇️", viewKey: "item-masuk", title: "Daftar Item Masuk", singleton: true },
-          { key: "item-keluar", label: "Item Keluar", icon: "⬆️", viewKey: "item-keluar", title: "Daftar Item Keluar", singleton: true },
+          { key: "item-masuk", label: "Item Masuk", icon: "⬇️", viewKey: "item-masuk", title: "Tambah Item Masuk", singleton: true },
+          { key: "item-keluar", label: "Item Keluar", icon: "⬆️", viewKey: "item-keluar", title: "Tambah Item Keluar", singleton: true },
+          { key: "daftar-item-masuk", label: "Daftar Item Masuk", icon: "📥", viewKey: "daftar-item-masuk", title: "Daftar Item Masuk", singleton: true },
+          { key: "daftar-item-keluar", label: "Daftar Item Keluar", icon: "📤", viewKey: "daftar-item-keluar", title: "Daftar Item Keluar", singleton: true },
         ],
       },
     ],
@@ -101,6 +116,14 @@ export const RIBBON: RibbonCategory[] = [
         actions: [
           { key: "lap-penjualan", label: "Lap. Penjualan", icon: "💰", viewKey: "laporan-penjualan", title: "Laporan Penjualan", singleton: true },
           { key: "lap-persediaan", label: "Lap. Persediaan", icon: "📈", viewKey: "laporan-persediaan", title: "Laporan Persediaan", singleton: true },
+          { key: "lap-item", label: "Lap. Item", icon: "🏷️", viewKey: "laporan-item", title: "Laporan Item", singleton: true },
+          { key: "lap-umum", label: "Lap. Umum", icon: "📋", viewKey: "laporan-umum", title: "Laporan Umum", singleton: true },
+        ],
+      },
+      {
+        label: "Desain",
+        actions: [
+          { key: "desain-laporan", label: "Desain Laporan", icon: "🧩", viewKey: "desain-laporan", title: "Desain Laporan", singleton: true },
         ],
       },
     ],

@@ -19,6 +19,11 @@ export interface ProductWithStock extends Product {
   stock_qty: number;
 }
 
+export interface ProductPage {
+  items: ProductWithStock[];
+  total: number;
+}
+
 export interface ProductInput {
   id?: string | null;
   name: string;
@@ -45,6 +50,9 @@ export interface SaleInput {
   payment_method: string;
   paid: number;
   items: SaleItemInput[];
+  customer_id?: string | null;
+  shift_id?: string | null;
+  created_at?: string | null;
 }
 
 export interface Transaction {
@@ -58,6 +66,8 @@ export interface Transaction {
   change: number;
   payment_method: string;
   created_at: string;
+  customer_id: string | null;
+  shift_id: string | null;
 }
 
 export interface TransactionItem {
@@ -91,6 +101,41 @@ export interface Brand {
 export interface BrandInput {
   id?: string | null;
   name: string;
+}
+
+export interface StoreInfo {
+  id: string;
+  name: string;
+  file: string;
+  created_at: string;
+}
+
+export interface ServerInfo {
+  id: string;
+  kind: "local" | "remote";
+  name: string;
+  host: string | null;
+  port: number | null;
+  token: string | null;
+}
+
+export interface LanServerStatus {
+  enabled: boolean;
+  port: number;
+  token: string;
+  local_ip: string | null;
+}
+
+export interface DedupeDetail {
+  barcode: string;
+  kept_name: string;
+  removed_count: number;
+}
+
+export interface DedupeResult {
+  groups: number;
+  removed: number;
+  details: DedupeDetail[];
 }
 
 export type ModuleKey = "master" | "penjualan" | "persediaan" | "laporan" | "pengaturan";
@@ -132,10 +177,54 @@ export interface StockMovementInput {
   qty: number;
   note?: string | null;
   user_id?: string | null;
+  created_at?: string | null;
+}
+
+export interface StockMovementBatchItemInput {
+  product_id: string;
+  qty: number;
+  note?: string | null;
+}
+
+export interface StockMovementBatchInput {
+  kind: "in" | "out";
+  note?: string | null;
+  user_id?: string | null;
+  items: StockMovementBatchItemInput[];
+  created_at?: string | null;
+}
+
+export interface StockMovementBatchItem {
+  product_id: string;
+  product_name: string;
+  qty: number;
+  note: string | null;
+}
+
+export interface StockMovementBatch {
+  id: string;
+  no: string;
+  kind: "in" | "out";
+  note: string | null;
+  user_id: string | null;
+  created_at: string;
+  item_count: number;
+  total_qty: number;
+}
+
+export interface StockMovementBatchDetail {
+  id: string;
+  no: string;
+  kind: "in" | "out";
+  note: string | null;
+  user_id: string | null;
+  created_at: string;
+  items: StockMovementBatchItem[];
 }
 
 export interface DiscountPeriod {
   id: string;
+  code: string;
   scope: "item" | "brand";
   target: string;
   target_label: string | null;
@@ -143,11 +232,13 @@ export interface DiscountPeriod {
   value: number;
   days: string;
   is_active: boolean;
+  priority: number;
   updated_at: string;
 }
 
 export interface DiscountPeriodInput {
   id?: string | null;
+  code: string;
   scope: string; // "item" | "brand"
   target: string;
   target_label?: string | null;
@@ -155,4 +246,110 @@ export interface DiscountPeriodInput {
   value: number;
   days: string;
   is_active?: boolean;
+  priority?: number;
+}
+
+export interface Customer {
+  id: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  note: string | null;
+  is_active: boolean;
+  updated_at: string;
+}
+
+export interface CustomerInput {
+  id?: string | null;
+  name: string;
+  phone?: string | null;
+  email?: string | null;
+  address?: string | null;
+  note?: string | null;
+  is_active?: boolean;
+}
+
+export interface Expense {
+  id: string;
+  date: string;
+  category: string;
+  amount: number;
+  note: string | null;
+  user_id: string | null;
+  created_at: string;
+}
+
+export interface ExpenseInput {
+  id?: string | null;
+  date: string;
+  category: string;
+  amount: number;
+  note?: string | null;
+  user_id?: string | null;
+}
+
+export interface Shift {
+  id: string;
+  user_id: string;
+  user_name: string;
+  opening_cash: number;
+  closing_cash: number | null;
+  expected_cash: number | null;
+  difference: number | null;
+  note: string | null;
+  opened_at: string;
+  closed_at: string | null;
+}
+
+export interface OpenShiftInput {
+  user_id: string;
+  user_name: string;
+  opening_cash: number;
+}
+
+export interface CloseShiftInput {
+  id: string;
+  closing_cash: number;
+  note?: string | null;
+}
+
+export interface ProductSalesRow {
+  product_id: string;
+  name: string;
+  brand: string | null;
+  qty: number;
+  gross: number;
+  discount: number;
+  net: number;
+  cogs: number;
+}
+
+export interface BrandSalesRow {
+  brand: string;
+  qty: number;
+  gross: number;
+  discount: number;
+  net: number;
+}
+
+export interface SalesItemDetailRow {
+  invoice_no: string;
+  created_at: string;
+  cashier_id: string;
+  product_id: string;
+  name: string;
+  brand: string | null;
+  qty: number;
+  price: number;
+  discount: number;
+  net: number;
+}
+
+export interface DailySalesRow {
+  day: string;
+  qty: number;
+  gross: number;
+  discount: number;
+  net: number;
 }

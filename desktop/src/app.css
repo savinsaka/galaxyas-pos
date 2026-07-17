@@ -22,6 +22,83 @@
   color-scheme: light;
 }
 
+/* ===== Tema (Pengaturan → Tema) — hanya nilai variabel warna yang berubah ===== */
+:root[data-theme="dark"] {
+  --baby-blue: #2d3f52;
+  --baby-blue-soft: #24313f;
+  --baby-blue-bg: #1a2530;
+  --primary: #5aa3f0;
+  --primary-hover: #7cb8f5;
+  --primary-dark: #4a90d9;
+  --white: #1e2a36;
+  --bg: #10171f;
+  --panel: #1e2a36;
+  --border: #2e3f4f;
+  --border-strong: #3d5266;
+  --text: #e6edf3;
+  --text-dim: #93a4b3;
+  --success: #4cbf8a;
+  --danger: #e57470;
+  --warning: #f0b862;
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
+  color-scheme: dark;
+}
+:root[data-theme="forest"] {
+  --baby-blue: #bfe3c8;
+  --baby-blue-soft: #dcf1e1;
+  --baby-blue-bg: #f2faf4;
+  --primary: #2f9e6b;
+  --primary-hover: #268758;
+  --primary-dark: #1e6f47;
+  --white: #ffffff;
+  --bg: #eef8f1;
+  --panel: #ffffff;
+  --border: #cdead9;
+  --border-strong: #a3d9bd;
+  --text: #1f3a2c;
+  --text-dim: #6b8f7a;
+  --shadow: 0 4px 16px rgba(47, 158, 107, 0.14);
+  --shadow-sm: 0 1px 3px rgba(47, 158, 107, 0.12);
+  color-scheme: light;
+}
+:root[data-theme="sunset"] {
+  --baby-blue: #f4d3ae;
+  --baby-blue-soft: #fbe8d2;
+  --baby-blue-bg: #fff8f0;
+  --primary: #e08a3b;
+  --primary-hover: #c9762c;
+  --primary-dark: #a86123;
+  --white: #ffffff;
+  --bg: #fdf3e8;
+  --panel: #ffffff;
+  --border: #f0dcc0;
+  --border-strong: #e3c197;
+  --text: #4a3420;
+  --text-dim: #8f7658;
+  --shadow: 0 4px 16px rgba(224, 138, 59, 0.16);
+  --shadow-sm: 0 1px 3px rgba(224, 138, 59, 0.13);
+  color-scheme: light;
+}
+:root[data-theme="grape"] {
+  --baby-blue: #dcc9ee;
+  --baby-blue-soft: #ecdff8;
+  --baby-blue-bg: #f8f2fc;
+  --primary: #8b5fbf;
+  --primary-hover: #764ea6;
+  --primary-dark: #613f8c;
+  --white: #ffffff;
+  --bg: #f5eefb;
+  --panel: #ffffff;
+  --border: #e3d3f2;
+  --border-strong: #cbabe3;
+  --text: #362a45;
+  --text-dim: #83758f;
+  --shadow: 0 4px 16px rgba(139, 95, 191, 0.14);
+  --shadow-sm: 0 1px 3px rgba(139, 95, 191, 0.12);
+  color-scheme: light;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -505,21 +582,3 @@ textarea {
   min-height: 60px;
 }
 
-/* Print laporan: sembunyikan chrome aplikasi, cetak isi workspace aktif */
-@media print {
-  body.printing-report .ribbon,
-  body.printing-report .tabbar,
-  body.printing-report .toast-wrap,
-  body.printing-report .no-print {
-    display: none !important;
-  }
-  body.printing-report .workspace {
-    overflow: visible !important;
-    padding: 0 !important;
-    height: auto !important;
-  }
-  body.printing-report .card {
-    box-shadow: none !important;
-    border-color: #ccc !important;
-  }
-}

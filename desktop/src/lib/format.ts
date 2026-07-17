@@ -18,5 +18,10 @@ export const formatDateTime = (iso: string) => {
     year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    second: "2-digit",
   });
 };
+
+/** Jam:menit:detik saja, mis. untuk jam berjalan di header. */
+export const formatTime = (d: Date) =>
+  d.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" });

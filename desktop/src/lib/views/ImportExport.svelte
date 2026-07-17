@@ -3,6 +3,7 @@
   import { openPath } from "@tauri-apps/plugin-opener";
   import { api } from "$lib/api";
   import { showToast, toastError } from "$lib/toast";
+  import type { DedupeResult } from "$lib/types";
 
   const HEADERS = [
     "nama",
@@ -14,14 +15,26 @@
     "harga_jual",
     "default_diskon",
     "aktif",
+    "stok",
   ];
   const EXAMPLE = [
-    ["Indomie Goreng", "8992388101010", "Mie Instan", "Indofood", "pcs", 2800, 3500, 0, "ya"],
-    ["Aqua 600ml", "8993675001020", "Minuman", "Aqua", "botol", 3000, 4000, 0, "ya"],
+    ["Indomie Goreng", "8992388101010", "Mie Instan", "Indofood", "pcs", 2800, 3500, 0, "ya", 50],
+    ["Aqua 600ml", "8993675001020", "Minuman", "Aqua", "botol", 3000, 4000, 0, "ya", 24],
   ];
+
+  interface ImportLogEntry {
+    row: number;
+    name: string;
+    status: "created" | "duplicate" | "error";
+    reason?: string;
+  }
 
   let preview = $state<Record<string, unknown>[]>([]);
   let importing = $state(false);
+  let importProgress = $state({ done: 0, total: 0 });
+  let importLog = $state<ImportLogEntry[]>([]);
+  let deduping = $state(false);
+  let dedupeResult = $state<DedupeResult | null>(null);
 
   function parseAktif(v: unknown): boolean {
     const s = String(v ?? "").toLowerCase().trim();
@@ -46,20 +59,55 @@
   async function doImport() {
     if (!preview.length) return;
     importing = true;
-    let ok = 0;
-    let fail = 0;
-    for (const row of preview) {
+    importLog = [];
+    importProgress = { done: 0, total: preview.length };
+
+    // Peta barcode -> nama barang existing (termasuk non-aktif), untuk deteksi
+    // duplikasi otomatis. Barcode yang sudah terdaftar (di DB atau baris lain
+    // di file ini) ditolak, bukan ditimpa — import ini hanya untuk barang baru.
+    const existingByBarcode = new Map<string, string>(); // barcode -> nama
+    try {
+      const existing = await api.listProducts("", true);
+      for (const p of existing) {
+        if (p.barcode && p.barcode.trim()) existingByBarcode.set(p.barcode.trim(), p.name);
+      }
+    } catch (e) {
+      toastError(e);
+    }
+
+    let created = 0;
+    let duplicate = 0;
+    let failed = 0;
+
+    for (let i = 0; i < preview.length; i++) {
+      const row = preview[i];
       const r = row as Record<string, unknown>;
       const name = String(r.nama ?? "").trim();
+      const barcode = String(r.barcode ?? "").trim();
+      importProgress = { done: i, total: preview.length };
+
       if (!name) {
-        fail++;
+        failed++;
+        importLog.push({ row: i + 2, name: name || "(tanpa nama)", status: "error", reason: "Nama kosong" });
         continue;
       }
+      const existingName = barcode ? existingByBarcode.get(barcode) : undefined;
+      if (existingName) {
+        duplicate++;
+        importLog.push({
+          row: i + 2,
+          name,
+          status: "duplicate",
+          reason: `Barcode "${barcode}" sudah terdaftar untuk "${existingName}" — dilewati`,
+        });
+        continue;
+      }
+
       try {
-        await api.saveProduct({
+        const saved = await api.saveProduct({
           id: null,
           name,
-          barcode: String(r.barcode ?? "") || null,
+          barcode: barcode || null,
           category: String(r.kategori ?? "") || null,
           brand: String(r.merek ?? "") || null,
           unit: String(r.satuan ?? "") || null,
@@ -68,14 +116,45 @@
           default_discount: Number(r.default_diskon) || 0,
           is_active: parseAktif(r.aktif),
         });
-        ok++;
-      } catch {
-        fail++;
+        // Set stok awal jika kolom stok diisi
+        const stokVal = Number(r.stok);
+        if (stokVal > 0) {
+          await api.setStock(saved.id, stokVal);
+        }
+        if (barcode) existingByBarcode.set(barcode, name);
+        created++;
+        importLog.push({ row: i + 2, name, status: "created" });
+      } catch (e) {
+        failed++;
+        importLog.push({ row: i + 2, name, status: "error", reason: e instanceof Error ? e.message : String(e) });
       }
     }
+
+    importProgress = { done: preview.length, total: preview.length };
     importing = false;
     preview = [];
-    showToast(`Import selesai: ${ok} berhasil, ${fail} gagal.`, ok ? "success" : "error", 5000);
+    const parts = [`${created} baru`];
+    if (duplicate) parts.push(`${duplicate} ditolak (duplikasi barcode)`);
+    if (failed) parts.push(`${failed} gagal`);
+    showToast(`Import selesai: ${parts.join(", ")}.`, duplicate || failed ? "error" : "success", 6000);
+  }
+
+  async function runDedupe() {
+    if (!confirm("Cari barang dengan barcode kembar dan non-aktifkan yang lama (data terbaru dipertahankan)?")) return;
+    deduping = true;
+    try {
+      dedupeResult = await api.dedupeProducts();
+      showToast(
+        dedupeResult.groups
+          ? `${dedupeResult.groups} barcode kembar ditemukan, ${dedupeResult.removed} barang lama dinon-aktifkan.`
+          : "Tidak ada barcode kembar ditemukan.",
+        "success",
+      );
+    } catch (e) {
+      toastError(e);
+    } finally {
+      deduping = false;
+    }
   }
 
   async function doExport() {
@@ -140,8 +219,9 @@
   <div class="card">
     <h2>📥 Batch Tambah Barang (Import Excel)</h2>
     <p class="text-dim">
-      1) Buka template terkunci di bawah → <b>Save As</b> ke file kamu → isi data →
-      2) pilih file tersebut untuk meng-import banyak barang sekaligus.
+      1) Buka template → <b>Save As</b> ke file kamu → isi data →
+      2) pilih file untuk meng-import banyak barang sekaligus.<br/>
+      Kolom <b>stok</b> otomatis mengisi stok awal jika diisi dengan angka &gt; 0.
     </p>
     <div style="background:var(--baby-blue-bg); border:1px dashed var(--border-strong); border-radius:8px; padding:0.8rem; margin-bottom:0.8rem;">
       <button class="btn-primary" onclick={openTemplate}>📄 Buka Template Excel (terkunci)</button>
@@ -166,6 +246,66 @@
       <button class="btn-primary" style="margin-top:0.7rem;" disabled={importing} onclick={doImport}>
         {importing ? "Mengimport…" : `Import ${preview.length} Barang`}
       </button>
+    {/if}
+
+    {#if importing || importLog.length}
+      <div style="margin-top:0.9rem;">
+        {#if importing}
+          <div class="import-progress-bar">
+            <div
+              class="import-progress-fill"
+              style="width:{importProgress.total ? (importProgress.done / importProgress.total) * 100 : 0}%"
+            ></div>
+          </div>
+          <p class="text-dim" style="font-size:0.8rem; margin-top:0.3rem;">
+            {importProgress.done} / {importProgress.total} baris diproses…
+          </p>
+        {/if}
+        {#if importLog.length}
+          {@const errCount = importLog.filter((l) => l.status === "error" || l.status === "duplicate").length}
+          <div class="import-log-head">
+            <span>📋 Log Import ({importLog.length} baris)</span>
+            {#if errCount}<span class="log-err-badge">{errCount} bermasalah</span>{/if}
+          </div>
+          <div class="import-log">
+            {#each importLog.filter((l) => l.status === "error" || l.status === "duplicate") as l}
+              <div class="log-row log-{l.status}">
+                <span class="mono">#{l.row}</span>
+                <span>{l.name}</span>
+                <span class="text-dim">{l.reason}</span>
+              </div>
+            {:else}
+              <div class="log-row text-dim">Tidak ada baris bermasalah.</div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/if}
+  </div>
+
+  <div class="card">
+    <h2>🧹 Bersihkan Barcode Duplikat</h2>
+    <p class="text-dim">
+      Non-aktifkan otomatis barang dengan barcode yang sama (menyisakan data terbaru), sehingga tidak
+      muncul dobel di kasir. Riwayat transaksi lama tidak terpengaruh.
+    </p>
+    <button disabled={deduping} onclick={runDedupe}>{deduping ? "Memeriksa…" : "🔍 Cari & Bersihkan Duplikat"}</button>
+    {#if dedupeResult}
+      <p style="margin-top:0.6rem; font-size:0.85rem;">
+        {dedupeResult.groups} grup barcode kembar, {dedupeResult.removed} barang dinon-aktifkan.
+      </p>
+      {#if dedupeResult.details.length}
+        <div style="max-height:160px; overflow:auto; border:1px solid var(--border); border-radius:8px; margin-top:0.4rem;">
+          <table>
+            <thead><tr><th>Barcode</th><th>Dipertahankan</th><th class="text-right">Dinon-aktifkan</th></tr></thead>
+            <tbody>
+              {#each dedupeResult.details as d}
+                <tr><td class="mono">{d.barcode}</td><td>{d.kept_name}</td><td class="text-right">{d.removed_count}</td></tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {/if}
     {/if}
   </div>
 
@@ -192,3 +332,51 @@
     </div>
   </div>
 </div>
+
+<style>
+  .import-progress-bar {
+    height: 8px;
+    border-radius: 999px;
+    background: var(--baby-blue-bg);
+    overflow: hidden;
+  }
+  .import-progress-fill {
+    height: 100%;
+    background: var(--primary);
+    transition: width 0.15s linear;
+  }
+  .import-log-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 650;
+    font-size: 0.85rem;
+    margin-top: 0.8rem;
+    margin-bottom: 0.3rem;
+  }
+  .log-err-badge {
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 0.1rem 0.4rem;
+    border-radius: 999px;
+    background: var(--danger);
+    color: #fff;
+  }
+  .import-log {
+    max-height: 200px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .log-row {
+    display: grid;
+    grid-template-columns: 3.5rem 1fr 2fr;
+    gap: 0.5rem;
+    padding: 0.3rem 0.6rem;
+    font-size: 0.8rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .log-row:last-child { border-bottom: none; }
+  .log-error { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+  .log-duplicate { background: color-mix(in srgb, var(--warning) 14%, transparent); }
+</style>

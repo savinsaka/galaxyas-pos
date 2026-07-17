@@ -2,125 +2,250 @@
   import { onMount } from "svelte";
   import { api } from "$lib/api";
   import { showToast, toastError } from "$lib/toast";
-  import { buildReceiptText, type ReceiptConfig } from "$lib/receipt";
-  import type { TransactionDetail } from "$lib/types";
+  import { parseReceiptConfig, RECEIPT_SHOW_KEYS } from "$lib/receipt";
+  import { buildReceiptEscPos } from "$lib/escpos";
+  import { THEMES, saveTheme } from "$lib/theme";
+  import type { LanServerStatus, TransactionDetail } from "$lib/types";
+  import { currentServer, isRemoteClient } from "$lib/stores/activeServer";
   import Receipt from "$lib/components/Receipt.svelte";
+
+  type PTab = "toko" | "server" | "lan" | "struk" | "tema" | "lanjutan";
+  let activeTab = $state<PTab>("toko");
+  let activeTheme = $state("baby-blue");
+  let savingTheme = $state(false);
+
+  let lanStatus = $state<LanServerStatus | null>(null);
+  let lanBusy = $state(false);
 
   let settings = $state<Record<string, string>>({});
   let printers = $state<string[]>([]);
   let savingKey = $state<string | null>(null);
   let savingReceipt = $state(false);
+  let savingServer = $state(false);
   let preview = $state(false);
+  let spacingChanged = $state(false);
+  let spacingTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const RESET_PHRASE = "HAPUS SEMUA DATA";
+  let resetConfirmText = $state("");
+  let resetting = $state(false);
 
   const tokoFields = [
-    { key: "store_name", label: "Nama Toko", hint: "Tampil di struk & header" },
-    { key: "store_id", label: "ID Toko", hint: "Identitas untuk sinkronisasi" },
-    { key: "server_url", label: "URL Server Sync", hint: "http://localhost:8000" },
+    { key: "store_name", label: "Nama Toko", hint: "Tampil di header & struk" },
+    { key: "store_address", label: "Alamat", hint: "Jl. Contoh No.1, Kota" },
+    { key: "store_phone", label: "Telepon", hint: "0812-xxxx-xxxx" },
+    { key: "store_tax_id", label: "NPWP", hint: "Opsional" },
+    { key: "store_instagram", label: "Instagram", hint: "@namatoko" },
+    { key: "store_tiktok", label: "TikTok", hint: "@namatoko" },
+    { key: "store_whatsapp", label: "WhatsApp", hint: "0812-xxxx-xxxx" },
     { key: "tax_percent", label: "Pajak (%)", hint: "0 jika tidak memakai pajak" },
   ];
-
+  const serverFields = [
+    { key: "store_id", label: "ID Toko", hint: "Identitas untuk sinkronisasi" },
+    { key: "server_url", label: "URL Server Sync", hint: "http://localhost:8000" },
+  ];
   const receiptKeys = [
-    "receipt_paper",
-    "receipt_printer",
-    "receipt_font_size",
-    "receipt_line_height",
-    "receipt_margin",
-    "receipt_header",
-    "receipt_footer",
+    "receipt_paper", "receipt_printer", "receipt_font_size",
+    "receipt_line_height", "receipt_margin", "receipt_header", "receipt_footer",
+    ...RECEIPT_SHOW_KEYS.map((k) => k.setting),
   ];
 
   const sampleDetail: TransactionDetail = {
-    id: "sample",
-    invoice_no: "INV-CONTOH-0001",
-    cashier_id: "admin",
-    subtotal: 25000,
-    discount: 1000,
-    total: 24000,
-    paid: 50000,
-    change: 26000,
-    payment_method: "Tunai",
-    created_at: new Date().toISOString(),
+    id: "sample", invoice_no: "INV-CONTOH-0001", cashier_id: "admin",
+    subtotal: 25000, discount: 1000, total: 24000, paid: 50000, change: 26000,
+    payment_method: "Tunai", created_at: new Date().toISOString(),
+    customer_id: null, shift_id: null,
     items: [
       { product_id: "1", name: "Indomie Goreng", price: 3500, qty: 2, discount: 0, line_total: 7000 },
       { product_id: "2", name: "Aqua 600ml", price: 4000, qty: 1, discount: 1000, line_total: 3000 },
     ],
   };
 
+  async function loadLanStatus() {
+    if ($isRemoteClient) return;
+    try {
+      lanStatus = await api.lanServerStatus();
+    } catch (e) {
+      toastError(e);
+    }
+  }
+
+  async function toggleLanServer() {
+    lanBusy = true;
+    try {
+      lanStatus = await api.setLanServerEnabled(!lanStatus?.enabled);
+      showToast(lanStatus.enabled ? "Server Pusat aktif." : "Server Pusat dimatikan.", "success");
+    } catch (e) {
+      toastError(e);
+    } finally {
+      lanBusy = false;
+    }
+  }
+
+  async function regenerateToken() {
+    lanBusy = true;
+    try {
+      lanStatus = await api.regenerateLanToken();
+      showToast("Kode pairing baru dibuat.", "success");
+    } catch (e) {
+      toastError(e);
+    } finally {
+      lanBusy = false;
+    }
+  }
+
+  async function disconnectServer() {
+    if (!confirm("Putuskan koneksi dari Server Pusat dan kembali ke mode lokal?")) return;
+    lanBusy = true;
+    try {
+      await api.selectServer("local");
+      window.location.reload();
+    } catch (e) {
+      toastError(e);
+      lanBusy = false;
+    }
+  }
+
   async function load() {
     try {
       settings = await api.getSettings();
       printers = await api.listPrinters();
-      // default values agar input terkontrol
+      await loadLanStatus();
       settings.receipt_paper ??= "80";
       settings.receipt_font_size ??= "12";
       settings.receipt_line_height ??= "1.35";
       settings.receipt_margin ??= "3";
       settings.receipt_header ??= "";
       settings.receipt_footer ??= "";
-    } catch (e) {
-      toastError(e);
-    }
+      settings.store_name ??= "";
+      settings.store_address ??= "";
+      settings.store_phone ??= "";
+      settings.store_tax_id ??= "";
+      settings.store_instagram ??= "";
+      settings.store_tiktok ??= "";
+      settings.store_whatsapp ??= "";
+      settings.store_id ??= "";
+      settings.server_url ??= "";
+      settings.tax_percent ??= "0";
+      settings.theme ??= "baby-blue";
+      activeTheme = settings.theme;
+      for (const { setting } of RECEIPT_SHOW_KEYS) settings[setting] ??= "1";
+    } catch (e) { toastError(e); }
   }
   onMount(load);
+
+  async function pickTheme(key: string) {
+    activeTheme = key;
+    savingTheme = true;
+    try {
+      await saveTheme(key);
+      settings.theme = key;
+      showToast("Tema diterapkan.", "success");
+    } catch (e) {
+      toastError(e);
+    } finally {
+      savingTheme = false;
+    }
+  }
 
   async function saveToko(key: string) {
     savingKey = key;
     try {
-      await api.updateSetting(key, settings[key] ?? "");
+      await api.updateSetting(key, String(settings[key] ?? ""));
       showToast("Tersimpan.", "success");
-    } catch (e) {
-      toastError(e);
-    } finally {
-      savingKey = null;
-    }
+    } catch (e) { toastError(e); } finally { savingKey = null; }
+  }
+
+  async function saveServer() {
+    savingServer = true;
+    try {
+      for (const f of serverFields) await api.updateSetting(f.key, String(settings[f.key] ?? ""));
+      showToast("Pengaturan server tersimpan.", "success");
+    } catch (e) { toastError(e); } finally { savingServer = false; }
   }
 
   async function saveReceipt() {
     savingReceipt = true;
     try {
-      for (const k of receiptKeys) await api.updateSetting(k, settings[k] ?? "");
+      for (const k of receiptKeys) await api.updateSetting(k, String(settings[k] ?? ""));
       showToast("Pengaturan struk tersimpan.", "success");
-    } catch (e) {
-      toastError(e);
-    } finally {
-      savingReceipt = false;
-    }
-  }
-
-  function cfgFromForm(): ReceiptConfig {
-    return {
-      storeName: settings.store_name || "GALAXYAS POS",
-      header: settings.receipt_header || "",
-      footer: settings.receipt_footer || "",
-      paper: settings.receipt_paper === "58" ? "58" : "80",
-      fontSize: Number(settings.receipt_font_size) || 12,
-      lineHeight: Number(settings.receipt_line_height) || 1.35,
-      margin: Number(settings.receipt_margin) || 3,
-      printer: settings.receipt_printer || null,
-    };
+      spacingChanged = false;
+    } catch (e) { toastError(e); } finally { savingReceipt = false; }
   }
 
   async function testPrint() {
     await saveReceipt();
     try {
-      await api.printTextTo(settings.receipt_printer || null, buildReceiptText(sampleDetail, cfgFromForm()));
+      await api.printEscposTo(settings.receipt_printer || null, buildReceiptEscPos(sampleDetail, parseReceiptConfig(settings)));
       showToast("Test print dikirim.", "success");
-    } catch (e) {
-      toastError(e);
-    }
+    } catch (e) { toastError(e); }
   }
 
   async function openPreview() {
     await saveReceipt();
     preview = true;
   }
+
+  function onSpacingInput() {
+    spacingChanged = true;
+    if (spacingTimer) clearTimeout(spacingTimer);
+    spacingTimer = setTimeout(() => {
+      showToast("Spasi/margin diubah — klik Simpan Struk untuk menerapkan.", "info");
+    }, 800);
+  }
+
+  // Di mode client (konek ke Server Pusat PC lain): sync manual & reset data
+  // disembunyikan — data memang sudah live-shared lewat Server Pusat, dan
+  // reset data dari PC sekunder berisiko menghapus data toko yang dipakai
+  // bersama.
+  const PTABS = $derived(
+    (
+      [
+        { key: "toko", label: "Informasi Toko", icon: "🏪" },
+        { key: "server", label: "Server Sinkronisasi", icon: "🔄" },
+        { key: "lan", label: "Server Pusat", icon: "🖧" },
+        { key: "struk", label: "Struk & Printer", icon: "🖨️" },
+        { key: "tema", label: "Tema", icon: "🎨" },
+        { key: "lanjutan", label: "Lanjutan", icon: "⚠️" },
+      ] as { key: PTab; label: string; icon: string }[]
+    ).filter((t) => !$isRemoteClient || (t.key !== "server" && t.key !== "lanjutan")),
+  );
+
+  $effect(() => {
+    if (!PTABS.some((t) => t.key === activeTab)) activeTab = "toko";
+  });
+
+  async function doResetData() {
+    if (resetConfirmText.trim() !== RESET_PHRASE) return;
+    if (!confirm("Ini akan menghapus SEMUA data barang, stok, transaksi, diskon, dan merek secara permanen. Lanjutkan?")) return;
+    resetting = true;
+    try {
+      await api.resetData(resetConfirmText.trim());
+      showToast("Semua data berhasil dihapus.", "success");
+      resetConfirmText = "";
+    } catch (e) {
+      toastError(e);
+    } finally {
+      resetting = false;
+    }
+  }
 </script>
 
 <div class="page-head"><h1>Pengaturan</h1></div>
 
-<div class="grid-2" style="align-items:start;">
-  <div class="card">
-    <h2>Toko & Server</h2>
+<!-- Tab navigasi internal -->
+<div class="ptab-bar">
+  {#each PTABS as t}
+    <button class="ptab-btn" class:active={activeTab === t.key} onclick={() => (activeTab = t.key)}>
+      {t.icon} {t.label}
+    </button>
+  {/each}
+</div>
+
+<!-- ── Tab: Informasi Toko ── -->
+{#if activeTab === "toko"}
+  <div class="card" style="max-width:520px;">
+    <h2>Informasi Toko</h2>
     {#each tokoFields as f}
       <div style="margin-bottom:0.9rem;">
         <label>{f.label}</label>
@@ -131,11 +256,88 @@
       </div>
     {/each}
   </div>
+{/if}
 
+<!-- ── Tab: Server Sinkronisasi ── -->
+{#if activeTab === "server"}
+  <div class="card" style="max-width:520px;">
+    <h2>Server Sinkronisasi</h2>
+    <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
+      Hanya diperlukan jika menggunakan fitur sinkronisasi data ke server pusat.
+      Biarkan kosong jika hanya dipakai secara lokal.
+    </p>
+    {#each serverFields as f}
+      <div style="margin-bottom:0.9rem;">
+        <label>{f.label}</label>
+        <input bind:value={settings[f.key]} placeholder={f.hint} />
+      </div>
+    {/each}
+    <div class="row" style="justify-content:flex-end;">
+      <button class="btn-primary" disabled={savingServer} onclick={saveServer}>
+        Simpan Pengaturan Server
+      </button>
+    </div>
+  </div>
+{/if}
+
+<!-- ── Tab: Server Pusat (LAN multi-kasir) ── -->
+{#if activeTab === "lan"}
+  <div class="card" style="max-width:560px;">
+    {#if $isRemoteClient}
+      <h2>Server Pusat</h2>
+      <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
+        PC ini terhubung sebagai kasir client ke Server Pusat berikut. Semua data
+        (barang, stok, transaksi, akun) dibagikan langsung dari PC tersebut.
+      </p>
+      <div class="row" style="gap:1.5rem; margin:0.8rem 0;">
+        <div><div class="text-dim">Nama</div><strong>{$currentServer?.name}</strong></div>
+        <div><div class="text-dim">Alamat</div><strong class="mono">{$currentServer?.host}:{$currentServer?.port}</strong></div>
+      </div>
+      <button class="btn-danger" disabled={lanBusy} onclick={disconnectServer}>
+        Putuskan Koneksi
+      </button>
+    {:else}
+      <h2>Server Pusat</h2>
+      <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
+        Jadikan PC ini "Server Pusat" supaya kasir lain di jaringan wifi yang sama bisa
+        konek dan berbagi data barang, stok, transaksi, dan akun secara langsung — tanpa
+        cloud. PC kasir lain memilih "+ Tambah Server" di layar awal, lalu masukkan IP dan
+        Kode Pairing di bawah ini.
+      </p>
+      <label class="row" style="gap:0.6rem; margin:0.9rem 0;">
+        <input
+          type="checkbox"
+          style="width:auto;"
+          checked={lanStatus?.enabled ?? false}
+          disabled={lanBusy || !lanStatus}
+          onchange={toggleLanServer}
+        />
+        Jadikan PC ini Server Pusat
+      </label>
+      {#if lanStatus?.enabled}
+        <div class="card" style="background:var(--baby-blue-bg); margin-top:0.6rem;">
+          <div style="margin-bottom:0.7rem;">
+            <div class="text-dim" style="font-size:0.78rem;">Alamat IP (untuk dimasukkan di PC kasir lain)</div>
+            <strong class="mono" style="font-size:1.1rem;">
+              {lanStatus.local_ip ?? "(IP tidak terdeteksi — cek koneksi wifi)"}:{lanStatus.port}
+            </strong>
+          </div>
+          <div style="margin-bottom:0.7rem;">
+            <div class="text-dim" style="font-size:0.78rem;">Kode Pairing</div>
+            <strong class="mono" style="font-size:1.3rem; letter-spacing:0.1em;">{lanStatus.token}</strong>
+          </div>
+          <button disabled={lanBusy} onclick={regenerateToken}>🔄 Buat Kode Baru</button>
+        </div>
+      {/if}
+    {/if}
+  </div>
+{/if}
+
+<!-- ── Tab: Struk & Printer ── -->
+{#if activeTab === "struk"}
   <div class="card">
-    <h2>Struk & Printer</h2>
-
-    <div class="grid-2">
+    <h2>Struk &amp; Printer</h2>
+    <div class="struk-grid">
       <div>
         <label>Printer</label>
         <div class="row">
@@ -143,7 +345,7 @@
             <option value="">(Printer default)</option>
             {#each printers as p}<option value={p}>{p}</option>{/each}
           </select>
-          <button title="Muat ulang daftar printer" onclick={() => api.listPrinters().then((p) => (printers = p))}>↻</button>
+          <button title="Muat ulang" onclick={() => api.listPrinters().then((p) => (printers = p))}>↻</button>
         </div>
       </div>
       <div>
@@ -155,38 +357,145 @@
       </div>
       <div>
         <label>Ukuran Font (px)</label>
-        <input type="number" min="8" max="20" bind:value={settings.receipt_font_size} />
+        <input type="number" min="8" max="20" bind:value={settings.receipt_font_size} oninput={onSpacingInput} />
       </div>
       <div>
         <label>Spasi Baris</label>
-        <input type="number" min="1" max="2.5" step="0.05" bind:value={settings.receipt_line_height} />
+        <input type="number" min="1" max="2.5" step="0.05" bind:value={settings.receipt_line_height} oninput={onSpacingInput} />
       </div>
       <div>
         <label>Margin (mm)</label>
-        <input type="number" min="0" max="10" bind:value={settings.receipt_margin} />
+        <input type="number" min="0" max="10" bind:value={settings.receipt_margin} oninput={onSpacingInput} />
       </div>
     </div>
-
-    <label style="margin-top:0.7rem;">Header Tambahan (alamat, telp — satu baris per item)</label>
+    <label style="margin-top:0.9rem;">Header Tambahan</label>
     <textarea rows="3" bind:value={settings.receipt_header} placeholder={"Jl. Contoh No.1\nTelp 0812-xxxx"}></textarea>
-
     <label style="margin-top:0.7rem;">Footer Struk</label>
     <textarea rows="2" bind:value={settings.receipt_footer} placeholder="Terima kasih telah berbelanja!"></textarea>
 
+    <label style="margin-top:0.9rem;">🧩 Blok Struk (Designer)</label>
+    <p class="text-dim" style="margin-top:0; font-size:0.78rem;">
+      Pilih blok yang ditampilkan pada struk cetak (Preview / Test Print / saat kasir mencetak).
+    </p>
+    <div class="block-grid">
+      {#each RECEIPT_SHOW_KEYS as k}
+        <label class="row block-cb">
+          <input
+            type="checkbox"
+            style="width:auto;"
+            checked={settings[k.setting] !== "0"}
+            onchange={(e) => { settings[k.setting] = e.currentTarget.checked ? "1" : "0"; spacingChanged = true; }}
+          />
+          {k.label}
+        </label>
+      {/each}
+    </div>
     {#if printers.length === 0}
       <p class="text-dim" style="font-size:0.76rem; margin-top:0.5rem;">
-        Daftar printer kosong (hanya terbaca di Windows). Kamu tetap bisa cetak via dialog.
+        Daftar printer kosong — hanya terbaca di Windows. Cetak via dialog tetap bisa digunakan.
       </p>
     {/if}
-
-    <div class="row" style="justify-content:flex-end; margin-top:1rem;">
+    <div class="row" style="justify-content:flex-end; margin-top:1rem; flex-wrap:wrap; gap:0.4rem;">
       <button onclick={openPreview}>👁️ Preview</button>
       <button onclick={testPrint}>🖨️ Test Print</button>
-      <button class="btn-primary" disabled={savingReceipt} onclick={saveReceipt}>Simpan Pengaturan Struk</button>
+      <button class="btn-primary" class:btn-warning={spacingChanged} disabled={savingReceipt} onclick={saveReceipt}>
+        {spacingChanged ? "⚠ Simpan Struk*" : "Simpan Struk"}
+      </button>
     </div>
   </div>
-</div>
+{/if}
+
+<!-- ── Tab: Tema ── -->
+{#if activeTab === "tema"}
+  <div class="card" style="max-width:640px;">
+    <h2>Tema Tampilan</h2>
+    <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
+      Pilih skema warna aplikasi, termasuk mode gelap. Berlaku langsung dan tersimpan untuk semua kasir di toko ini.
+    </p>
+    <div class="theme-grid">
+      {#each THEMES as t}
+        <button class="theme-card" class:active={activeTheme === t.key} disabled={savingTheme} onclick={() => pickTheme(t.key)}>
+          <span class="theme-swatch" style="background:{t.swatch};"></span>
+          <span class="theme-name">{t.label}</span>
+          {#if activeTheme === t.key}<span class="theme-check">✓</span>{/if}
+        </button>
+      {/each}
+    </div>
+  </div>
+{/if}
+
+<!-- ── Tab: Lanjutan (Zona Berbahaya) ── -->
+{#if activeTab === "lanjutan"}
+  <div class="card danger-zone" style="max-width:560px;">
+    <h2>⚠️ Reset Data</h2>
+    <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
+      Menghapus <b>seluruh</b> data barang, stok, transaksi, diskon periodik, dan merek secara
+      permanen. Akun pengguna &amp; pengaturan toko <b>tidak</b> ikut terhapus. Tindakan ini
+      <b>tidak bisa dibatalkan</b> — pastikan sudah export/backup data bila perlu.
+    </p>
+    <label>Ketik <span class="mono" style="font-weight:700;">{RESET_PHRASE}</span> untuk mengaktifkan tombol hapus</label>
+    <input bind:value={resetConfirmText} placeholder={RESET_PHRASE} />
+    <div class="row" style="justify-content:flex-end; margin-top:0.9rem;">
+      <button
+        class="btn-danger"
+        disabled={resetting || resetConfirmText.trim() !== RESET_PHRASE}
+        onclick={doResetData}
+      >
+        {resetting ? "Menghapus…" : "🗑️ Hapus Semua Data"}
+      </button>
+    </div>
+  </div>
+{/if}
 
 {#if preview}
   <Receipt detail={sampleDetail} onClose={() => (preview = false)} />
 {/if}
+
+<style>
+  .danger-zone {
+    border-color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 6%, var(--white));
+  }
+  .ptab-bar {
+    display: flex;
+    gap: 0.3rem;
+    margin-bottom: 1rem;
+    border-bottom: 2px solid var(--border);
+    padding-bottom: 0;
+  }
+  .ptab-btn {
+    border: none;
+    border-bottom: 3px solid transparent;
+    border-radius: 0;
+    background: transparent;
+    padding: 0.55rem 1.1rem;
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--text-dim);
+    margin-bottom: -2px;
+  }
+  .ptab-btn:hover { background: var(--baby-blue-soft); color: var(--text); }
+  .ptab-btn.active { border-bottom-color: var(--primary); color: var(--primary); font-weight: 700; }
+  .struk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px,1fr)); gap: 0.7rem; }
+  .block-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px,1fr)); gap: 0.4rem; margin-top: 0.4rem; }
+  .block-cb { margin: 0; gap: 0.35rem; font-weight: 400; font-size: 0.85rem; }
+  .btn-warning { background: var(--warning); border-color: var(--warning); color: #fff; }
+  .btn-warning:hover { background: #c98a2a; border-color: #c98a2a; }
+
+  .theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px,1fr)); gap: 0.7rem; margin-top: 0.8rem; }
+  .theme-card {
+    position: relative;
+    display: flex; flex-direction: column; align-items: center; gap: 0.5rem;
+    padding: 1rem 0.8rem;
+    border: 2px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--panel);
+  }
+  .theme-card.active { border-color: var(--primary); }
+  .theme-swatch { width: 40px; height: 40px; border-radius: 50%; border: 1px solid rgba(0,0,0,0.1); }
+  .theme-name { font-size: 0.85rem; font-weight: 600; text-align: center; }
+  .theme-check {
+    position: absolute; top: 0.4rem; right: 0.5rem;
+    color: var(--primary); font-weight: 700;
+  }
+</style>

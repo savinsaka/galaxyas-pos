@@ -3,8 +3,13 @@
   import { api } from "$lib/api";
   import { formatIDR, formatQty } from "$lib/format";
   import { toastError } from "$lib/toast";
-  import { printReport } from "$lib/print";
+  import { printElement } from "$lib/print";
+  import SummaryTable from "$lib/components/SummaryTable.svelte";
+  import { REPORT_TYPES, defaultConfig, loadReportDesign, blockOrder, blockHidden, type ReportDesignConfig } from "$lib/reportDesign";
   import type { ProductWithStock, StockMovement } from "$lib/types";
+
+  const BLOCKS = REPORT_TYPES.find((t) => t.key === "persediaan")!.blocks;
+  let design = $state<ReportDesignConfig>(defaultConfig(BLOCKS));
 
   type Gran = "harian" | "bulanan" | "tahunan";
   let gran = $state<Gran>("bulanan");
@@ -26,6 +31,7 @@
   onMount(() => {
     presetTahunIni();
     load();
+    loadReportDesign("persediaan", BLOCKS).then((d) => (design = d));
   });
 
   const dateStr = (iso: string) => {
@@ -91,16 +97,16 @@
 
   const stockValueCost = $derived(products.reduce((s, p) => s + p.stock_qty * p.cost_price, 0));
   const stockValueSell = $derived(products.reduce((s, p) => s + p.stock_qty * p.sell_price, 0));
-  const lowStock = $derived(products.filter((p) => p.stock_qty <= 5));
 </script>
 
+<div id="printable-page">
 <div class="page-head">
   <h1>Laporan Persediaan</h1>
   <div class="row no-print">
     {#each ["harian", "bulanan", "tahunan"] as g}
       <button class:btn-primary={gran === g} onclick={() => (gran = g as Gran)}>{g}</button>
     {/each}
-    <button onclick={printReport}>🖨️ Print</button>
+    <button onclick={() => printElement("printable-page", "Laporan Persediaan")}>🖨️ Print</button>
   </div>
 </div>
 
@@ -116,46 +122,44 @@
   </div>
 </div>
 
-<div class="row" style="gap:1rem; margin-bottom:1rem;">
-  <div class="card" style="flex:1;"><div class="text-dim">Nilai Stok (Pokok)</div><h2 class="mono">{formatIDR(stockValueCost)}</h2></div>
-  <div class="card" style="flex:1;"><div class="text-dim">Nilai Stok (Jual)</div><h2 class="mono">{formatIDR(stockValueSell)}</h2></div>
-  <div class="card" style="flex:1;"><div class="text-dim">Stok Menipis (≤5)</div><h2 class="mono">{lowStock.length}</h2></div>
+<div style="display:flex; flex-direction:column; gap:1rem;">
+  {#if !blockHidden(design, "nilai_stok")}
+    <div style="order:{blockOrder(design, 'nilai_stok')};">
+      <SummaryTable
+        rows={[
+          { label: "Nilai Stok (Pokok)", value: formatIDR(stockValueCost) },
+          { label: "Nilai Stok (Jual)", value: formatIDR(stockValueSell) },
+        ]}
+      />
+    </div>
+  {/if}
+
+  {#if !blockHidden(design, "pergerakan")}
+    <div class="card" style="padding:0; overflow:hidden; order:{blockOrder(design, 'pergerakan')};">
+      <div style="padding:0.7rem 0.9rem;"><b>Pergerakan per Periode ({gran})</b></div>
+      <table>
+        <thead><tr><th>Periode</th><th class="text-right">Masuk</th><th class="text-right">Keluar</th><th class="text-right">Terjual</th><th class="text-right">Opname</th></tr></thead>
+        <tbody>
+          {#each buckets as [k, b] (k)}
+            <tr><td class="mono">{k}</td><td class="text-right mono">{formatQty(b.masuk)}</td><td class="text-right mono">{formatQty(b.keluar)}</td><td class="text-right mono">{formatQty(b.jual)}</td><td class="text-right mono">{b.opname}</td></tr>
+          {:else}<tr><td colspan="5" class="text-dim">Tidak ada data.</td></tr>{/each}
+        </tbody>
+      </table>
+    </div>
+  {/if}
+
+  {#if !blockHidden(design, "rekap_barang")}
+    <div class="card" style="padding:0; overflow:hidden; order:{blockOrder(design, 'rekap_barang')};">
+      <div style="padding:0.7rem 0.9rem;"><b>Rekap per Barang</b></div>
+      <table>
+        <thead><tr><th>Barang</th><th class="text-right">Masuk</th><th class="text-right">Keluar</th><th class="text-right">Terjual</th></tr></thead>
+        <tbody>
+          {#each perItem as [name, b] (name)}
+            <tr><td>{name}</td><td class="text-right mono">{formatQty(b.masuk)}</td><td class="text-right mono">{formatQty(b.keluar)}</td><td class="text-right mono">{formatQty(b.jual)}</td></tr>
+          {:else}<tr><td colspan="4" class="text-dim">Tidak ada data.</td></tr>{/each}
+        </tbody>
+      </table>
+    </div>
+  {/if}
 </div>
-
-<div class="grid-2" style="align-items:start;">
-  <div class="card" style="padding:0; overflow:hidden;">
-    <div style="padding:0.7rem 0.9rem;"><b>Pergerakan per Periode ({gran})</b></div>
-    <table>
-      <thead><tr><th>Periode</th><th class="text-right">Masuk</th><th class="text-right">Keluar</th><th class="text-right">Terjual</th><th class="text-right">Opname</th></tr></thead>
-      <tbody>
-        {#each buckets as [k, b] (k)}
-          <tr><td class="mono">{k}</td><td class="text-right mono">{formatQty(b.masuk)}</td><td class="text-right mono">{formatQty(b.keluar)}</td><td class="text-right mono">{formatQty(b.jual)}</td><td class="text-right mono">{b.opname}</td></tr>
-        {:else}<tr><td colspan="5" class="text-dim">Tidak ada data.</td></tr>{/each}
-      </tbody>
-    </table>
-  </div>
-
-  <div class="card" style="padding:0; overflow:hidden;">
-    <div style="padding:0.7rem 0.9rem;"><b>Stok Menipis</b></div>
-    <table>
-      <thead><tr><th>Barang</th><th class="text-right">Stok</th></tr></thead>
-      <tbody>
-        {#each lowStock as p (p.id)}
-          <tr><td>{p.name}</td><td class="text-right mono">{formatQty(p.stock_qty)} {p.unit ?? ""}</td></tr>
-        {:else}<tr><td colspan="2" class="text-dim">Semua stok aman.</td></tr>{/each}
-      </tbody>
-    </table>
-  </div>
-
-  <div class="card" style="padding:0; overflow:hidden; grid-column:1/3;">
-    <div style="padding:0.7rem 0.9rem;"><b>Rekap per Barang</b></div>
-    <table>
-      <thead><tr><th>Barang</th><th class="text-right">Masuk</th><th class="text-right">Keluar</th><th class="text-right">Terjual</th></tr></thead>
-      <tbody>
-        {#each perItem as [name, b] (name)}
-          <tr><td>{name}</td><td class="text-right mono">{formatQty(b.masuk)}</td><td class="text-right mono">{formatQty(b.keluar)}</td><td class="text-right mono">{formatQty(b.jual)}</td></tr>
-        {:else}<tr><td colspan="4" class="text-dim">Tidak ada data.</td></tr>{/each}
-      </tbody>
-    </table>
-  </div>
 </div>

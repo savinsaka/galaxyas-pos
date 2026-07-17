@@ -112,14 +112,67 @@ pub fn init_schema(conn: &Connection) -> AppResult<()> {
             updated_at TEXT NOT NULL
         );
 
+        -- Pelanggan (lokal, tidak di-sync).
+        CREATE TABLE IF NOT EXISTS customers (
+            id         TEXT PRIMARY KEY,
+            name       TEXT NOT NULL,
+            phone      TEXT,
+            email      TEXT,
+            address    TEXT,
+            note       TEXT,
+            is_active  INTEGER NOT NULL DEFAULT 1,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_customers_name ON customers(name);
+
+        -- Pengeluaran / kas keluar operasional (lokal).
+        CREATE TABLE IF NOT EXISTS expenses (
+            id         TEXT PRIMARY KEY,
+            date       TEXT NOT NULL,       -- YYYY-MM-DD
+            category   TEXT NOT NULL,
+            amount     REAL NOT NULL,
+            note       TEXT,
+            user_id    TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date);
+
+        -- Shift kasir (buka/tutup, rekonsiliasi kas). Lokal.
+        CREATE TABLE IF NOT EXISTS shifts (
+            id             TEXT PRIMARY KEY,
+            user_id        TEXT NOT NULL,
+            user_name      TEXT NOT NULL,
+            opening_cash   REAL NOT NULL DEFAULT 0,
+            closing_cash   REAL,             -- diisi saat tutup (uang fisik dihitung)
+            expected_cash  REAL,             -- modal awal + total tunai penjualan (dihitung sistem)
+            difference     REAL,             -- closing_cash - expected_cash
+            note           TEXT,
+            opened_at      TEXT NOT NULL,
+            closed_at      TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_shifts_opened ON shifts(opened_at);
+
         CREATE TABLE IF NOT EXISTS settings (
             key   TEXT PRIMARY KEY,
             value TEXT
         );
+
+        -- Batch Item Masuk/Keluar: satu baris per "Simpan Semua Item" (transaksi),
+        -- setiap barang di dalamnya jadi satu baris stock_movements dengan batch_id ini.
+        CREATE TABLE IF NOT EXISTS stock_movement_batches (
+            id         TEXT PRIMARY KEY,
+            no         TEXT NOT NULL,
+            kind       TEXT NOT NULL,       -- in | out
+            note       TEXT,
+            user_id    TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_batch_kind ON stock_movement_batches(kind);
+        CREATE INDEX IF NOT EXISTS idx_batch_created ON stock_movement_batches(created_at);
         "#,
     )?;
 
-    // Migrasi ringan untuk instalasi lama: tambah kolom permissions bila belum ada.
+    // Migrasi: kolom permissions pada tabel users.
     let has_perm: bool = conn
         .prepare("SELECT 1 FROM pragma_table_info('users') WHERE name='permissions'")?
         .query_row([], |_| Ok(true))
@@ -128,6 +181,54 @@ pub fn init_schema(conn: &Connection) -> AppResult<()> {
     if !has_perm {
         conn.execute("ALTER TABLE users ADD COLUMN permissions TEXT NOT NULL DEFAULT '[]'", [])?;
     }
+
+    // Migrasi: kolom code & priority pada tabel discount_periods.
+    let has_dp_code: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('discount_periods') WHERE name='code'")?
+        .query_row([], |_| Ok(true))
+        .optional()?
+        .unwrap_or(false);
+    if !has_dp_code {
+        conn.execute("ALTER TABLE discount_periods ADD COLUMN code TEXT NOT NULL DEFAULT ''", [])?;
+    }
+    let has_dp_priority: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('discount_periods') WHERE name='priority'")?
+        .query_row([], |_| Ok(true))
+        .optional()?
+        .unwrap_or(false);
+    if !has_dp_priority {
+        conn.execute("ALTER TABLE discount_periods ADD COLUMN priority INTEGER NOT NULL DEFAULT 1", [])?;
+    }
+
+    // Migrasi: kolom customer_id & shift_id pada tabel transactions.
+    let has_tx_customer: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('transactions') WHERE name='customer_id'")?
+        .query_row([], |_| Ok(true))
+        .optional()?
+        .unwrap_or(false);
+    if !has_tx_customer {
+        conn.execute("ALTER TABLE transactions ADD COLUMN customer_id TEXT", [])?;
+    }
+    let has_tx_shift: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('transactions') WHERE name='shift_id'")?
+        .query_row([], |_| Ok(true))
+        .optional()?
+        .unwrap_or(false);
+    if !has_tx_shift {
+        conn.execute("ALTER TABLE transactions ADD COLUMN shift_id TEXT", [])?;
+    }
+
+    // Migrasi: kolom batch_id pada tabel stock_movements (grouping Item Masuk/Keluar).
+    let has_mov_batch: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('stock_movements') WHERE name='batch_id'")?
+        .query_row([], |_| Ok(true))
+        .optional()?
+        .unwrap_or(false);
+    if !has_mov_batch {
+        conn.execute("ALTER TABLE stock_movements ADD COLUMN batch_id TEXT", [])?;
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_mov_batch ON stock_movements(batch_id)", [])?;
+    }
+
     Ok(())
 }
 
@@ -170,6 +271,8 @@ pub fn seed_defaults(conn: &Connection) -> AppResult<()> {
             params![k, v],
         )?;
     }
+
+    backfill_brands_from_products(conn)?;
     Ok(())
 }
 
@@ -217,11 +320,15 @@ fn map_product(row: &rusqlite::Row) -> rusqlite::Result<Product> {
     })
 }
 
-/// Daftar barang + stok. `search` mencocokkan nama atau barcode.
+/// Daftar barang + stok. `search` mencocokkan nama atau barcode. `limit`
+/// dikirim apa adanya ke SQLite; `None`/negatif berarti tanpa batas (dipakai
+/// oleh pemanggil "muat semua utk autocomplete lokal"; pemanggil yang butuh
+/// hasil ringkas seperti pencarian di kasir mengirim limit kecil).
 pub fn list_products(
     conn: &Connection,
     search: Option<String>,
     include_inactive: bool,
+    limit: Option<i64>,
 ) -> AppResult<Vec<ProductWithStock>> {
     let like = format!("%{}%", search.unwrap_or_default());
     let active_clause = if include_inactive { "1=1" } else { "p.is_active = 1" };
@@ -231,16 +338,71 @@ pub fn list_products(
          LEFT JOIN stock s ON s.product_id = p.id
          WHERE p.is_deleted = 0 AND {active_clause}
            AND (p.name LIKE ?1 OR COALESCE(p.barcode,'') LIKE ?1)
-         ORDER BY p.name ASC"
+         ORDER BY p.name ASC
+         LIMIT ?2"
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
-        .query_map(params![like], |row| {
+        .query_map(params![like, limit.unwrap_or(-1)], |row| {
             let stock_qty: f64 = row.get("stock_qty")?;
             Ok(ProductWithStock { product: map_product(row)?, stock_qty })
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
+}
+
+/// Daftar barang dengan paginasi (limit/offset), filter merek, dan sort
+/// pilihan kolom. Dipakai oleh tabel Data Barang agar tidak me-render
+/// ribuan baris sekaligus.
+pub fn list_products_page(
+    conn: &Connection,
+    search: Option<String>,
+    include_inactive: bool,
+    brand: Option<String>,
+    sort_by: Option<String>,
+    sort_dir: Option<String>,
+    limit: i64,
+    offset: i64,
+) -> AppResult<crate::models::ProductPage> {
+    let like = format!("%{}%", search.unwrap_or_default());
+    let active_clause = if include_inactive { "1=1" } else { "p.is_active = 1" };
+    let col = match sort_by.as_deref() {
+        Some("sell_price") => "p.sell_price",
+        Some("cost_price") => "p.cost_price",
+        Some("stock_qty") => "stock_qty",
+        Some("updated_at") => "p.updated_at",
+        Some("barcode") => "p.barcode",
+        _ => "p.name COLLATE NOCASE",
+    };
+    let dir = if sort_dir.as_deref() == Some("desc") { "DESC" } else { "ASC" };
+
+    let where_sql = format!(
+        "FROM products p LEFT JOIN stock s ON s.product_id = p.id
+         WHERE p.is_deleted = 0 AND {active_clause}
+           AND (p.name LIKE ?1 OR COALESCE(p.barcode,'') LIKE ?1)
+           AND (?2 IS NULL OR p.brand = ?2)"
+    );
+
+    let total: i64 = conn.query_row(
+        &format!("SELECT COUNT(*) {where_sql}"),
+        params![like, brand],
+        |r| r.get(0),
+    )?;
+
+    let sql = format!(
+        "SELECT p.*, COALESCE(s.qty, 0) AS stock_qty {where_sql}
+         ORDER BY {col} {dir}
+         LIMIT ?3 OFFSET ?4"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let items = stmt
+        .query_map(params![like, brand, limit, offset], |row| {
+            let stock_qty: f64 = row.get("stock_qty")?;
+            Ok(ProductWithStock { product: map_product(row)?, stock_qty })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(crate::models::ProductPage { items, total })
 }
 
 pub fn find_by_barcode(conn: &Connection, barcode: &str) -> AppResult<Option<ProductWithStock>> {
@@ -300,7 +462,41 @@ pub fn upsert_product(conn: &Connection, input: ProductInput) -> AppResult<Produ
         )?;
     }
 
+    ensure_brand_exists(conn, input.brand.as_deref(), &now)?;
+
     get_product(conn, &id)?.ok_or_else(|| AppError::Other("produk gagal disimpan".into()))
+}
+
+/// Pastikan nama merek dari barang (input manual atau import) muncul di
+/// tabel `brands` juga, supaya tampil di Daftar Merek, filter Data Barang,
+/// dan filter Laporan Item — bukan cuma tersimpan sebagai teks bebas di
+/// `products.brand`. Dedup otomatis lewat UNIQUE(name) + INSERT OR IGNORE.
+fn ensure_brand_exists(conn: &Connection, brand: Option<&str>, now: &str) -> AppResult<()> {
+    let Some(name) = brand.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(());
+    };
+    conn.execute(
+        "INSERT OR IGNORE INTO brands (id, name, updated_at) VALUES (?1, ?2, ?3)",
+        params![Uuid::new_v4().to_string(), name, now],
+    )?;
+    Ok(())
+}
+
+/// Backfill sekali jalan: isi `brands` dari nilai `products.brand` yang sudah
+/// ada tapi belum tercatat di tabel `brands` (mis. dari import lama sebelum
+/// perbaikan ini ada). Idempoten — aman dipanggil tiap start aplikasi.
+pub fn backfill_brands_from_products(conn: &Connection) -> AppResult<()> {
+    let now = Utc::now().to_rfc3339();
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT brand FROM products WHERE brand IS NOT NULL AND trim(brand) != ''",
+    )?;
+    let names: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    for name in names {
+        ensure_brand_exists(conn, Some(&name), &now)?;
+    }
+    Ok(())
 }
 
 pub fn get_product(conn: &Connection, id: &str) -> AppResult<Option<Product>> {
@@ -326,6 +522,79 @@ pub fn set_product_active(conn: &Connection, id: &str, active: bool) -> AppResul
     conn.execute(
         "UPDATE products SET is_active = ?2, updated_at = ?3, dirty = 1 WHERE id = ?1",
         params![id, active as i64, now],
+    )?;
+    Ok(())
+}
+
+/// Cari & tandai barang duplikat (barcode sama, aktif/non-deleted). Barang
+/// yang paling baru di-update dipertahankan; sisanya di-soft-delete supaya
+/// tidak lagi muncul di kasir maupun pencarian, tanpa menghapus riwayat
+/// transaksi/pergerakan stok yang mungkin mengacu ke id lama.
+pub fn dedupe_products_by_barcode(conn: &Connection) -> AppResult<crate::models::DedupeResult> {
+    let now = Utc::now().to_rfc3339();
+    let barcodes: Vec<String> = {
+        let mut stmt = conn.prepare(
+            "SELECT barcode FROM products
+             WHERE is_deleted = 0 AND barcode IS NOT NULL AND TRIM(barcode) != ''
+             GROUP BY barcode HAVING COUNT(*) > 1",
+        )?;
+        let x = stmt.query_map([], |r| r.get(0))?.collect::<Result<Vec<_>, _>>()?;
+        x
+    };
+
+    let mut details = Vec::new();
+    let mut removed_total = 0i64;
+
+    for barcode in &barcodes {
+        let rows: Vec<(String, String)> = {
+            let mut stmt = conn.prepare(
+                "SELECT id, name FROM products
+                 WHERE barcode = ?1 AND is_deleted = 0
+                 ORDER BY updated_at DESC, rowid DESC",
+            )?;
+            let x = stmt
+                .query_map(params![barcode], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            x
+        };
+        if rows.len() < 2 {
+            continue;
+        }
+        let kept_name = rows[0].1.clone();
+        for (id, _) in &rows[1..] {
+            conn.execute(
+                "UPDATE products SET is_deleted = 1, is_active = 0, updated_at = ?2, dirty = 1 WHERE id = ?1",
+                params![id, now],
+            )?;
+        }
+        let removed_count = (rows.len() - 1) as i64;
+        removed_total += removed_count;
+        details.push(crate::models::DedupeDetail {
+            barcode: barcode.clone(),
+            kept_name,
+            removed_count,
+        });
+    }
+
+    Ok(crate::models::DedupeResult {
+        groups: details.len() as i64,
+        removed: removed_total,
+        details,
+    })
+}
+
+/// Hapus SELURUH data transaksional & master (barang, stok, transaksi,
+/// pergerakan stok, diskon, merek). Akun pengguna & pengaturan toko TIDAK
+/// ikut terhapus agar aplikasi tetap bisa login setelah reset.
+pub fn reset_data(conn: &Connection) -> AppResult<()> {
+    conn.execute_batch(
+        "DELETE FROM transaction_items;
+         DELETE FROM transactions;
+         DELETE FROM stock_movements;
+         DELETE FROM stock;
+         DELETE FROM discount_periods;
+         DELETE FROM products;
+         DELETE FROM brands;",
     )?;
     Ok(())
 }
@@ -367,12 +636,21 @@ fn next_invoice_no(conn: &Connection) -> AppResult<String> {
     Ok(format!("INV-{date}-{seq:04}"))
 }
 
+/// Pakai override waktu (dari admin, mis. mencatat transaksi mundur) bila
+/// valid RFC3339; kalau kosong/tidak valid, jatuhkan ke waktu sekarang.
+fn resolve_created_at(override_at: &Option<String>) -> String {
+    match override_at {
+        Some(s) if chrono::DateTime::parse_from_rfc3339(s).is_ok() => s.clone(),
+        _ => Utc::now().to_rfc3339(),
+    }
+}
+
 /// Simpan transaksi penjualan & kurangi stok dalam satu transaksi DB.
 pub fn create_sale(conn: &mut Connection, input: SaleInput) -> AppResult<TransactionDetail> {
     if input.items.is_empty() {
         return Err(AppError::Other("transaksi tidak boleh kosong".into()));
     }
-    let now = Utc::now().to_rfc3339();
+    let now = resolve_created_at(&input.created_at);
     let tx_id = Uuid::new_v4().to_string();
     let invoice_no = next_invoice_no(conn)?;
 
@@ -399,14 +677,32 @@ pub fn create_sale(conn: &mut Connection, input: SaleInput) -> AppResult<Transac
     }
     let change = input.paid - total;
 
+    // Cek stok cukup sebelum memulai transaksi DB.
+    for it in &input.items {
+        let current_stock: f64 = conn
+            .query_row(
+                "SELECT COALESCE(qty,0) FROM stock WHERE product_id = ?1",
+                params![it.product_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0.0);
+        if current_stock < it.qty {
+            return Err(AppError::Other(format!(
+                "Stok \"{}\" tidak cukup (tersedia {:.0}, dibutuhkan {:.0}).",
+                it.name, current_stock, it.qty
+            )));
+        }
+    }
+
     let db_tx = conn.transaction()?;
     db_tx.execute(
         "INSERT INTO transactions
-            (id, invoice_no, cashier_id, subtotal, discount, total, paid, change, payment_method, created_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+            (id, invoice_no, cashier_id, subtotal, discount, total, paid, change, payment_method,
+             created_at, customer_id, shift_id)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
         params![
             tx_id, invoice_no, input.cashier_id, subtotal, total_discount, total,
-            input.paid, change, input.payment_method, now
+            input.paid, change, input.payment_method, now, input.customer_id, input.shift_id
         ],
     )?;
     for it in &items {
@@ -448,50 +744,65 @@ pub fn create_sale(conn: &mut Connection, input: SaleInput) -> AppResult<Transac
             change,
             payment_method: input.payment_method,
             created_at: now,
+            customer_id: input.customer_id,
+            shift_id: input.shift_id,
         },
         items,
     })
 }
 
-pub fn list_transactions(conn: &Connection, limit: i64) -> AppResult<Vec<Transaction>> {
-    let mut stmt = conn.prepare(
-        "SELECT * FROM transactions ORDER BY created_at DESC LIMIT ?1",
-    )?;
+fn map_transaction(r: &rusqlite::Row) -> rusqlite::Result<Transaction> {
+    Ok(Transaction {
+        id: r.get("id")?,
+        invoice_no: r.get("invoice_no")?,
+        cashier_id: r.get("cashier_id")?,
+        subtotal: r.get("subtotal")?,
+        discount: r.get("discount")?,
+        total: r.get("total")?,
+        paid: r.get("paid")?,
+        change: r.get("change")?,
+        payment_method: r.get("payment_method")?,
+        created_at: r.get("created_at")?,
+        customer_id: r.get("customer_id")?,
+        shift_id: r.get("shift_id")?,
+    })
+}
+
+pub fn list_transactions(
+    conn: &Connection,
+    from: Option<String>,
+    to: Option<String>,
+    limit: i64,
+) -> AppResult<Vec<Transaction>> {
+    let mut sql = String::from("SELECT * FROM transactions WHERE 1=1");
+    let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    if let Some(f) = &from {
+        sql.push_str(" AND date(created_at) >= date(?");
+        sql.push_str(&(args.len() + 1).to_string());
+        sql.push(')');
+        args.push(Box::new(f.clone()));
+    }
+    if let Some(t) = &to {
+        sql.push_str(" AND date(created_at) <= date(?");
+        sql.push_str(&(args.len() + 1).to_string());
+        sql.push(')');
+        args.push(Box::new(t.clone()));
+    }
+    sql.push_str(" ORDER BY created_at DESC LIMIT ?");
+    sql.push_str(&(args.len() + 1).to_string());
+    args.push(Box::new(limit));
+
+    let mut stmt = conn.prepare(&sql)?;
+    let params_ref: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
     let rows = stmt
-        .query_map(params![limit], |r| {
-            Ok(Transaction {
-                id: r.get("id")?,
-                invoice_no: r.get("invoice_no")?,
-                cashier_id: r.get("cashier_id")?,
-                subtotal: r.get("subtotal")?,
-                discount: r.get("discount")?,
-                total: r.get("total")?,
-                paid: r.get("paid")?,
-                change: r.get("change")?,
-                payment_method: r.get("payment_method")?,
-                created_at: r.get("created_at")?,
-            })
-        })?
+        .query_map(params_ref.as_slice(), map_transaction)?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
 pub fn get_transaction(conn: &Connection, id: &str) -> AppResult<Option<TransactionDetail>> {
     let header = conn
-        .query_row("SELECT * FROM transactions WHERE id = ?1", params![id], |r| {
-            Ok(Transaction {
-                id: r.get("id")?,
-                invoice_no: r.get("invoice_no")?,
-                cashier_id: r.get("cashier_id")?,
-                subtotal: r.get("subtotal")?,
-                discount: r.get("discount")?,
-                total: r.get("total")?,
-                paid: r.get("paid")?,
-                change: r.get("change")?,
-                payment_method: r.get("payment_method")?,
-                created_at: r.get("created_at")?,
-            })
-        })
+        .query_row("SELECT * FROM transactions WHERE id = ?1", params![id], map_transaction)
         .optional()?;
 
     let Some(header) = header else { return Ok(None) };
@@ -675,7 +986,7 @@ pub fn create_stock_movement(
     conn: &Connection,
     input: StockMovementInput,
 ) -> AppResult<StockMovement> {
-    let now = Utc::now().to_rfc3339();
+    let now = resolve_created_at(&input.created_at);
     let qty = input.qty.abs();
     let stock_after = match input.kind.as_str() {
         "opname" => set_stock(conn, &input.product_id, qty)?,
@@ -708,6 +1019,315 @@ pub fn create_stock_movement(
         created_at: now,
         stock_after,
     })
+}
+
+fn next_batch_no(conn: &Connection, kind: &str) -> AppResult<String> {
+    let key = format!("batch_seq_{kind}");
+    let seq: i64 = get_setting(conn, &key)?.and_then(|v| v.parse().ok()).unwrap_or(0) + 1;
+    set_setting(conn, &key, &seq.to_string())?;
+    let date = Utc::now().format("%Y%m%d");
+    let prefix = if kind == "in" { "MSK" } else { "KLR" };
+    Ok(format!("{prefix}-{date}-{seq:04}"))
+}
+
+/// Simpan satu batch Item Masuk/Keluar (banyak barang sekaligus, satu klik
+/// "Simpan Semua Item") — mirip `create_sale`: satu baris header + N baris
+/// stock_movements yang berbagi `batch_id`, dalam satu transaksi DB.
+pub fn create_stock_movement_batch(
+    conn: &mut Connection,
+    input: crate::models::StockMovementBatchInput,
+) -> AppResult<crate::models::StockMovementBatchDetail> {
+    if input.items.is_empty() {
+        return Err(AppError::Other("batch tidak boleh kosong".into()));
+    }
+    if input.kind != "in" && input.kind != "out" {
+        return Err(AppError::Other(format!("jenis batch tidak valid: {}", input.kind)));
+    }
+    let now = resolve_created_at(&input.created_at);
+    let id = Uuid::new_v4().to_string();
+    let no = next_batch_no(conn, &input.kind)?;
+
+    let db_tx = conn.transaction()?;
+    db_tx.execute(
+        "INSERT INTO stock_movement_batches (id, no, kind, note, user_id, created_at)
+         VALUES (?1,?2,?3,?4,?5,?6)",
+        params![id, no, input.kind, input.note, input.user_id, now],
+    )?;
+
+    let mut items_out = Vec::with_capacity(input.items.len());
+    for it in &input.items {
+        let qty = it.qty.abs();
+        let stock_after = if input.kind == "in" {
+            adjust_stock(&db_tx, &it.product_id, qty)?
+        } else {
+            adjust_stock(&db_tx, &it.product_id, -qty)?
+        };
+        db_tx.execute(
+            "INSERT INTO stock_movements
+                (product_id, kind, qty, stock_after, note, user_id, created_at, batch_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![it.product_id, input.kind, qty, stock_after, it.note, input.user_id, now, id],
+        )?;
+        let product_name: String = db_tx
+            .query_row("SELECT name FROM products WHERE id = ?1", params![it.product_id], |r| r.get(0))
+            .optional()?
+            .unwrap_or_default();
+        items_out.push(crate::models::StockMovementBatchItem {
+            product_id: it.product_id.clone(),
+            product_name,
+            qty,
+            note: it.note.clone(),
+        });
+    }
+    db_tx.commit()?;
+
+    Ok(crate::models::StockMovementBatchDetail {
+        id,
+        no,
+        kind: input.kind,
+        note: input.note,
+        user_id: input.user_id,
+        created_at: now,
+        items: items_out,
+    })
+}
+
+pub fn list_stock_movement_batches(
+    conn: &Connection,
+    kind: Option<String>,
+    from: Option<String>,
+    to: Option<String>,
+    limit: i64,
+) -> AppResult<Vec<crate::models::StockMovementBatch>> {
+    let mut sql = String::from(
+        "SELECT b.id, b.no, b.kind, b.note, b.user_id, b.created_at,
+                COUNT(m.id) AS item_count, COALESCE(SUM(m.qty), 0) AS total_qty
+         FROM stock_movement_batches b
+         LEFT JOIN stock_movements m ON m.batch_id = b.id
+         WHERE 1=1",
+    );
+    let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    if let Some(k) = &kind {
+        sql.push_str(" AND b.kind = ?");
+        sql.push_str(&(args.len() + 1).to_string());
+        args.push(Box::new(k.clone()));
+    }
+    if let Some(f) = &from {
+        sql.push_str(" AND date(b.created_at) >= date(?");
+        sql.push_str(&(args.len() + 1).to_string());
+        sql.push(')');
+        args.push(Box::new(f.clone()));
+    }
+    if let Some(t) = &to {
+        sql.push_str(" AND date(b.created_at) <= date(?");
+        sql.push_str(&(args.len() + 1).to_string());
+        sql.push(')');
+        args.push(Box::new(t.clone()));
+    }
+    sql.push_str(" GROUP BY b.id ORDER BY b.created_at DESC LIMIT ?");
+    sql.push_str(&(args.len() + 1).to_string());
+    args.push(Box::new(limit));
+
+    let mut stmt = conn.prepare(&sql)?;
+    let params_ref: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
+    let rows = stmt
+        .query_map(params_ref.as_slice(), |r| {
+            Ok(crate::models::StockMovementBatch {
+                id: r.get(0)?,
+                no: r.get(1)?,
+                kind: r.get(2)?,
+                note: r.get(3)?,
+                user_id: r.get(4)?,
+                created_at: r.get(5)?,
+                item_count: r.get(6)?,
+                total_qty: r.get(7)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+pub fn get_stock_movement_batch(
+    conn: &Connection,
+    id: &str,
+) -> AppResult<Option<crate::models::StockMovementBatchDetail>> {
+    let header = conn
+        .query_row(
+            "SELECT id, no, kind, note, user_id, created_at FROM stock_movement_batches WHERE id = ?1",
+            params![id],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, String>(5)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((id, no, kind, note, user_id, created_at)) = header else {
+        return Ok(None);
+    };
+
+    let mut stmt = conn.prepare(
+        "SELECT m.product_id, COALESCE(p.name, '') AS product_name, m.qty, m.note
+         FROM stock_movements m LEFT JOIN products p ON p.id = m.product_id
+         WHERE m.batch_id = ?1 ORDER BY m.id ASC",
+    )?;
+    let items = stmt
+        .query_map(params![id], |r| {
+            Ok(crate::models::StockMovementBatchItem {
+                product_id: r.get(0)?,
+                product_name: r.get(1)?,
+                qty: r.get(2)?,
+                note: r.get(3)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(Some(crate::models::StockMovementBatchDetail {
+        id,
+        no,
+        kind,
+        note,
+        user_id,
+        created_at,
+        items,
+    }))
+}
+
+/// Edit batch: kembalikan efek stok item lama, hapus baris lama, validasi &
+/// catat ulang item baru — id/no/kind/created_at dipertahankan. Mirip `update_transaction`.
+pub fn update_stock_movement_batch(
+    conn: &mut Connection,
+    id: &str,
+    items: Vec<crate::models::StockMovementBatchItemInput>,
+    note: Option<String>,
+) -> AppResult<crate::models::StockMovementBatchDetail> {
+    if items.is_empty() {
+        return Err(AppError::Other("batch tidak boleh kosong".into()));
+    }
+
+    let (no, kind, user_id, created_at): (String, String, Option<String>, String) = conn
+        .query_row(
+            "SELECT no, kind, user_id, created_at FROM stock_movement_batches WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .optional()?
+        .ok_or_else(|| AppError::Other("Batch tidak ditemukan.".into()))?;
+
+    let db_tx = conn.transaction()?;
+
+    // 1. Kembalikan efek stok item LAMA (kebalikan dari kind).
+    let old_items: Vec<(String, f64)> = {
+        let mut stmt =
+            db_tx.prepare("SELECT product_id, qty FROM stock_movements WHERE batch_id = ?1")?;
+        let rows = stmt
+            .query_map(params![id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    for (pid, qty) in &old_items {
+        let reverse = if kind == "in" { -qty } else { *qty };
+        adjust_stock(&db_tx, pid, reverse)?;
+    }
+    db_tx.execute("DELETE FROM stock_movements WHERE batch_id = ?1", params![id])?;
+
+    // 2. Validasi stok cukup untuk item BARU (khusus "out", setelah restore di atas).
+    if kind == "out" {
+        for it in &items {
+            let current: f64 = db_tx
+                .query_row(
+                    "SELECT COALESCE(qty,0) FROM stock WHERE product_id = ?1",
+                    params![it.product_id],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0.0);
+            if current < it.qty.abs() {
+                return Err(AppError::Other(format!(
+                    "Stok tidak cukup untuk salah satu barang (tersedia {:.0}, dibutuhkan {:.0}).",
+                    current,
+                    it.qty.abs()
+                )));
+            }
+        }
+    }
+
+    // 3. Catat ulang item baru.
+    let mut items_out = Vec::with_capacity(items.len());
+    for it in &items {
+        let qty = it.qty.abs();
+        let stock_after = if kind == "in" {
+            adjust_stock(&db_tx, &it.product_id, qty)?
+        } else {
+            adjust_stock(&db_tx, &it.product_id, -qty)?
+        };
+        db_tx.execute(
+            "INSERT INTO stock_movements
+                (product_id, kind, qty, stock_after, note, user_id, created_at, batch_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![it.product_id, kind, qty, stock_after, it.note, user_id, created_at, id],
+        )?;
+        let product_name: String = db_tx
+            .query_row("SELECT name FROM products WHERE id = ?1", params![it.product_id], |r| r.get(0))
+            .optional()?
+            .unwrap_or_default();
+        items_out.push(crate::models::StockMovementBatchItem {
+            product_id: it.product_id.clone(),
+            product_name,
+            qty,
+            note: it.note.clone(),
+        });
+    }
+
+    db_tx.execute(
+        "UPDATE stock_movement_batches SET note = ?2 WHERE id = ?1",
+        params![id, note],
+    )?;
+    db_tx.commit()?;
+
+    Ok(crate::models::StockMovementBatchDetail {
+        id: id.to_string(),
+        no,
+        kind,
+        note,
+        user_id,
+        created_at,
+        items: items_out,
+    })
+}
+
+/// Hapus batch: kembalikan efek stok semua item, lalu hapus baris movement & header.
+pub fn delete_stock_movement_batch(conn: &mut Connection, id: &str) -> AppResult<()> {
+    let kind: String = conn
+        .query_row(
+            "SELECT kind FROM stock_movement_batches WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| AppError::Other("Batch tidak ditemukan.".into()))?;
+
+    let db_tx = conn.transaction()?;
+    let items: Vec<(String, f64)> = {
+        let mut stmt =
+            db_tx.prepare("SELECT product_id, qty FROM stock_movements WHERE batch_id = ?1")?;
+        let rows = stmt
+            .query_map(params![id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    for (pid, qty) in &items {
+        let reverse = if kind == "in" { -qty } else { *qty };
+        adjust_stock(&db_tx, pid, reverse)?;
+    }
+    db_tx.execute("DELETE FROM stock_movements WHERE batch_id = ?1", params![id])?;
+    db_tx.execute("DELETE FROM stock_movement_batches WHERE id = ?1", params![id])?;
+    db_tx.commit()?;
+    Ok(())
 }
 
 pub fn list_stock_movements(
@@ -767,6 +1387,7 @@ pub fn list_stock_movements(
 fn map_discount(row: &rusqlite::Row) -> rusqlite::Result<DiscountPeriod> {
     Ok(DiscountPeriod {
         id: row.get("id")?,
+        code: row.get::<_, Option<String>>("code")?.unwrap_or_default(),
         scope: row.get("scope")?,
         target: row.get("target")?,
         target_label: row.get("target_label")?,
@@ -774,12 +1395,15 @@ fn map_discount(row: &rusqlite::Row) -> rusqlite::Result<DiscountPeriod> {
         value: row.get("value")?,
         days: row.get("days")?,
         is_active: row.get::<_, i64>("is_active")? != 0,
+        priority: row.get::<_, Option<i64>>("priority")?.unwrap_or(1),
         updated_at: row.get("updated_at")?,
     })
 }
 
 pub fn list_discounts(conn: &Connection) -> AppResult<Vec<DiscountPeriod>> {
-    let mut stmt = conn.prepare("SELECT * FROM discount_periods ORDER BY updated_at DESC")?;
+    let mut stmt = conn.prepare(
+        "SELECT * FROM discount_periods ORDER BY code ASC, priority ASC, updated_at DESC",
+    )?;
     let rows = stmt.query_map([], map_discount)?.collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -789,15 +1413,16 @@ pub fn save_discount(conn: &Connection, input: DiscountPeriodInput) -> AppResult
     let now = Utc::now().to_rfc3339();
     conn.execute(
         "INSERT INTO discount_periods
-            (id, scope, target, target_label, discount_type, value, days, is_active, updated_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
+            (id, code, scope, target, target_label, discount_type, value, days, is_active, priority, updated_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
          ON CONFLICT(id) DO UPDATE SET
-            scope=excluded.scope, target=excluded.target, target_label=excluded.target_label,
-            discount_type=excluded.discount_type, value=excluded.value, days=excluded.days,
-            is_active=excluded.is_active, updated_at=excluded.updated_at",
+            code=excluded.code, scope=excluded.scope, target=excluded.target,
+            target_label=excluded.target_label, discount_type=excluded.discount_type,
+            value=excluded.value, days=excluded.days, is_active=excluded.is_active,
+            priority=excluded.priority, updated_at=excluded.updated_at",
         params![
-            id, input.scope, input.target, input.target_label, input.discount_type,
-            input.value, input.days, input.is_active as i64, now
+            id, input.code, input.scope, input.target, input.target_label, input.discount_type,
+            input.value, input.days, input.is_active as i64, input.priority, now
         ],
     )?;
     conn.query_row("SELECT * FROM discount_periods WHERE id = ?1", params![id], map_discount)
@@ -832,6 +1457,152 @@ pub fn delete_transaction(conn: &mut Connection, id: &str) -> AppResult<()> {
     db_tx.execute("DELETE FROM transactions WHERE id = ?1", params![id])?;
     db_tx.commit()?;
     Ok(())
+}
+
+/// Edit penuh transaksi tersimpan: item/qty/harga/diskon/metode/pelanggan bisa
+/// diubah. Stok & totals dihitung ulang; id/invoice_no/cashier_id/shift_id/
+/// created_at dipertahankan dari transaksi lama.
+pub fn update_transaction(
+    conn: &mut Connection,
+    id: &str,
+    input: SaleInput,
+) -> AppResult<TransactionDetail> {
+    if input.items.is_empty() {
+        return Err(AppError::Other("transaksi tidak boleh kosong".into()));
+    }
+    let now = Utc::now().to_rfc3339();
+
+    let existing = conn
+        .query_row("SELECT * FROM transactions WHERE id = ?1", params![id], map_transaction)
+        .optional()?
+        .ok_or_else(|| AppError::Other("Transaksi tidak ditemukan.".into()))?;
+
+    let mut subtotal = 0.0;
+    let mut total_discount = 0.0;
+    let mut items: Vec<TransactionItem> = Vec::with_capacity(input.items.len());
+    for it in &input.items {
+        let line_gross = it.price * it.qty;
+        let line_total = (line_gross - it.discount).max(0.0);
+        subtotal += line_gross;
+        total_discount += it.discount;
+        items.push(TransactionItem {
+            product_id: it.product_id.clone(),
+            name: it.name.clone(),
+            price: it.price,
+            qty: it.qty,
+            discount: it.discount,
+            line_total,
+        });
+    }
+    let total = (subtotal - total_discount).max(0.0);
+    if input.paid < total {
+        return Err(AppError::Other("pembayaran kurang dari total".into()));
+    }
+    let change = input.paid - total;
+
+    let db_tx = conn.transaction()?;
+
+    // 1. Kembalikan stok item LAMA dulu supaya cek kecukupan stok di bawah
+    //    memakai angka yang benar (termasuk kalau item barunya sama persis).
+    let old_items: Vec<(String, f64)> = {
+        let mut stmt = db_tx
+            .prepare("SELECT product_id, qty FROM transaction_items WHERE transaction_id = ?1")?;
+        let rows = stmt
+            .query_map(params![id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
+    for (pid, qty) in &old_items {
+        db_tx.execute(
+            "INSERT INTO stock (product_id, qty, updated_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(product_id) DO UPDATE SET qty = qty + ?2, updated_at = ?3",
+            params![pid, qty, now],
+        )?;
+    }
+
+    // 2. Hapus stock_movements 'sale' lama milik invoice ini (dibuat ulang di
+    //    langkah 4) — mencegah riwayat hantu dari baris item yang sudah tak
+    //    relevan lagi setelah diedit.
+    db_tx.execute(
+        "DELETE FROM stock_movements WHERE kind = 'sale' AND note = ?1",
+        params![format!("Invoice {}", existing.invoice_no)],
+    )?;
+
+    // 3. Cek kecukupan stok untuk item BARU (setelah restore di atas).
+    for it in &input.items {
+        let current: f64 = db_tx
+            .query_row(
+                "SELECT COALESCE(qty,0) FROM stock WHERE product_id = ?1",
+                params![it.product_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0.0);
+        if current < it.qty {
+            return Err(AppError::Other(format!(
+                "Stok \"{}\" tidak cukup (tersedia {:.0}, dibutuhkan {:.0}).",
+                it.name, current, it.qty
+            )));
+        }
+    }
+
+    // 4. Ganti transaction_items, kurangi stok, catat stock_movements baru.
+    db_tx.execute("DELETE FROM transaction_items WHERE transaction_id = ?1", params![id])?;
+    for it in &items {
+        db_tx.execute(
+            "INSERT INTO transaction_items
+                (transaction_id, product_id, name, price, qty, discount, line_total)
+             VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            params![id, it.product_id, it.name, it.price, it.qty, it.discount, it.line_total],
+        )?;
+        db_tx.execute(
+            "INSERT INTO stock (product_id, qty, updated_at) VALUES (?1, -?2, ?3)
+             ON CONFLICT(product_id) DO UPDATE SET qty = qty - ?2, updated_at = ?3",
+            params![it.product_id, it.qty, now],
+        )?;
+        let after: f64 = db_tx.query_row(
+            "SELECT qty FROM stock WHERE product_id = ?1",
+            params![it.product_id],
+            |r| r.get(0),
+        )?;
+        db_tx.execute(
+            "INSERT INTO stock_movements
+                (product_id, kind, qty, stock_after, note, user_id, created_at)
+             VALUES (?1, 'sale', ?2, ?3, ?4, ?5, ?6)",
+            params![
+                it.product_id, it.qty, after,
+                format!("Invoice {}", existing.invoice_no), existing.cashier_id, now
+            ],
+        )?;
+    }
+
+    // 5. Update header transaksi (id/invoice_no/cashier_id/shift_id/created_at tetap).
+    db_tx.execute(
+        "UPDATE transactions SET subtotal=?2, discount=?3, total=?4, paid=?5, change=?6,
+            payment_method=?7, customer_id=?8 WHERE id=?1",
+        params![
+            id, subtotal, total_discount, total, input.paid, change,
+            input.payment_method, input.customer_id
+        ],
+    )?;
+    db_tx.commit()?;
+
+    Ok(TransactionDetail {
+        header: Transaction {
+            id: id.to_string(),
+            invoice_no: existing.invoice_no,
+            cashier_id: existing.cashier_id,
+            subtotal,
+            discount: total_discount,
+            total,
+            paid: input.paid,
+            change,
+            payment_method: input.payment_method,
+            created_at: existing.created_at,
+            customer_id: input.customer_id,
+            shift_id: existing.shift_id,
+        },
+        items,
+    })
 }
 
 /// Hapus satu pergerakan stok (Item Masuk/Keluar) sambil mengoreksi stok.
@@ -902,4 +1673,398 @@ pub fn save_brand(conn: &Connection, input: BrandInput) -> AppResult<Brand> {
 pub fn delete_brand(conn: &Connection, id: &str) -> AppResult<()> {
     conn.execute("DELETE FROM brands WHERE id = ?1", params![id])?;
     Ok(())
+}
+
+// ---------- Pelanggan ----------
+
+use crate::models::{Customer, CustomerInput};
+
+fn map_customer(r: &rusqlite::Row) -> rusqlite::Result<Customer> {
+    Ok(Customer {
+        id: r.get("id")?,
+        name: r.get("name")?,
+        phone: r.get("phone")?,
+        email: r.get("email")?,
+        address: r.get("address")?,
+        note: r.get("note")?,
+        is_active: r.get::<_, i64>("is_active")? != 0,
+        updated_at: r.get("updated_at")?,
+    })
+}
+
+pub fn list_customers(
+    conn: &Connection,
+    search: Option<String>,
+    include_inactive: bool,
+) -> AppResult<Vec<Customer>> {
+    let like = format!("%{}%", search.unwrap_or_default());
+    let active_clause = if include_inactive { "1=1" } else { "is_active = 1" };
+    let sql = format!(
+        "SELECT * FROM customers
+         WHERE {active_clause}
+           AND (name LIKE ?1 OR COALESCE(phone,'') LIKE ?1)
+         ORDER BY name ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params![like], map_customer)?.collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+pub fn upsert_customer(conn: &Connection, input: CustomerInput) -> AppResult<Customer> {
+    let name = input.name.trim().to_string();
+    if name.is_empty() {
+        return Err(AppError::Other("Nama pelanggan wajib diisi.".into()));
+    }
+    let now = Utc::now().to_rfc3339();
+    let id = input.id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+    conn.execute(
+        "INSERT INTO customers (id, name, phone, email, address, note, is_active, updated_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+         ON CONFLICT(id) DO UPDATE SET
+            name=excluded.name, phone=excluded.phone, email=excluded.email,
+            address=excluded.address, note=excluded.note, is_active=excluded.is_active,
+            updated_at=excluded.updated_at",
+        params![id, name, input.phone, input.email, input.address, input.note, input.is_active as i64, now],
+    )?;
+    conn.query_row("SELECT * FROM customers WHERE id = ?1", params![id], map_customer)
+        .map_err(AppError::from)
+}
+
+pub fn delete_customer(conn: &Connection, id: &str) -> AppResult<()> {
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE customers SET is_active = 0, updated_at = ?2 WHERE id = ?1",
+        params![id, now],
+    )?;
+    Ok(())
+}
+
+// ---------- Pengeluaran (Kas Keluar) ----------
+
+use crate::models::{Expense, ExpenseInput};
+
+fn map_expense(r: &rusqlite::Row) -> rusqlite::Result<Expense> {
+    Ok(Expense {
+        id: r.get("id")?,
+        date: r.get("date")?,
+        category: r.get("category")?,
+        amount: r.get("amount")?,
+        note: r.get("note")?,
+        user_id: r.get("user_id")?,
+        created_at: r.get("created_at")?,
+    })
+}
+
+pub fn list_expenses(conn: &Connection, from: Option<String>, to: Option<String>) -> AppResult<Vec<Expense>> {
+    let sql = "SELECT * FROM expenses
+               WHERE (?1 IS NULL OR date >= ?1) AND (?2 IS NULL OR date <= ?2)
+               ORDER BY date DESC, created_at DESC";
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map(params![from, to], map_expense)?.collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+pub fn save_expense(conn: &Connection, input: ExpenseInput) -> AppResult<Expense> {
+    if input.category.trim().is_empty() {
+        return Err(AppError::Other("Kategori pengeluaran wajib diisi.".into()));
+    }
+    if input.amount <= 0.0 {
+        return Err(AppError::Other("Nominal pengeluaran harus lebih dari 0.".into()));
+    }
+    let now = Utc::now().to_rfc3339();
+    let id = input.id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+    conn.execute(
+        "INSERT INTO expenses (id, date, category, amount, note, user_id, created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7)
+         ON CONFLICT(id) DO UPDATE SET
+            date=excluded.date, category=excluded.category, amount=excluded.amount,
+            note=excluded.note, user_id=excluded.user_id",
+        params![id, input.date, input.category.trim(), input.amount, input.note, input.user_id, now],
+    )?;
+    conn.query_row("SELECT * FROM expenses WHERE id = ?1", params![id], map_expense)
+        .map_err(AppError::from)
+}
+
+pub fn delete_expense(conn: &Connection, id: &str) -> AppResult<()> {
+    conn.execute("DELETE FROM expenses WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+// ---------- Shift kasir (buka/tutup, rekonsiliasi) ----------
+
+use crate::models::{CloseShiftInput, OpenShiftInput, Shift, ShiftSummary};
+
+fn map_shift(r: &rusqlite::Row) -> rusqlite::Result<Shift> {
+    Ok(Shift {
+        id: r.get("id")?,
+        user_id: r.get("user_id")?,
+        user_name: r.get("user_name")?,
+        opening_cash: r.get("opening_cash")?,
+        closing_cash: r.get("closing_cash")?,
+        expected_cash: r.get("expected_cash")?,
+        difference: r.get("difference")?,
+        note: r.get("note")?,
+        opened_at: r.get("opened_at")?,
+        closed_at: r.get("closed_at")?,
+    })
+}
+
+/// Shift yang sedang berjalan (belum ditutup), kalau ada.
+pub fn get_active_shift(conn: &Connection) -> AppResult<Option<Shift>> {
+    conn.query_row(
+        "SELECT * FROM shifts WHERE closed_at IS NULL ORDER BY opened_at DESC LIMIT 1",
+        [],
+        map_shift,
+    )
+    .optional()
+    .map_err(AppError::from)
+}
+
+pub fn open_shift(conn: &Connection, input: OpenShiftInput) -> AppResult<Shift> {
+    if get_active_shift(conn)?.is_some() {
+        return Err(AppError::Other("Sudah ada shift yang sedang berjalan.".into()));
+    }
+    let id = Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "INSERT INTO shifts (id, user_id, user_name, opening_cash, opened_at)
+         VALUES (?1,?2,?3,?4,?5)",
+        params![id, input.user_id, input.user_name, input.opening_cash, now],
+    )?;
+    conn.query_row("SELECT * FROM shifts WHERE id = ?1", params![id], map_shift)
+        .map_err(AppError::from)
+}
+
+/// Ringkasan penjualan selama shift (dipakai untuk hitung `expected_cash`).
+pub fn shift_summary(conn: &Connection, shift_id: &str) -> AppResult<ShiftSummary> {
+    conn.query_row(
+        "SELECT
+            COUNT(*),
+            COALESCE(SUM(total), 0),
+            COALESCE(SUM(CASE WHEN payment_method = 'Tunai' THEN total ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN payment_method != 'Tunai' THEN total ELSE 0 END), 0)
+         FROM transactions WHERE shift_id = ?1",
+        params![shift_id],
+        |r| {
+            Ok(ShiftSummary {
+                transaction_count: r.get(0)?,
+                total_sales: r.get(1)?,
+                cash_sales: r.get(2)?,
+                non_cash_sales: r.get(3)?,
+            })
+        },
+    )
+    .map_err(AppError::from)
+}
+
+pub fn close_shift(conn: &Connection, input: CloseShiftInput) -> AppResult<Shift> {
+    let shift = conn
+        .query_row("SELECT * FROM shifts WHERE id = ?1", params![input.id], map_shift)
+        .optional()?
+        .ok_or_else(|| AppError::Other("Shift tidak ditemukan.".into()))?;
+    if shift.closed_at.is_some() {
+        return Err(AppError::Other("Shift ini sudah ditutup.".into()));
+    }
+    let summary = shift_summary(conn, &input.id)?;
+    let expected_cash = shift.opening_cash + summary.cash_sales;
+    let difference = input.closing_cash - expected_cash;
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE shifts SET closing_cash = ?2, expected_cash = ?3, difference = ?4,
+            note = ?5, closed_at = ?6 WHERE id = ?1",
+        params![input.id, input.closing_cash, expected_cash, difference, input.note, now],
+    )?;
+    conn.query_row("SELECT * FROM shifts WHERE id = ?1", params![input.id], map_shift)
+        .map_err(AppError::from)
+}
+
+pub fn list_shifts(conn: &Connection, limit: i64) -> AppResult<Vec<Shift>> {
+    let mut stmt = conn.prepare("SELECT * FROM shifts ORDER BY opened_at DESC LIMIT ?1")?;
+    let rows = stmt.query_map(params![limit], map_shift)?.collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+// ---------- Laporan per barang / per merek ----------
+
+use crate::models::{BrandSalesRow, DailySalesRow, ProductSalesRow, SalesItemDetailRow};
+
+/// Rekap penjualan per barang dalam rentang tanggal, opsional difilter ke
+/// sekumpulan merek (kombinasi beberapa merek sekaligus).
+pub fn product_sales_report(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+    brands: &[String],
+) -> AppResult<Vec<ProductSalesRow>> {
+    let mut sql = String::from(
+        "SELECT ti.product_id, ti.name, p.brand,
+                SUM(ti.qty) AS qty,
+                SUM(ti.price * ti.qty) AS gross,
+                SUM(ti.discount) AS discount,
+                SUM(ti.line_total) AS net,
+                SUM(COALESCE(p.cost_price, 0) * ti.qty) AS cogs
+         FROM transaction_items ti
+         JOIN transactions t ON t.id = ti.transaction_id
+         LEFT JOIN products p ON p.id = ti.product_id
+         WHERE date(t.created_at) >= date(?1) AND date(t.created_at) <= date(?2)",
+    );
+    if !brands.is_empty() {
+        let placeholders = brands.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        sql.push_str(&format!(" AND p.brand IN ({placeholders})"));
+    }
+    sql.push_str(" GROUP BY ti.product_id, ti.name, p.brand ORDER BY net DESC");
+
+    let mut stmt = conn.prepare(&sql)?;
+    let mut param_values: Vec<&dyn rusqlite::ToSql> = vec![&from, &to];
+    for b in brands {
+        param_values.push(b);
+    }
+    let rows = stmt
+        .query_map(param_values.as_slice(), |r| {
+            Ok(ProductSalesRow {
+                product_id: r.get(0)?,
+                name: r.get(1)?,
+                brand: r.get(2)?,
+                qty: r.get(3)?,
+                gross: r.get(4)?,
+                discount: r.get(5)?,
+                net: r.get(6)?,
+                cogs: r.get(7)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Rekap penjualan per merek dalam rentang tanggal, opsional difilter ke
+/// sekumpulan merek.
+pub fn brand_sales_report(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+    brands: &[String],
+) -> AppResult<Vec<BrandSalesRow>> {
+    let mut sql = String::from(
+        "SELECT COALESCE(p.brand, '(Tanpa Merek)') AS brand,
+                SUM(ti.qty) AS qty,
+                SUM(ti.price * ti.qty) AS gross,
+                SUM(ti.discount) AS discount,
+                SUM(ti.line_total) AS net
+         FROM transaction_items ti
+         JOIN transactions t ON t.id = ti.transaction_id
+         LEFT JOIN products p ON p.id = ti.product_id
+         WHERE date(t.created_at) >= date(?1) AND date(t.created_at) <= date(?2)",
+    );
+    if !brands.is_empty() {
+        let placeholders = brands.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        sql.push_str(&format!(" AND p.brand IN ({placeholders})"));
+    }
+    sql.push_str(" GROUP BY brand ORDER BY net DESC");
+
+    let mut stmt = conn.prepare(&sql)?;
+    let mut param_values: Vec<&dyn rusqlite::ToSql> = vec![&from, &to];
+    for b in brands {
+        param_values.push(b);
+    }
+    let rows = stmt
+        .query_map(param_values.as_slice(), |r| {
+            Ok(BrandSalesRow {
+                brand: r.get(0)?,
+                qty: r.get(1)?,
+                gross: r.get(2)?,
+                discount: r.get(3)?,
+                net: r.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Laporan Item Detail: satu baris per item terjual dalam rentang tanggal,
+/// opsional difilter merek.
+pub fn sales_item_detail_report(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+    brands: &[String],
+) -> AppResult<Vec<SalesItemDetailRow>> {
+    let mut sql = String::from(
+        "SELECT t.invoice_no, t.created_at, t.cashier_id, ti.product_id, ti.name, p.brand,
+                ti.qty, ti.price, ti.discount, ti.line_total
+         FROM transaction_items ti
+         JOIN transactions t ON t.id = ti.transaction_id
+         LEFT JOIN products p ON p.id = ti.product_id
+         WHERE date(t.created_at) >= date(?1) AND date(t.created_at) <= date(?2)",
+    );
+    if !brands.is_empty() {
+        let placeholders = brands.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        sql.push_str(&format!(" AND p.brand IN ({placeholders})"));
+    }
+    sql.push_str(" ORDER BY t.created_at DESC, ti.id ASC");
+
+    let mut stmt = conn.prepare(&sql)?;
+    let mut param_values: Vec<&dyn rusqlite::ToSql> = vec![&from, &to];
+    for b in brands {
+        param_values.push(b);
+    }
+    let rows = stmt
+        .query_map(param_values.as_slice(), |r| {
+            Ok(SalesItemDetailRow {
+                invoice_no: r.get(0)?,
+                created_at: r.get(1)?,
+                cashier_id: r.get(2)?,
+                product_id: r.get(3)?,
+                name: r.get(4)?,
+                brand: r.get(5)?,
+                qty: r.get(6)?,
+                price: r.get(7)?,
+                discount: r.get(8)?,
+                net: r.get(9)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Laporan Item Per Hari: agregasi qty/nilai per tanggal, opsional difilter merek.
+pub fn daily_sales_report(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+    brands: &[String],
+) -> AppResult<Vec<DailySalesRow>> {
+    let mut sql = String::from(
+        "SELECT date(t.created_at) AS day,
+                SUM(ti.qty) AS qty,
+                SUM(ti.price * ti.qty) AS gross,
+                SUM(ti.discount) AS discount,
+                SUM(ti.line_total) AS net
+         FROM transaction_items ti
+         JOIN transactions t ON t.id = ti.transaction_id
+         LEFT JOIN products p ON p.id = ti.product_id
+         WHERE date(t.created_at) >= date(?1) AND date(t.created_at) <= date(?2)",
+    );
+    if !brands.is_empty() {
+        let placeholders = brands.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        sql.push_str(&format!(" AND p.brand IN ({placeholders})"));
+    }
+    sql.push_str(" GROUP BY day ORDER BY day ASC");
+
+    let mut stmt = conn.prepare(&sql)?;
+    let mut param_values: Vec<&dyn rusqlite::ToSql> = vec![&from, &to];
+    for b in brands {
+        param_values.push(b);
+    }
+    let rows = stmt
+        .query_map(param_values.as_slice(), |r| {
+            Ok(DailySalesRow {
+                day: r.get(0)?,
+                qty: r.get(1)?,
+                gross: r.get(2)?,
+                discount: r.get(3)?,
+                net: r.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
 }
