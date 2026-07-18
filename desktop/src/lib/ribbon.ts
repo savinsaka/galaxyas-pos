@@ -67,7 +67,6 @@ export const RIBBON: RibbonCategory[] = [
         label: "Kasir",
         actions: [
           { key: "daftar-kasir", label: "Daftar Kasir", icon: "🧾", viewKey: "daftar-kasir", title: "Daftar Kasir", singleton: true },
-          { key: "tambah-kasir", label: "Tambah Kasir", icon: "🛒", viewKey: "kasir-pos", title: "Kasir", singleton: false },
         ],
       },
       {
@@ -98,8 +97,6 @@ export const RIBBON: RibbonCategory[] = [
       {
         label: "Pergerakan",
         actions: [
-          { key: "item-masuk", label: "Item Masuk", icon: "⬇️", viewKey: "item-masuk", title: "Tambah Item Masuk", singleton: true },
-          { key: "item-keluar", label: "Item Keluar", icon: "⬆️", viewKey: "item-keluar", title: "Tambah Item Keluar", singleton: true },
           { key: "daftar-item-masuk", label: "Daftar Item Masuk", icon: "📥", viewKey: "daftar-item-masuk", title: "Daftar Item Masuk", singleton: true },
           { key: "daftar-item-keluar", label: "Daftar Item Keluar", icon: "📤", viewKey: "daftar-item-keluar", title: "Daftar Item Keluar", singleton: true },
         ],

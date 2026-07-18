@@ -12,7 +12,7 @@ use crate::models::{
     BrandSalesRow, CloseShiftInput, Customer, CustomerInput, DiscountPeriod, DiscountPeriodInput,
     Expense, ExpenseInput, OpenShiftInput, Product, ProductInput, ProductSalesRow,
     ProductWithStock, SaleInput, Shift, StockMovement, StockMovementInput, StoreInfo, SyncResult,
-    Transaction, TransactionDetail, User, UserInput,
+    TransactionDetail, User, UserInput,
 };
 use crate::stores;
 use crate::sync;
@@ -245,14 +245,15 @@ pub async fn list_transactions(
     from: Option<String>,
     to: Option<String>,
     limit: Option<i64>,
-) -> AppResult<Vec<Transaction>> {
+    offset: Option<i64>,
+) -> AppResult<crate::models::TransactionPage> {
     if let Some(remote) = state.remote_config() {
         return crate::lan::call(&remote, "list_transactions", serde_json::json!({
-            "from": from, "to": to, "limit": limit
+            "from": from, "to": to, "limit": limit, "offset": offset
         })).await;
     }
     let conn = state.lock()?;
-    db::list_transactions(&conn, from, to, limit.unwrap_or(100))
+    db::list_transactions(&conn, from, to, limit.unwrap_or(100), offset.unwrap_or(0))
 }
 
 #[tauri::command]
@@ -392,14 +393,15 @@ pub async fn list_stock_movement_batches(
     from: Option<String>,
     to: Option<String>,
     limit: Option<i64>,
-) -> AppResult<Vec<crate::models::StockMovementBatch>> {
+    offset: Option<i64>,
+) -> AppResult<crate::models::StockMovementBatchPage> {
     if let Some(remote) = state.remote_config() {
         return crate::lan::call(&remote, "list_stock_movement_batches", serde_json::json!({
-            "kind": kind, "from": from, "to": to, "limit": limit
+            "kind": kind, "from": from, "to": to, "limit": limit, "offset": offset
         })).await;
     }
     let conn = state.lock()?;
-    db::list_stock_movement_batches(&conn, kind, from, to, limit.unwrap_or(500))
+    db::list_stock_movement_batches(&conn, kind, from, to, limit.unwrap_or(500), offset.unwrap_or(0))
 }
 
 #[tauri::command]

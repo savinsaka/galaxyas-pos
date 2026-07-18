@@ -82,6 +82,13 @@ pub struct Transaction {
     pub shift_id: Option<String>,
 }
 
+/// Halaman hasil list_transactions dengan total untuk pagination.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransactionPage {
+    pub items: Vec<Transaction>,
+    pub total: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransactionItem {
     pub product_id: String,
@@ -225,6 +232,13 @@ pub struct StockMovementBatch {
     pub created_at: String,
     pub item_count: i64,
     pub total_qty: f64,
+}
+
+/// Halaman hasil list_stock_movement_batches dengan total untuk pagination.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StockMovementBatchPage {
+    pub items: Vec<StockMovementBatch>,
+    pub total: i64,
 }
 
 /// Detail batch lengkap dengan seluruh barangnya, untuk lihat/edit.

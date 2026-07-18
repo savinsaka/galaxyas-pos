@@ -20,6 +20,8 @@ use commands::{AppState, PrintPayloadState};
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             // Database lokal disimpan di app data dir (per instalasi). Bisa berisi
             // sampai 3 toko terpisah (lihat `stores.rs`); toko aktif ditentukan

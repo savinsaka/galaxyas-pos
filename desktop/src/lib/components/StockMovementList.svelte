@@ -13,20 +13,36 @@
   let { kind, title }: { kind: StockKind; title: string } = $props();
 
   const verb = kind === "in" ? "Masuk" : "Keluar";
+  const PAGE_SIZE = 50;
 
   let batches = $state<StockMovementBatch[]>([]);
+  let total = $state(0);
+  let page = $state(0);
   let selectedId = $state<string | null>(null);
   let from = $state("");
   let to = $state("");
 
   const selected = $derived(batches.find((b) => b.id === selectedId) ?? null);
+  const totalPages = $derived(Math.max(1, Math.ceil(total / PAGE_SIZE)));
 
   async function load() {
     try {
-      batches = await api.listStockMovementBatches(kind as "in" | "out", from, to, 500);
+      const res = await api.listStockMovementBatches(kind as "in" | "out", from, to, PAGE_SIZE, page * PAGE_SIZE);
+      batches = res.items;
+      total = res.total;
     } catch (e) {
       toastError(e);
     }
+  }
+  function reload() {
+    page = 0;
+    load();
+  }
+  function goPage(delta: number) {
+    const next = page + delta;
+    if (next < 0 || next >= totalPages) return;
+    page = next;
+    load();
   }
   onMount(() => {
     [from, to] = currentMonthBounds();
@@ -40,9 +56,17 @@
       firstDirtyCheck = false;
       return;
     }
-    load();
+    reload();
   });
 
+  function tambah() {
+    openTab({
+      viewKey: kind === "in" ? "item-masuk" : "item-keluar",
+      title: `Tambah Item ${verb}`,
+      icon: kind === "in" ? "⬇️" : "⬆️",
+      singleton: true,
+    });
+  }
   function edit() {
     if (!selected) return showToast("Pilih baris dulu.", "info");
     openTab({
@@ -70,11 +94,11 @@
 <div class="page-head"><h1>{title}</h1></div>
 
 <div class="card" style="margin-bottom:0.8rem;">
-  <MonthPager bind:from bind:to onchange={load} />
+  <MonthPager bind:from bind:to onchange={reload} />
 </div>
 
 <div class="card" style="padding:0; overflow:hidden;">
-  <div style="max-height:calc(100vh - 360px); overflow:auto;">
+  <div style="max-height:calc(100vh - 400px); overflow:auto;">
     <table>
       <thead>
         <tr>
@@ -98,11 +122,28 @@
       </tbody>
     </table>
   </div>
+  <div class="pager">
+    <span class="text-dim" style="font-size:0.82rem;">
+      {total.toLocaleString("id-ID")} transaksi · Hal {page + 1} / {totalPages}
+    </span>
+    <div class="row" style="gap:0.3rem;">
+      <button disabled={page === 0} onclick={() => goPage(-1)}>‹ Sebelumnya</button>
+      <button disabled={page + 1 >= totalPages} onclick={() => goPage(1)}>Berikutnya ›</button>
+    </div>
+  </div>
 </div>
 
 <div class="bottom-bar">
+  <button class="btn-primary" onclick={tambah}>➕ Tambah</button>
   {#if $currentUser?.role === "admin"}
     <button onclick={edit} disabled={!selected}>✏️ Edit</button>
   {/if}
   <button class="btn-danger" onclick={hapus} disabled={!selected}>🗑️ Hapus</button>
 </div>
+
+<style>
+  .pager {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.5rem 0.9rem; border-top: 1px solid var(--border);
+  }
+</style>

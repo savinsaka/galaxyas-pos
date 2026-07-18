@@ -1,17 +1,32 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from "svelte";
+  import * as XLSX from "xlsx";
+  import { openPath } from "@tauri-apps/plugin-opener";
   import { api } from "$lib/api";
   import { formatQty, formatTime } from "$lib/format";
   import { showToast, toastError } from "$lib/toast";
   import { currentUser } from "$lib/stores/auth";
   import { createLiveClock } from "$lib/liveClock.svelte";
   import { todayIso, combineDateAndTime } from "$lib/dateTime";
-  import type { ProductWithStock, StockKind } from "$lib/types";
+  import type { ProductWithStock, StockKind, StockMovementBatchDetail } from "$lib/types";
   import ProductSearchPopup from "$lib/components/ProductSearchPopup.svelte";
+  import StockDocPrint from "$lib/components/StockDocPrint.svelte";
 
   let { kind, title }: { kind: StockKind; title: string } = $props();
 
   const verb = kind === "in" ? "Masuk" : "Keluar";
+
+  const IMPORT_HEADERS = ["kode_barcode", "nama", "qty", "keterangan"];
+  const IMPORT_EXAMPLE = [
+    ["8992388101010", "Indomie Goreng", 10, "opsional"],
+    ["8993675001020", "Aqua 600ml", 5, ""],
+  ];
+
+  interface ImportLogEntry {
+    row: number;
+    name: string;
+    reason: string;
+  }
 
   const clock = createLiveClock();
   onDestroy(() => clock.stop());
@@ -33,6 +48,11 @@
   let rows = $state<BatchRow[]>([newRow()]);
   let busy = $state(false);
   let popupRow = $state<BatchRow | null>(null);
+  let importing = $state(false);
+  let importProgress = $state({ done: 0, total: 0 });
+  let importLog = $state<ImportLogEntry[]>([]);
+  let lastSaved = $state<StockMovementBatchDetail | null>(null);
+  let showPrint = $state(false);
 
   function newRow(): BatchRow {
     return { id: nextId++, search: "", product: null, qty: 1, keterangan: "", dropOpen: false };
@@ -81,6 +101,7 @@
   }
 
   function selectProduct(row: BatchRow, p: ProductWithStock) {
+    lastSaved = null;
     row.product = p;
     row.search = p.name;
     row.dropOpen = false;
@@ -129,6 +150,7 @@
         })),
       });
       showToast(`${batch.no}: ${valid.length} item ${verb.toLowerCase()} tersimpan.`, "success");
+      lastSaved = batch;
       rows = [newRow()];
       catatan = "";
       tanggal = todayIso();
@@ -138,6 +160,105 @@
     } finally {
       busy = false;
     }
+  }
+
+  async function openImportTemplate() {
+    try {
+      const ws = XLSX.utils.aoa_to_sheet([IMPORT_HEADERS, ...IMPORT_EXAMPLE]);
+      (ws as Record<string, unknown>)["!protect"] = {
+        selectLockedCells: true,
+        selectUnlockedCells: true,
+      };
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Template");
+      const out = XLSX.write(wb, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
+      const bytes = Array.from(new Uint8Array(out));
+      const path = await api.writeTempFile(`Template-Item-${verb}.xlsx`, bytes);
+      await openPath(path);
+      showToast("Template dibuka di Excel (read-only). Pilih Save As untuk mengisi & menyimpan.", "info", 7000);
+    } catch (e) {
+      toastError(e);
+    }
+  }
+
+  async function onImportFile(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    let parsed: Record<string, unknown>[] = [];
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      parsed = XLSX.utils.sheet_to_json(ws, { defval: "" });
+    } catch (err) {
+      toastError(err);
+      input.value = "";
+      return;
+    }
+    input.value = "";
+    if (!parsed.length) return showToast("File kosong.", "info");
+
+    importing = true;
+    importLog = [];
+    importProgress = { done: 0, total: parsed.length };
+
+    const items: { product_id: string; qty: number; note: string | null }[] = [];
+    let okCount = 0;
+
+    for (let i = 0; i < parsed.length; i++) {
+      const r = parsed[i];
+      importProgress = { done: i, total: parsed.length };
+      const kode = String(r.kode_barcode ?? r.kode ?? r.barcode ?? "").trim();
+      const qty = Number(r.qty) || 0;
+      const ket = String(r.keterangan ?? "").trim();
+
+      if (!kode) {
+        importLog.push({ row: i + 2, name: "(kosong)", reason: "Kode/barcode kosong" });
+        continue;
+      }
+      if (qty <= 0) {
+        importLog.push({ row: i + 2, name: kode, reason: "Qty tidak valid" });
+        continue;
+      }
+      try {
+        const p = await api.findByBarcode(kode);
+        if (!p) {
+          importLog.push({ row: i + 2, name: kode, reason: "Barang tidak ditemukan" });
+          continue;
+        }
+        items.push({ product_id: p.id, qty, note: ket || null });
+        okCount++;
+      } catch (err) {
+        importLog.push({ row: i + 2, name: kode, reason: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    importProgress = { done: parsed.length, total: parsed.length };
+
+    if (items.length) {
+      try {
+        const batch = await api.createStockMovementBatch({
+          kind: kind as "in" | "out",
+          note: catatan || null,
+          user_id: $currentUser?.username ?? null,
+          created_at: combineDateAndTime(tanggal, clock.now),
+          items,
+        });
+        showToast(
+          `${batch.no}: ${okCount} item ${verb.toLowerCase()} tersimpan${importLog.length ? `, ${importLog.length} baris gagal` : ""}.`,
+          importLog.length ? "error" : "success",
+          6000,
+        );
+        lastSaved = batch;
+        await loadProducts();
+      } catch (err) {
+        toastError(err);
+      }
+    } else {
+      showToast("Tidak ada baris valid untuk diimport.", "error");
+    }
+    importing = false;
   }
 </script>
 
@@ -165,6 +286,45 @@
     <label>Keterangan Umum</label>
     <input bind:value={catatan} placeholder="opsional" />
   </div>
+</div>
+
+<!-- Import Excel -->
+<div class="card" style="margin-bottom:0.8rem;">
+  <div class="row" style="align-items:center; gap:0.6rem; flex-wrap:wrap;">
+    <button onclick={openImportTemplate}>📄 Unduh Template Excel</button>
+    <label class="text-dim" style="font-size:0.82rem;">📁 Import Excel:</label>
+    <input type="file" accept=".xlsx,.xls,.csv" onchange={onImportFile} disabled={importing} />
+  </div>
+  {#if importing || importLog.length}
+    <div style="margin-top:0.6rem;">
+      {#if importing}
+        <div class="import-progress-bar">
+          <div
+            class="import-progress-fill"
+            style="width:{importProgress.total ? (importProgress.done / importProgress.total) * 100 : 0}%"
+          ></div>
+        </div>
+        <p class="text-dim" style="font-size:0.8rem; margin-top:0.3rem;">
+          {importProgress.done} / {importProgress.total} baris diproses…
+        </p>
+      {/if}
+      {#if importLog.length}
+        <div class="import-log-head">
+          <span>📋 Log Import</span>
+          <span class="log-err-badge">{importLog.length} bermasalah</span>
+        </div>
+        <div class="import-log">
+          {#each importLog as l}
+            <div class="log-row log-error">
+              <span class="mono">#{l.row}</span>
+              <span>{l.name}</span>
+              <span class="text-dim">{l.reason}</span>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  {/if}
 </div>
 
 <!-- Tabel batch -->
@@ -240,8 +400,15 @@
   <button class="btn-primary" disabled={busy} onclick={simpan}>
     💾 Simpan Semua Item {verb}
   </button>
+  <button disabled={!lastSaved} onclick={() => (showPrint = true)} title={lastSaved ? "" : "Simpan dulu sebelum mencetak"}>
+    🖨️ Cetak
+  </button>
   <span class="text-dim" style="margin-left:auto; font-size:0.82rem;">Riwayat &amp; edit ada di menu "Daftar Item {verb}".</span>
 </div>
+
+{#if showPrint && lastSaved}
+  <StockDocPrint detail={lastSaved} onClose={() => (showPrint = false)} />
+{/if}
 
 {#if popupRow}
   {@const targetRow = popupRow}
@@ -294,4 +461,49 @@
     border-color: transparent; background: transparent;
   }
   .del-btn:disabled { opacity: 0.2; }
+
+  .import-progress-bar {
+    height: 8px;
+    border-radius: 999px;
+    background: var(--baby-blue-bg);
+    overflow: hidden;
+  }
+  .import-progress-fill {
+    height: 100%;
+    background: var(--primary);
+    transition: width 0.15s linear;
+  }
+  .import-log-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 650;
+    font-size: 0.85rem;
+    margin-top: 0.8rem;
+    margin-bottom: 0.3rem;
+  }
+  .log-err-badge {
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 0.1rem 0.4rem;
+    border-radius: 999px;
+    background: var(--danger);
+    color: #fff;
+  }
+  .import-log {
+    max-height: 200px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .log-row {
+    display: grid;
+    grid-template-columns: 3.5rem 1fr 2fr;
+    gap: 0.5rem;
+    padding: 0.3rem 0.6rem;
+    font-size: 0.8rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .log-row:last-child { border-bottom: none; }
+  .log-error { background: color-mix(in srgb, var(--danger) 10%, transparent); }
 </style>

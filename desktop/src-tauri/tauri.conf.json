@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "GALAXYAS POS",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "identifier": "com.galaxyas.pos",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -34,6 +34,17 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI1OEYyNzEwN0U5RkZGOUIKUldTYi81OStFQ2VQSlRvZ0NBaSs4WXBBRGg1R0JoUjNCdWhnL2I0M1R0eVVqdSt5ajVtQm56R2gK",
+      "endpoints": [
+        "https://github.com/savinsaka/galaxyas-pos-releases/releases/latest/download/latest.json"
+      ],
+      "dialog": false
+    }
   }
 }

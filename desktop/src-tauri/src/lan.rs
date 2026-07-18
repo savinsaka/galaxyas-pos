@@ -345,9 +345,16 @@ fn dispatch(
                 from: Option<String>,
                 to: Option<String>,
                 limit: Option<i64>,
+                offset: Option<i64>,
             }
             let a: A = args_of(args)?;
-            ok_value(db::list_transactions(conn, a.from, a.to, a.limit.unwrap_or(100))?)
+            ok_value(db::list_transactions(
+                conn,
+                a.from,
+                a.to,
+                a.limit.unwrap_or(100),
+                a.offset.unwrap_or(0),
+            )?)
         }
         "get_transaction" => {
             #[derive(serde::Deserialize)]
@@ -442,9 +449,17 @@ fn dispatch(
                 from: Option<String>,
                 to: Option<String>,
                 limit: Option<i64>,
+                offset: Option<i64>,
             }
             let a: A = args_of(args)?;
-            ok_value(db::list_stock_movement_batches(conn, a.kind, a.from, a.to, a.limit.unwrap_or(500))?)
+            ok_value(db::list_stock_movement_batches(
+                conn,
+                a.kind,
+                a.from,
+                a.to,
+                a.limit.unwrap_or(500),
+                a.offset.unwrap_or(0),
+            )?)
         }
         "get_stock_movement_batch" => {
             #[derive(serde::Deserialize)]

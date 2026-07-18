@@ -83,6 +83,11 @@ export interface TransactionDetail extends Transaction {
   items: TransactionItem[];
 }
 
+export interface TransactionPage {
+  items: Transaction[];
+  total: number;
+}
+
 export interface SyncResult {
   pushed: number;
   pulled: number;
@@ -220,6 +225,11 @@ export interface StockMovementBatchDetail {
   user_id: string | null;
   created_at: string;
   items: StockMovementBatchItem[];
+}
+
+export interface StockMovementBatchPage {
+  items: StockMovementBatch[];
+  total: number;
 }
 
 export interface DiscountPeriod {

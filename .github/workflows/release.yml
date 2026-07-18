@@ -1,0 +1,48 @@
+name: Release desktop app
+
+# Build GALAXYAS POS (folder desktop/) di repo private ini, lalu publish
+# installer-nya ke repo TERPISAH yang public (savinsaka/galaxyas-pos-releases)
+# — repo ini sendiri tetap private, source code tidak ikut terekspos. Tauri
+# updater di aplikasi membaca latest.json dari repo public itu untuk cek
+# update otomatis.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          # Token dengan akses tulis ke repo publik galaxyas-pos-releases
+          # (bukan GITHUB_TOKEN bawaan, karena itu hanya berlaku untuk repo
+          # ini sendiri, tidak bisa dipakai membuat release di repo lain).
+          GITHUB_TOKEN: ${{ secrets.RELEASE_REPO_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: desktop
+          owner: savinsaka
+          repo: galaxyas-pos-releases
+          tagName: ${{ github.ref_name }}
+          releaseName: "GALAXYAS POS ${{ github.ref_name }}"
+          releaseBody: "Lihat commit log di repo utama untuk detail perubahan."
+          releaseDraft: true
+          prerelease: false

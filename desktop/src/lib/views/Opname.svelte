@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import * as XLSX from "xlsx";
+  import { openPath } from "@tauri-apps/plugin-opener";
   import { api } from "$lib/api";
   import { formatQty, formatDateTime, formatTime } from "$lib/format";
   import { showToast, toastError } from "$lib/toast";
@@ -13,6 +15,22 @@
 
   const clock = createLiveClock();
   onDestroy(() => clock.stop());
+
+  const IMPORT_HEADERS = ["kode_barcode", "nama", "fisik", "keterangan"];
+  const IMPORT_EXAMPLE = [
+    ["8992388101010", "Indomie Goreng", 48, "opsional"],
+    ["8993675001020", "Aqua 600ml", 20, ""],
+  ];
+
+  interface ImportLogEntry {
+    row: number;
+    name: string;
+    reason: string;
+  }
+
+  let importing = $state(false);
+  let importProgress = $state({ done: 0, total: 0 });
+  let importLog = $state<ImportLogEntry[]>([]);
 
   let products = $state<ProductWithStock[]>([]);
   let history = $state<StockMovement[]>([]);
@@ -95,6 +113,94 @@
       await load();
     } catch (e) { toastError(e); } finally { busy = false; }
   }
+
+  async function openImportTemplate() {
+    try {
+      const ws = XLSX.utils.aoa_to_sheet([IMPORT_HEADERS, ...IMPORT_EXAMPLE]);
+      (ws as Record<string, unknown>)["!protect"] = {
+        selectLockedCells: true,
+        selectUnlockedCells: true,
+      };
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Template");
+      const out = XLSX.write(wb, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
+      const bytes = Array.from(new Uint8Array(out));
+      const path = await api.writeTempFile("Template-Stok-Opname.xlsx", bytes);
+      await openPath(path);
+      showToast("Template dibuka di Excel (read-only). Pilih Save As untuk mengisi & menyimpan.", "info", 7000);
+    } catch (e) {
+      toastError(e);
+    }
+  }
+
+  async function onImportFile(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    let parsed: Record<string, unknown>[] = [];
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      parsed = XLSX.utils.sheet_to_json(ws, { defval: "" });
+    } catch (err) {
+      toastError(err);
+      input.value = "";
+      return;
+    }
+    input.value = "";
+    if (!parsed.length) return showToast("File kosong.", "info");
+
+    importing = true;
+    importLog = [];
+    importProgress = { done: 0, total: parsed.length };
+
+    let okCount = 0;
+    for (let i = 0; i < parsed.length; i++) {
+      const r = parsed[i];
+      importProgress = { done: i, total: parsed.length };
+      const kode = String(r.kode_barcode ?? r.kode ?? r.barcode ?? "").trim();
+      const fisikVal = Number(r.fisik);
+      const ket = String(r.keterangan ?? "").trim();
+
+      if (!kode) {
+        importLog.push({ row: i + 2, name: "(kosong)", reason: "Kode/barcode kosong" });
+        continue;
+      }
+      if (!Number.isFinite(fisikVal) || fisikVal < 0) {
+        importLog.push({ row: i + 2, name: kode, reason: "Fisik tidak valid" });
+        continue;
+      }
+      try {
+        const p = await api.findByBarcode(kode);
+        if (!p) {
+          importLog.push({ row: i + 2, name: kode, reason: "Barang tidak ditemukan" });
+          continue;
+        }
+        await api.createStockMovement({
+          product_id: p.id,
+          kind: "opname",
+          qty: fisikVal,
+          note: ket || "Stok opname (import)",
+          user_id: $currentUser?.username ?? null,
+          created_at: combineDateAndTime(tanggal, clock.now),
+        });
+        okCount++;
+      } catch (err) {
+        importLog.push({ row: i + 2, name: kode, reason: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    importProgress = { done: parsed.length, total: parsed.length };
+    importing = false;
+    showToast(
+      `Import opname selesai: ${okCount} baris tersimpan${importLog.length ? `, ${importLog.length} baris gagal` : ""}.`,
+      importLog.length ? "error" : "success",
+      6000,
+    );
+    tanggal = todayIso();
+    await load();
+  }
 </script>
 
 <div class="page-head"><h1>Stok Opname</h1></div>
@@ -117,6 +223,45 @@
         <label>Jam</label>
         <span class="info-val mono">{formatTime(clock.now)}</span>
       </div>
+    </div>
+
+    <!-- Import Excel -->
+    <div class="import-block">
+      <div class="row" style="align-items:center; gap:0.6rem; flex-wrap:wrap;">
+        <button onclick={openImportTemplate}>📄 Unduh Template Excel</button>
+        <label class="text-dim" style="font-size:0.82rem;">📁 Import Excel Opname:</label>
+        <input type="file" accept=".xlsx,.xls,.csv" onchange={onImportFile} disabled={importing} />
+      </div>
+      {#if importing || importLog.length}
+        <div style="margin-top:0.6rem;">
+          {#if importing}
+            <div class="import-progress-bar">
+              <div
+                class="import-progress-fill"
+                style="width:{importProgress.total ? (importProgress.done / importProgress.total) * 100 : 0}%"
+              ></div>
+            </div>
+            <p class="text-dim" style="font-size:0.8rem; margin-top:0.3rem;">
+              {importProgress.done} / {importProgress.total} baris diproses…
+            </p>
+          {/if}
+          {#if importLog.length}
+            <div class="import-log-head">
+              <span>📋 Log Import</span>
+              <span class="log-err-badge">{importLog.length} bermasalah</span>
+            </div>
+            <div class="import-log">
+              {#each importLog as l}
+                <div class="log-row log-error">
+                  <span class="mono">#{l.row}</span>
+                  <span>{l.name}</span>
+                  <span class="text-dim">{l.reason}</span>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/if}
     </div>
 
     <!-- Scan / cari item -->
@@ -258,4 +403,54 @@
   .fisik-row label { display: block; font-weight: 600; margin-bottom: 0.3rem; }
   .fisik-input { width: 100%; font-size: 1.1rem; font-weight: 700; text-align: right; }
   .fw-bold { font-weight: 700; }
+
+  .import-block {
+    border: 1px dashed var(--border-strong); border-radius: 8px;
+    padding: 0.6rem 0.7rem; margin-bottom: 0.6rem; background: var(--baby-blue-bg);
+  }
+  .import-progress-bar {
+    height: 8px;
+    border-radius: 999px;
+    background: var(--white);
+    overflow: hidden;
+  }
+  .import-progress-fill {
+    height: 100%;
+    background: var(--primary);
+    transition: width 0.15s linear;
+  }
+  .import-log-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 650;
+    font-size: 0.85rem;
+    margin-top: 0.8rem;
+    margin-bottom: 0.3rem;
+  }
+  .log-err-badge {
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 0.1rem 0.4rem;
+    border-radius: 999px;
+    background: var(--danger);
+    color: #fff;
+  }
+  .import-log {
+    max-height: 200px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--white);
+  }
+  .log-row {
+    display: grid;
+    grid-template-columns: 3.5rem 1fr 2fr;
+    gap: 0.5rem;
+    padding: 0.3rem 0.6rem;
+    font-size: 0.8rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .log-row:last-child { border-bottom: none; }
+  .log-error { background: color-mix(in srgb, var(--danger) 10%, transparent); }
 </style>

@@ -768,36 +768,53 @@ fn map_transaction(r: &rusqlite::Row) -> rusqlite::Result<Transaction> {
     })
 }
 
-pub fn list_transactions(
-    conn: &Connection,
-    from: Option<String>,
-    to: Option<String>,
-    limit: i64,
-) -> AppResult<Vec<Transaction>> {
-    let mut sql = String::from("SELECT * FROM transactions WHERE 1=1");
+fn transaction_where(from: &Option<String>, to: &Option<String>) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
+    let mut sql = String::from(" WHERE 1=1");
     let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-    if let Some(f) = &from {
+    if let Some(f) = from {
         sql.push_str(" AND date(created_at) >= date(?");
         sql.push_str(&(args.len() + 1).to_string());
         sql.push(')');
         args.push(Box::new(f.clone()));
     }
-    if let Some(t) = &to {
+    if let Some(t) = to {
         sql.push_str(" AND date(created_at) <= date(?");
         sql.push_str(&(args.len() + 1).to_string());
         sql.push(')');
         args.push(Box::new(t.clone()));
     }
-    sql.push_str(" ORDER BY created_at DESC LIMIT ?");
-    sql.push_str(&(args.len() + 1).to_string());
+    (sql, args)
+}
+
+pub fn list_transactions(
+    conn: &Connection,
+    from: Option<String>,
+    to: Option<String>,
+    limit: i64,
+    offset: i64,
+) -> AppResult<crate::models::TransactionPage> {
+    let (count_where, count_args) = transaction_where(&from, &to);
+    let total: i64 = {
+        let count_sql = format!("SELECT COUNT(*) FROM transactions{count_where}");
+        let params_ref: Vec<&dyn rusqlite::ToSql> = count_args.iter().map(|b| b.as_ref()).collect();
+        conn.query_row(&count_sql, params_ref.as_slice(), |r| r.get(0))?
+    };
+
+    let (where_sql, mut args) = transaction_where(&from, &to);
+    let sql = format!(
+        "SELECT * FROM transactions{where_sql} ORDER BY created_at DESC LIMIT ?{} OFFSET ?{}",
+        args.len() + 1,
+        args.len() + 2,
+    );
     args.push(Box::new(limit));
+    args.push(Box::new(offset));
 
     let mut stmt = conn.prepare(&sql)?;
     let params_ref: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
-    let rows = stmt
+    let items = stmt
         .query_map(params_ref.as_slice(), map_transaction)?
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows)
+    Ok(crate::models::TransactionPage { items, total })
 }
 
 pub fn get_transaction(conn: &Connection, id: &str) -> AppResult<Option<TransactionDetail>> {
@@ -1092,45 +1109,64 @@ pub fn create_stock_movement_batch(
     })
 }
 
+fn stock_movement_batch_where(
+    kind: &Option<String>,
+    from: &Option<String>,
+    to: &Option<String>,
+) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
+    let mut sql = String::from(" WHERE 1=1");
+    let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    if let Some(k) = kind {
+        sql.push_str(" AND b.kind = ?");
+        sql.push_str(&(args.len() + 1).to_string());
+        args.push(Box::new(k.clone()));
+    }
+    if let Some(f) = from {
+        sql.push_str(" AND date(b.created_at) >= date(?");
+        sql.push_str(&(args.len() + 1).to_string());
+        sql.push(')');
+        args.push(Box::new(f.clone()));
+    }
+    if let Some(t) = to {
+        sql.push_str(" AND date(b.created_at) <= date(?");
+        sql.push_str(&(args.len() + 1).to_string());
+        sql.push(')');
+        args.push(Box::new(t.clone()));
+    }
+    (sql, args)
+}
+
 pub fn list_stock_movement_batches(
     conn: &Connection,
     kind: Option<String>,
     from: Option<String>,
     to: Option<String>,
     limit: i64,
-) -> AppResult<Vec<crate::models::StockMovementBatch>> {
-    let mut sql = String::from(
+    offset: i64,
+) -> AppResult<crate::models::StockMovementBatchPage> {
+    let (count_where, count_args) = stock_movement_batch_where(&kind, &from, &to);
+    let total: i64 = {
+        let count_sql = format!("SELECT COUNT(*) FROM stock_movement_batches b{count_where}");
+        let params_ref: Vec<&dyn rusqlite::ToSql> = count_args.iter().map(|b| b.as_ref()).collect();
+        conn.query_row(&count_sql, params_ref.as_slice(), |r| r.get(0))?
+    };
+
+    let (where_sql, mut args) = stock_movement_batch_where(&kind, &from, &to);
+    let sql = format!(
         "SELECT b.id, b.no, b.kind, b.note, b.user_id, b.created_at,
                 COUNT(m.id) AS item_count, COALESCE(SUM(m.qty), 0) AS total_qty
          FROM stock_movement_batches b
-         LEFT JOIN stock_movements m ON m.batch_id = b.id
-         WHERE 1=1",
+         LEFT JOIN stock_movements m ON m.batch_id = b.id{where_sql}
+         GROUP BY b.id ORDER BY b.created_at DESC LIMIT ?{} OFFSET ?{}",
+        args.len() + 1,
+        args.len() + 2,
     );
-    let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-    if let Some(k) = &kind {
-        sql.push_str(" AND b.kind = ?");
-        sql.push_str(&(args.len() + 1).to_string());
-        args.push(Box::new(k.clone()));
-    }
-    if let Some(f) = &from {
-        sql.push_str(" AND date(b.created_at) >= date(?");
-        sql.push_str(&(args.len() + 1).to_string());
-        sql.push(')');
-        args.push(Box::new(f.clone()));
-    }
-    if let Some(t) = &to {
-        sql.push_str(" AND date(b.created_at) <= date(?");
-        sql.push_str(&(args.len() + 1).to_string());
-        sql.push(')');
-        args.push(Box::new(t.clone()));
-    }
-    sql.push_str(" GROUP BY b.id ORDER BY b.created_at DESC LIMIT ?");
-    sql.push_str(&(args.len() + 1).to_string());
     args.push(Box::new(limit));
+    args.push(Box::new(offset));
 
     let mut stmt = conn.prepare(&sql)?;
     let params_ref: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
-    let rows = stmt
+    let items = stmt
         .query_map(params_ref.as_slice(), |r| {
             Ok(crate::models::StockMovementBatch {
                 id: r.get(0)?,
@@ -1144,7 +1180,7 @@ pub fn list_stock_movement_batches(
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows)
+    Ok(crate::models::StockMovementBatchPage { items, total })
 }
 
 pub fn get_stock_movement_batch(

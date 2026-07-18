@@ -1,5 +1,7 @@
-import type { TransactionDetail } from "./types";
+import type { StockMovementBatchDetail, TransactionDetail } from "./types";
 import { paperCols, type ReceiptConfig } from "./receipt";
+
+const formatQty = (n: number) => (Number.isInteger(n) ? n.toString() : n.toFixed(2));
 
 const ESC = 0x1b;
 const GS = 0x1d;
@@ -117,6 +119,60 @@ export function buildReceiptEscPos(detail: TransactionDetail, cfg: ReceiptConfig
     if (show.change) b.line(two("Kembali", money(detail.change)));
     b.line(line());
   }
+
+  if (show.footer && cfg.footer.trim()) {
+    b.align("center");
+    cfg.footer
+      .split("\n")
+      .map((x) => x.trim())
+      .filter(Boolean)
+      .forEach((f) => b.line(center(f)));
+  }
+
+  b.feed(4);
+  b.cut(true);
+
+  return b.build();
+}
+
+/** Bangun urutan byte ESC/POS untuk dokumen Item Masuk/Keluar, diakhiri feed + autocut. */
+export function buildStockDocEscPos(detail: StockMovementBatchDetail, cfg: ReceiptConfig): Uint8Array {
+  const w = paperCols(cfg.paper);
+  const line = (ch = "-") => ch.repeat(w);
+  const center = (t: string) => {
+    const s = t.slice(0, w);
+    const pad = Math.max(0, Math.floor((w - s.length) / 2));
+    return " ".repeat(pad) + s;
+  };
+  const two = (l: string, r: string) => {
+    const left = l.slice(0, Math.max(0, w - r.length - 1));
+    const space = Math.max(1, w - left.length - r.length);
+    return left + " ".repeat(space) + r;
+  };
+
+  const verb = detail.kind === "in" ? "ITEM MASUK" : "ITEM KELUAR";
+  const { show } = cfg;
+  const b = new EscPosBuilder();
+  b.init();
+  b.align("center");
+
+  if (show.storeName && cfg.storeName.trim()) b.bold(true).line(cfg.storeName).bold(false);
+  b.bold(true).line(verb).bold(false);
+  b.line(center(detail.no));
+  b.line(center(new Date(detail.created_at).toLocaleString("id-ID")));
+
+  b.align("left").line(line());
+  for (const it of detail.items) {
+    b.line(it.product_name.slice(0, w));
+    b.line(two(`  Qty: ${formatQty(it.qty)}`, ""));
+    if (it.note) b.line(`  Ket: ${it.note}`.slice(0, w));
+  }
+  b.line(line());
+  b.line(two("Total Item", String(detail.items.length)));
+  b.line(two("Total Qty", formatQty(detail.items.reduce((s, it) => s + it.qty, 0))));
+  if (detail.note) b.line(`Catatan: ${detail.note}`.slice(0, w));
+  if (detail.user_id) b.line(`Oleh: ${detail.user_id}`.slice(0, w));
+  b.line(line());
 
   if (show.footer && cfg.footer.trim()) {
     b.align("center");

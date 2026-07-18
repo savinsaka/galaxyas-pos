@@ -29,10 +29,11 @@ import type {
   StockMovementBatchDetail,
   StockMovementBatchInput,
   StockMovementBatchItemInput,
+  StockMovementBatchPage,
   StoreInfo,
   SyncResult,
-  Transaction,
   TransactionDetail,
+  TransactionPage,
   User,
   UserInput,
 } from "./types";
@@ -86,8 +87,14 @@ export const api = {
 
   // Penjualan / kasir
   checkout: (sale: SaleInput) => invoke<TransactionDetail>("checkout", { sale }),
-  listTransactions: (from: string | null = null, to: string | null = null, limit = 100) =>
-    invoke<Transaction[]>("list_transactions", { from, to, limit }),
+  listTransactions: async (from: string | null = null, to: string | null = null, limit = 100) =>
+    (await invoke<TransactionPage>("list_transactions", { from, to, limit, offset: 0 })).items,
+  listTransactionsPage: (
+    from: string | null = null,
+    to: string | null = null,
+    limit = 50,
+    offset = 0,
+  ) => invoke<TransactionPage>("list_transactions", { from, to, limit, offset }),
   getTransaction: (id: string) =>
     invoke<TransactionDetail | null>("get_transaction", { id }),
   deleteTransaction: (id: string) => invoke<void>("delete_transaction", { id }),
@@ -120,8 +127,9 @@ export const api = {
     kind: "in" | "out" | null = null,
     from: string | null = null,
     to: string | null = null,
-    limit = 500,
-  ) => invoke<StockMovementBatch[]>("list_stock_movement_batches", { kind, from, to, limit }),
+    limit = 50,
+    offset = 0,
+  ) => invoke<StockMovementBatchPage>("list_stock_movement_batches", { kind, from, to, limit, offset }),
   getStockMovementBatch: (id: string) =>
     invoke<StockMovementBatchDetail | null>("get_stock_movement_batch", { id }),
   updateStockMovementBatch: (id: string, items: StockMovementBatchItemInput[], note: string | null) =>
