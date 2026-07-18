@@ -41,6 +41,10 @@ jobs:
           projectPath: desktop
           owner: savinsaka
           repo: galaxyas-pos-releases
+          # Tag v* dibuat berdasarkan HEAD `main` di repo tujuan (galaxyas-pos-releases),
+          # bukan SHA dari repo private ini — SHA itu tidak ada di repo tujuan sehingga
+          # GitHub menolak (target_commitish invalid) kalau dibiarkan default.
+          releaseCommitish: main
           tagName: ${{ github.ref_name }}
           releaseName: "GALAXYAS POS ${{ github.ref_name }}"
           releaseBody: "Lihat commit log di repo utama untuk detail perubahan."
