@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { api } from "$lib/api";
   import { showToast, toastError } from "$lib/toast";
-  import { parseReceiptConfig, RECEIPT_SHOW_KEYS } from "$lib/receipt";
+  import { parseReceiptConfig, RECEIPT_SHOW_KEYS, maxFontSizeForPaper } from "$lib/receipt";
   import { buildReceiptEscPos } from "$lib/escpos";
   import { THEMES, saveTheme } from "$lib/theme";
   import type { LanServerStatus, TransactionDetail } from "$lib/types";
@@ -25,6 +25,7 @@
   let preview = $state(false);
   let spacingChanged = $state(false);
   let spacingTimer: ReturnType<typeof setTimeout> | null = null;
+  const fontSizeMax = $derived(maxFontSizeForPaper(settings.receipt_paper === "58" ? "58" : "80"));
 
   const RESET_PHRASE = "HAPUS SEMUA DATA";
   let resetConfirmText = $state("");
@@ -113,6 +114,7 @@
       await loadLanStatus();
       settings.receipt_paper ??= "80";
       settings.receipt_font_size ??= "12";
+      clampFontSize();
       settings.receipt_line_height ??= "1.35";
       settings.receipt_margin ??= "3";
       settings.receipt_header ??= "";
@@ -192,6 +194,23 @@
     spacingTimer = setTimeout(() => {
       showToast("Spasi/margin diubah — klik Simpan Struk untuk menerapkan.", "info");
     }, 800);
+  }
+
+  /** Kertas 58mm punya lebar lebih sempit — batasi font agar baris qty/harga tidak pecah. */
+  function clampFontSize() {
+    if (Number(settings.receipt_font_size) > fontSizeMax) {
+      settings.receipt_font_size = String(fontSizeMax);
+    }
+  }
+
+  function onPaperChange() {
+    clampFontSize();
+    onSpacingInput();
+  }
+
+  function onFontSizeInput() {
+    clampFontSize();
+    onSpacingInput();
   }
 
   // Di mode client (konek ke Server Pusat PC lain): sync manual & reset data
@@ -350,14 +369,15 @@
       </div>
       <div>
         <label>Ukuran Kertas</label>
-        <select bind:value={settings.receipt_paper}>
+        <select bind:value={settings.receipt_paper} onchange={onPaperChange}>
           <option value="58">58 mm</option>
           <option value="80">80 mm</option>
         </select>
       </div>
       <div>
         <label>Ukuran Font (px)</label>
-        <input type="number" min="8" max="20" bind:value={settings.receipt_font_size} oninput={onSpacingInput} />
+        <input type="number" min="8" max={fontSizeMax} bind:value={settings.receipt_font_size} oninput={onFontSizeInput} />
+        {#if fontSizeMax < 20}<div class="text-dim" style="font-size:0.76rem; margin-top:0.25rem;">Maks {fontSizeMax}px untuk kertas 58mm agar baris qty/harga tidak pecah.</div>{/if}
       </div>
       <div>
         <label>Spasi Baris</label>

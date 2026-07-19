@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, tick } from "svelte";
   import * as XLSX from "xlsx";
   import { openPath } from "@tauri-apps/plugin-opener";
   import { api } from "$lib/api";
@@ -47,6 +47,19 @@
   let to = $state("");
   let tanggal = $state(todayIso());
   let showPopup = $state(false);
+  let fisikInputEl = $state<HTMLInputElement | null>(null);
+
+  const HISTORY_PAGE_SIZE = 12;
+  let historyPage = $state(0);
+  const historyTotalPages = $derived(Math.max(1, Math.ceil(history.length / HISTORY_PAGE_SIZE)));
+  const historyPageItems = $derived(
+    history.slice(historyPage * HISTORY_PAGE_SIZE, historyPage * HISTORY_PAGE_SIZE + HISTORY_PAGE_SIZE),
+  );
+  function goHistoryPage(delta: number) {
+    const next = historyPage + delta;
+    if (next < 0 || next >= historyTotalPages) return;
+    historyPage = next;
+  }
 
   const selisih = $derived(selected ? fisik - selected.stock_qty : 0);
   $effect(() => {
@@ -68,6 +81,7 @@
         api.listProducts("", true),
         api.listStockMovements("opname", from, to, 500),
       ]);
+      historyPage = 0;
     } catch (e) { toastError(e); }
   }
   onMount(() => {
@@ -88,11 +102,14 @@
     showPopup = true;
   }
 
-  function selectProduct(p: ProductWithStock) {
+  async function selectProduct(p: ProductWithStock) {
     selected = p;
     fisik = p.stock_qty;
     search = "";
     keterangan = "";
+    await tick();
+    fisikInputEl?.focus();
+    fisikInputEl?.select();
   }
 
   function resetForm() {
@@ -211,7 +228,45 @@
 </script>
 
 <div class="view-flex">
-<div class="page-head"><h1>Stok Opname</h1></div>
+<div class="page-head">
+  <h1>Stok Opname</h1>
+  <div class="row" style="align-items:center; gap:0.6rem; flex-wrap:wrap;">
+    <button onclick={openImportTemplate}>📄 Unduh Template Excel</button>
+    <label class="text-dim" style="font-size:0.82rem;">📁 Import Excel Opname:</label>
+    <input type="file" accept=".xlsx,.xls,.csv" onchange={onImportFile} disabled={importing} />
+  </div>
+</div>
+
+{#if importing || importLog.length}
+  <div class="import-block">
+    {#if importing}
+      <div class="import-progress-bar">
+        <div
+          class="import-progress-fill"
+          style="width:{importProgress.total ? (importProgress.done / importProgress.total) * 100 : 0}%"
+        ></div>
+      </div>
+      <p class="text-dim" style="font-size:0.8rem; margin-top:0.3rem;">
+        {importProgress.done} / {importProgress.total} baris diproses…
+      </p>
+    {/if}
+    {#if importLog.length}
+      <div class="import-log-head">
+        <span>📋 Log Import</span>
+        <span class="log-err-badge">{importLog.length} bermasalah</span>
+      </div>
+      <div class="import-log">
+        {#each importLog as l}
+          <div class="log-row log-error">
+            <span class="mono">#{l.row}</span>
+            <span>{l.name}</span>
+            <span class="text-dim">{l.reason}</span>
+          </div>
+        {/each}
+      </div>
+    {/if}
+  </div>
+{/if}
 
 <div class="op-grid">
   <!-- Form input -->
@@ -233,66 +288,14 @@
       </div>
     </div>
 
-    <!-- Import Excel -->
-    <div class="import-block">
-      <div class="row" style="align-items:center; gap:0.6rem; flex-wrap:wrap;">
-        <button onclick={openImportTemplate}>📄 Unduh Template Excel</button>
-        <label class="text-dim" style="font-size:0.82rem;">📁 Import Excel Opname:</label>
-        <input type="file" accept=".xlsx,.xls,.csv" onchange={onImportFile} disabled={importing} />
-      </div>
-      {#if importing || importLog.length}
-        <div style="margin-top:0.6rem;">
-          {#if importing}
-            <div class="import-progress-bar">
-              <div
-                class="import-progress-fill"
-                style="width:{importProgress.total ? (importProgress.done / importProgress.total) * 100 : 0}%"
-              ></div>
-            </div>
-            <p class="text-dim" style="font-size:0.8rem; margin-top:0.3rem;">
-              {importProgress.done} / {importProgress.total} baris diproses…
-            </p>
-          {/if}
-          {#if importLog.length}
-            <div class="import-log-head">
-              <span>📋 Log Import</span>
-              <span class="log-err-badge">{importLog.length} bermasalah</span>
-            </div>
-            <div class="import-log">
-              {#each importLog as l}
-                <div class="log-row log-error">
-                  <span class="mono">#{l.row}</span>
-                  <span>{l.name}</span>
-                  <span class="text-dim">{l.reason}</span>
-                </div>
-              {/each}
-            </div>
-          {/if}
-        </div>
-      {/if}
-    </div>
-
     <!-- Scan / cari item -->
     <label>Kode Item / Nama Barang</label>
-    <div style="position:relative;">
-      <input
-        placeholder="Scan barcode atau ketik nama lalu Enter…"
-        bind:value={search}
-        onkeydown={onSearchKey}
-        autocomplete="off"
-      />
-      {#if filtered.length > 0}
-        <div class="search-drop">
-          {#each filtered.slice(0, 8) as p (p.id)}
-            <button class="sd-row" onclick={() => selectProduct(p)}>
-              <span class="sd-name">{p.name}</span>
-              <span class="sd-bc text-dim">{p.barcode ?? ""}</span>
-              <span class="sd-stok text-dim">stok {formatQty(p.stock_qty)}</span>
-            </button>
-          {/each}
-        </div>
-      {/if}
-    </div>
+    <input
+      placeholder="Scan barcode atau ketik nama lalu Enter…"
+      bind:value={search}
+      onkeydown={onSearchKey}
+      autocomplete="off"
+    />
 
     <!-- Data item terpilih -->
     <div class="item-info {selected ? '' : 'empty'}">
@@ -303,7 +306,7 @@
 
         <div class="fisik-row">
           <label>Fisik (Hasil Hitung)</label>
-          <input class="fisik-input mono" type="number" min="0" step="0.01" bind:value={fisik} />
+          <input class="fisik-input mono" type="number" min="0" step="0.01" bind:value={fisik} bind:this={fisikInputEl} />
         </div>
 
         <div class="info-row selisih {selisih >= 0 ? 'plus' : 'minus'}">
@@ -340,7 +343,7 @@
           </tr>
         </thead>
         <tbody>
-          {#each history as r (r.id)}
+          {#each historyPageItems as r (r.id)}
             <tr>
               <td style="white-space:nowrap;">{formatDateTime(r.created_at)}</td>
               <td>{r.product_name}</td>
@@ -353,6 +356,15 @@
           {/each}
         </tbody>
       </table>
+    </div>
+    <div class="pager">
+      <span class="text-dim" style="font-size:0.82rem;">
+        {history.length.toLocaleString("id-ID")} baris · Hal {historyPage + 1} / {historyTotalPages}
+      </span>
+      <div class="row" style="gap:0.3rem;">
+        <button disabled={historyPage === 0} onclick={() => goHistoryPage(-1)}>‹ Sebelumnya</button>
+        <button disabled={historyPage + 1 >= historyTotalPages} onclick={() => goHistoryPage(1)}>Berikutnya ›</button>
+      </div>
     </div>
   </div>
 </div>
@@ -371,32 +383,20 @@
   .op-grid { display: grid; grid-template-columns: 400px 1fr; gap: 1rem; flex:1; min-height:0; }
   .history-card { padding:0; overflow:hidden; display:flex; flex-direction:column; min-height:0; }
   .history-scroll { flex:1; min-height:0; overflow-y:auto; }
+  .pager {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.5rem 0.9rem; border-top: 1px solid var(--border); flex-shrink:0;
+  }
   .form-card { display: flex; flex-direction: column; gap: 0.5rem; }
   .op-datetime { gap: 1.2rem; margin-bottom: 0.3rem; }
   .trx-field { display: flex; flex-direction: column; gap: 0.2rem; }
   .trx-field label { font-size: 0.78rem; color: var(--text-dim); margin: 0; }
 
-  .search-drop {
-    position: absolute; left: 0; right: 0; top: 100%; z-index: 50;
-    background: var(--white); border: 1px solid var(--border);
-    border-top: none; border-radius: 0 0 var(--radius) var(--radius);
-    box-shadow: var(--shadow); max-height: 220px; overflow-y: auto;
-  }
-  .sd-row {
-    display: grid; grid-template-columns: 1fr auto auto; gap: 0.5rem;
-    align-items: center; width: 100%; text-align: left;
-    border: none; border-radius: 0; border-bottom: 1px solid var(--border);
-    padding: 0.4rem 0.7rem; font-size: 0.85rem;
-  }
-  .sd-row:last-child { border-bottom: none; }
-  .sd-name { font-weight: 600; }
-  .sd-bc, .sd-stok { font-size: 0.78rem; }
-
   .item-info {
     border: 1px solid var(--border); border-radius: var(--radius);
-    padding: 0.8rem; margin-top: 0.3rem; min-height: 140px;
+    padding: 0.6rem 0.8rem; margin-top: 0.3rem;
   }
-  .item-info.empty { display: flex; align-items: center; justify-content: center; }
+  .item-info.empty { display: flex; align-items: center; justify-content: center; min-height: 140px; }
   .empty-msg { font-size: 0.85rem; text-align: center; }
 
   .info-row { display: flex; justify-content: space-between; align-items: center; padding: 0.3rem 0; border-bottom: 1px solid var(--border); }

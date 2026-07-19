@@ -62,6 +62,7 @@ function boolSetting(s: Record<string, string>, key: string, def = true): boolea
 export function parseReceiptConfig(s: Record<string, string>): ReceiptConfig {
   const show = {} as ReceiptShowFlags;
   for (const { key, setting } of RECEIPT_SHOW_KEYS) show[key] = boolSetting(s, setting, true);
+  const paper: "58" | "80" = s.receipt_paper === "58" ? "58" : "80";
   return {
     storeName: s.store_name || "GALAXYAS POS",
     address: s.store_address || "",
@@ -72,8 +73,11 @@ export function parseReceiptConfig(s: Record<string, string>): ReceiptConfig {
     whatsapp: s.store_whatsapp || "",
     header: s.receipt_header || "",
     footer: s.receipt_footer || "",
-    paper: s.receipt_paper === "58" ? "58" : "80",
-    fontSize: Number(s.receipt_font_size) || 12,
+    paper,
+    // Diclamp di sini (bukan cuma di input Pengaturan) supaya nilai lama/tidak
+    // valid yang sudah tersimpan (mis. font raksasa dari sebelum ada batasan
+    // ini) tidak ikut merusak tampilan struk di Kasir/StockDocPrint.
+    fontSize: Math.min(maxFontSizeForPaper(paper), Math.max(8, Number(s.receipt_font_size) || 12)),
     lineHeight: Number(s.receipt_line_height) || 1.35,
     margin: Number(s.receipt_margin) || 3,
     printer: s.receipt_printer || null,
@@ -84,3 +88,11 @@ export function parseReceiptConfig(s: Record<string, string>): ReceiptConfig {
 export const paperWidthMm = (paper: "58" | "80") => (paper === "58" ? 58 : 80);
 /** Perkiraan jumlah karakter monospace per baris untuk kertas thermal. */
 export const paperCols = (paper: "58" | "80") => (paper === "58" ? 32 : 48);
+/**
+ * Batas atas ukuran font agar baris qty/harga (flex space-between) tidak
+ * kehabisan lebar di kertas 58mm — label bisa terdesak sampai lebar 0 dan
+ * pecah jadi satu huruf per baris. Diverifikasi dengan konten struk terburuk
+ * (harga 8 digit) di lebar kertas nyata; 80mm masih longgar sampai jauh di
+ * atas batas UI (20px) sehingga tidak perlu diperketat.
+ */
+export const maxFontSizeForPaper = (paper: "58" | "80") => (paper === "58" ? 14 : 20);
