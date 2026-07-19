@@ -69,7 +69,7 @@
     try {
       const existing = await api.listProducts("", true);
       for (const p of existing) {
-        if (p.barcode && p.barcode.trim()) existingByBarcode.set(p.barcode.trim(), p.name);
+        if (p.barcode && p.barcode.trim()) existingByBarcode.set(p.barcode.trim().toLowerCase(), p.name);
       }
     } catch (e) {
       toastError(e);
@@ -91,7 +91,7 @@
         importLog.push({ row: i + 2, name: name || "(tanpa nama)", status: "error", reason: "Nama kosong" });
         continue;
       }
-      const existingName = barcode ? existingByBarcode.get(barcode) : undefined;
+      const existingName = barcode ? existingByBarcode.get(barcode.toLowerCase()) : undefined;
       if (existingName) {
         duplicate++;
         importLog.push({
@@ -121,7 +121,7 @@
         if (stokVal > 0) {
           await api.setStock(saved.id, stokVal);
         }
-        if (barcode) existingByBarcode.set(barcode, name);
+        if (barcode) existingByBarcode.set(barcode.toLowerCase(), name);
         created++;
         importLog.push({ row: i + 2, name, status: "created" });
       } catch (e) {

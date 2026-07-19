@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
+  import { get } from "svelte/store";
   import { api } from "$lib/api";
   import { currentUser } from "$lib/stores/auth";
   import { currentStore, allStores } from "$lib/stores/activeStore";
   import { currentServer, allServers } from "$lib/stores/activeServer";
   import { logout } from "$lib/stores/auth";
-  import { closeAllTabs } from "$lib/stores/tabs";
+  import { closeAllTabs, closeTab, activeTabId } from "$lib/stores/tabs";
   import { loadAndApplyTheme } from "$lib/theme";
   import Login from "$lib/components/Login.svelte";
   import StorePicker from "$lib/components/StorePicker.svelte";
@@ -50,6 +51,24 @@
       ready = true;
     }
   });
+
+  // Esc menutup popup yang sedang terbuka dulu (kalau ada) — semua popup di app
+  // konsisten pakai <div class="modal-backdrop" onclick={...}>, jadi cukup klik
+  // backdrop paling akhir di DOM (= popup paling atas). Kalau tidak ada popup,
+  // baru tutup tab aktif (dengan konfirmasi otomatis kalau tab "dirty", lihat
+  // closeTab()/tabGuard.ts).
+  function onEscapeCloseTab(e: KeyboardEvent) {
+    if (e.key !== "Escape") return;
+    const backdrops = document.querySelectorAll<HTMLElement>(".modal-backdrop");
+    if (backdrops.length > 0) {
+      backdrops[backdrops.length - 1].click();
+      return;
+    }
+    const id = get(activeTabId);
+    if (id) closeTab(id);
+  }
+  onMount(() => window.addEventListener("keydown", onEscapeCloseTab));
+  onDestroy(() => window.removeEventListener("keydown", onEscapeCloseTab));
 
   function onServerChosen(info: import("$lib/types").ServerInfo) {
     closeAllTabs();

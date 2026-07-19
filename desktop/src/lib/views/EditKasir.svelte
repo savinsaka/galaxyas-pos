@@ -29,6 +29,7 @@
   let showSearchPopup = $state(false);
   let popupResults = $state<ProductWithStock[]>([]);
   let popupLoading = $state(false);
+  let popupHighlight = $state(0);
 
   let customers = $state<Customer[]>([]);
   let customerSearch = $state("");
@@ -121,6 +122,7 @@
     popupLoading = true;
     try {
       popupResults = await api.listProducts(term, false, 30);
+      popupHighlight = 0;
     } catch (e) {
       toastError(e);
     } finally {
@@ -136,6 +138,24 @@
     showSearchPopup = false;
     search = "";
     popupResults = [];
+  }
+  function scrollPopupHighlightIntoView() {
+    document.querySelector(`[data-sr-index="${popupHighlight}"]`)?.scrollIntoView({ block: "nearest" });
+  }
+  function onPopupKey(e: KeyboardEvent) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (popupResults.length) popupHighlight = Math.min(popupHighlight + 1, popupResults.length - 1);
+      scrollPopupHighlightIntoView();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (popupResults.length) popupHighlight = Math.max(popupHighlight - 1, 0);
+      scrollPopupHighlightIntoView();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const p = popupResults[popupHighlight];
+      if (p) pickFromPopup(p);
+    }
   }
 
   function setQty(line: EditLine, qty: number) {
@@ -314,13 +334,13 @@
   <div class="modal-backdrop" onclick={() => (showSearchPopup = false)} role="presentation">
     <div class="modal popup-search" onclick={(e) => e.stopPropagation()} role="presentation">
       <h2>🔍 Cari Barang</h2>
-      <input class="mono" placeholder="Ketik nama atau barcode…" bind:value={search} oninput={onPopupInput} autofocus />
+      <input class="mono" placeholder="Ketik nama atau barcode…" bind:value={search} oninput={onPopupInput} onkeydown={onPopupKey} autofocus />
       <div class="popup-results">
         {#if popupLoading}
           <div class="sr-empty text-dim">Mencari…</div>
         {:else}
-          {#each popupResults as p (p.id)}
-            <button class="sr-row" onclick={() => pickFromPopup(p)}>
+          {#each popupResults as p, i (p.id)}
+            <button class="sr-row" class:active={i === popupHighlight} data-sr-index={i} onclick={() => pickFromPopup(p)}>
               <span class="sr-name">{p.name}</span>
               <span class="sr-meta text-dim">{p.barcode ?? ""}</span>
               <span class="sr-price mono">{formatIDR(p.sell_price)}</span>
@@ -376,6 +396,7 @@
     border-bottom: 1px solid var(--border); padding: 0.45rem 0.8rem; font-size: 0.85rem;
   }
   .sr-row:last-child { border-bottom: none; }
+  .sr-row.active { background: var(--baby-blue-soft); }
   .sr-name { font-weight: 600; }
   .sr-meta, .sr-stock { font-size: 0.78rem; }
   .sr-empty { padding: 0.7rem 0.8rem; font-size: 0.85rem; }

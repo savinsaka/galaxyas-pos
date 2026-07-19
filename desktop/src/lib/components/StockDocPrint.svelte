@@ -142,5 +142,9 @@
   .r-sep { border-top: 1px dashed #000; margin: 6px 0; }
   .r-item { margin-bottom: 4px; }
   .r-item-line,
-  .r-line { display: flex; justify-content: space-between; }
+  .r-line { display: flex; justify-content: space-between; align-items: baseline; width: 100%; gap: 0.6em; }
+  .r-item-line > span:first-child,
+  .r-line > span:first-child { flex: 1 1 auto; min-width: 0; overflow-wrap: break-word; }
+  .r-item-line > span:last-child,
+  .r-line > span:last-child { flex: 0 0 auto; white-space: nowrap; }
 </style>

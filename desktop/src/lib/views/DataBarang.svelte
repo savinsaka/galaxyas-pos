@@ -130,6 +130,7 @@
   }
 </script>
 
+<div class="view-flex">
 <div class="page-head">
   <h1>Data Barang</h1>
   <div class="row" style="flex-wrap:wrap;">
@@ -151,8 +152,8 @@
   </div>
 </div>
 
-<div class="card" style="padding:0; overflow:hidden;">
-  <div style="max-height:calc(100vh - 360px); overflow:auto; position:relative;">
+<div class="card list-card">
+  <div class="list-scroll">
     {#if loading}<div class="loading-overlay">Memuat…</div>{/if}
     <table>
       <thead>
@@ -209,6 +210,7 @@
     {selected ? `Terpilih: ${selected.name}` : "Klik baris untuk memilih"}
   </span>
 </div>
+</div>
 
 {#if modal}
   <div class="modal-backdrop" onclick={() => (modal = null)} role="presentation">
@@ -224,6 +226,10 @@
 {/if}
 
 <style>
+  .view-flex { height:100%; min-height:0; display:flex; flex-direction:column; }
+  .list-card { padding:0; overflow:hidden; flex:1; min-height:0; display:flex; flex-direction:column; }
+  .list-scroll { flex:1; min-height:0; overflow:auto; }
+
   .sortable { cursor: pointer; user-select: none; }
   .sortable:hover { color: var(--primary); }
   .loading-overlay {
@@ -233,6 +239,6 @@
   }
   .pager {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 0.5rem 0.9rem; border-top: 1px solid var(--border);
+    padding: 0.5rem 0.9rem; border-top: 1px solid var(--border); flex-shrink:0;
   }
 </style>

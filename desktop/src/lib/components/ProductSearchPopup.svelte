@@ -19,6 +19,7 @@
   let query = $state(initialQuery);
   let results = $state<ProductWithStock[]>([]);
   let loading = $state(false);
+  let highlightIndex = $state(0);
 
   async function run(term: string) {
     if (!term.trim()) {
@@ -28,6 +29,7 @@
     loading = true;
     try {
       results = await api.listProducts(term, false, 30);
+      highlightIndex = 0;
     } catch (e) {
       toastError(e);
     } finally {
@@ -41,18 +43,37 @@
   onMount(() => {
     if (initialQuery.trim()) run(initialQuery);
   });
+
+  function scrollHighlightIntoView() {
+    document.querySelector(`[data-sr-index="${highlightIndex}"]`)?.scrollIntoView({ block: "nearest" });
+  }
+  function onQueryKey(e: KeyboardEvent) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (results.length) highlightIndex = Math.min(highlightIndex + 1, results.length - 1);
+      scrollHighlightIntoView();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (results.length) highlightIndex = Math.max(highlightIndex - 1, 0);
+      scrollHighlightIntoView();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const p = results[highlightIndex];
+      if (p) onPick(p);
+    }
+  }
 </script>
 
 <div class="modal-backdrop" onclick={onClose} role="presentation">
   <div class="modal popup-search" onclick={(e) => e.stopPropagation()} role="presentation">
     <h2>🔍 Cari Barang</h2>
-    <input class="mono" placeholder="Ketik nama atau barcode…" bind:value={query} oninput={onInput} autofocus />
+    <input class="mono" placeholder="Ketik nama atau barcode…" bind:value={query} oninput={onInput} onkeydown={onQueryKey} autofocus />
     <div class="popup-results">
       {#if loading}
         <div class="sr-empty text-dim">Mencari…</div>
       {:else}
-        {#each results as p (p.id)}
-          <button class="sr-row" onclick={() => onPick(p)}>
+        {#each results as p, i (p.id)}
+          <button class="sr-row" class:active={i === highlightIndex} data-sr-index={i} onclick={() => onPick(p)}>
             <span class="sr-name">{p.name}</span>
             <span class="sr-meta text-dim">{p.barcode ?? ""}</span>
             <span class="sr-price mono">{formatIDR(p.sell_price)}</span>
@@ -93,6 +114,7 @@
     font-size: 0.85rem;
   }
   .sr-row:last-child { border-bottom: none; }
+  .sr-row.active { background: var(--baby-blue-soft); }
   .sr-name { font-weight: 600; }
   .sr-meta, .sr-stock { font-size: 0.78rem; }
   .sr-empty { padding: 0.7rem 0.8rem; font-size: 0.85rem; }

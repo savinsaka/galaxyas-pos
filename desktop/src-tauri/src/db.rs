@@ -410,7 +410,7 @@ pub fn find_by_barcode(conn: &Connection, barcode: &str) -> AppResult<Option<Pro
         .query_row(
             "SELECT p.*, COALESCE(s.qty,0) AS stock_qty
              FROM products p LEFT JOIN stock s ON s.product_id = p.id
-             WHERE p.barcode = ?1 AND p.is_deleted = 0 AND p.is_active = 1",
+             WHERE p.barcode = ?1 COLLATE NOCASE AND p.is_deleted = 0 AND p.is_active = 1",
             params![barcode],
             |row| {
                 let stock_qty: f64 = row.get("stock_qty")?;
@@ -536,7 +536,7 @@ pub fn dedupe_products_by_barcode(conn: &Connection) -> AppResult<crate::models:
         let mut stmt = conn.prepare(
             "SELECT barcode FROM products
              WHERE is_deleted = 0 AND barcode IS NOT NULL AND TRIM(barcode) != ''
-             GROUP BY barcode HAVING COUNT(*) > 1",
+             GROUP BY barcode COLLATE NOCASE HAVING COUNT(*) > 1",
         )?;
         let x = stmt.query_map([], |r| r.get(0))?.collect::<Result<Vec<_>, _>>()?;
         x
@@ -549,7 +549,7 @@ pub fn dedupe_products_by_barcode(conn: &Connection) -> AppResult<crate::models:
         let rows: Vec<(String, String)> = {
             let mut stmt = conn.prepare(
                 "SELECT id, name FROM products
-                 WHERE barcode = ?1 AND is_deleted = 0
+                 WHERE barcode = ?1 COLLATE NOCASE AND is_deleted = 0
                  ORDER BY updated_at DESC, rowid DESC",
             )?;
             let x = stmt
@@ -652,7 +652,6 @@ pub fn create_sale(conn: &mut Connection, input: SaleInput) -> AppResult<Transac
     }
     let now = resolve_created_at(&input.created_at);
     let tx_id = Uuid::new_v4().to_string();
-    let invoice_no = next_invoice_no(conn)?;
 
     let mut subtotal = 0.0;
     let mut total_discount = 0.0;
@@ -694,7 +693,11 @@ pub fn create_sale(conn: &mut Connection, input: SaleInput) -> AppResult<Transac
         }
     }
 
+    // Nomor invoice baru dibangkitkan di sini, setelah semua validasi lolos
+    // dan sebagai bagian dari transaksi atomic — supaya checkout yang gagal
+    // (pembayaran kurang / stok tidak cukup) tidak "membakar" nomor urut.
     let db_tx = conn.transaction()?;
+    let invoice_no = next_invoice_no(&db_tx)?;
     db_tx.execute(
         "INSERT INTO transactions
             (id, invoice_no, cashier_id, subtotal, discount, total, paid, change, payment_method,

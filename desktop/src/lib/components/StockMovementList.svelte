@@ -59,6 +59,17 @@
     reload();
   });
 
+  function onListKey(e: KeyboardEvent) {
+    const idx = batches.findIndex((b) => b.id === selectedId);
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      selectedId = idx < 0 ? batches[0]?.id ?? null : (batches[idx + 1]?.id ?? selectedId);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (idx > 0) selectedId = batches[idx - 1].id;
+    }
+  }
+
   function tambah() {
     openTab({
       viewKey: kind === "in" ? "item-masuk" : "item-keluar",
@@ -91,14 +102,15 @@
   }
 </script>
 
+<div class="view-flex">
 <div class="page-head"><h1>{title}</h1></div>
 
-<div class="card" style="margin-bottom:0.8rem;">
+<div class="card" style="margin-bottom:0.8rem; flex-shrink:0;">
   <MonthPager bind:from bind:to onchange={reload} />
 </div>
 
-<div class="card" style="padding:0; overflow:hidden;">
-  <div style="max-height:calc(100vh - 400px); overflow:auto;">
+<div class="card list-card">
+  <div class="list-scroll" tabindex="-1" role="grid" aria-label="{title}" onkeydown={onListKey}>
     <table>
       <thead>
         <tr>
@@ -108,7 +120,7 @@
       </thead>
       <tbody>
         {#each batches as b (b.id)}
-          <tr onclick={() => (selectedId = b.id)} style={selectedId === b.id ? "background:var(--baby-blue-soft);" : ""}>
+          <tr onclick={(e) => { selectedId = b.id; (e.currentTarget.closest(".list-scroll") as HTMLElement)?.focus(); }} style={selectedId === b.id ? "background:var(--baby-blue-soft);" : ""}>
             <td class="mono">{b.no}</td>
             <td>{formatDateTime(b.created_at)}</td>
             <td class="text-right mono">{b.item_count}</td>
@@ -140,10 +152,15 @@
   {/if}
   <button class="btn-danger" onclick={hapus} disabled={!selected}>🗑️ Hapus</button>
 </div>
+</div>
 
 <style>
+  .view-flex { height:100%; min-height:0; display:flex; flex-direction:column; }
+  .list-card { padding:0; overflow:hidden; flex:1; min-height:0; display:flex; flex-direction:column; }
+  .list-scroll { flex:1; min-height:0; overflow:auto; }
+
   .pager {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 0.5rem 0.9rem; border-top: 1px solid var(--border);
+    padding: 0.5rem 0.9rem; border-top: 1px solid var(--border); flex-shrink:0;
   }
 </style>

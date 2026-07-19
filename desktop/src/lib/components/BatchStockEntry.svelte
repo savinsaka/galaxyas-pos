@@ -8,11 +8,13 @@
   import { currentUser } from "$lib/stores/auth";
   import { createLiveClock } from "$lib/liveClock.svelte";
   import { todayIso, combineDateAndTime } from "$lib/dateTime";
+  import { markStockBatchesDirty } from "$lib/stores/stockBatchSignal";
+  import { setTabDirty, clearTabDirty } from "$lib/stores/tabGuard";
   import type { ProductWithStock, StockKind, StockMovementBatchDetail } from "$lib/types";
   import ProductSearchPopup from "$lib/components/ProductSearchPopup.svelte";
   import StockDocPrint from "$lib/components/StockDocPrint.svelte";
 
-  let { kind, title }: { kind: StockKind; title: string } = $props();
+  let { kind, title, tabId }: { kind: StockKind; title: string; tabId?: string } = $props();
 
   const verb = kind === "in" ? "Masuk" : "Keluar";
 
@@ -54,6 +56,11 @@
   let lastSaved = $state<StockMovementBatchDetail | null>(null);
   let showPrint = $state(false);
 
+  $effect(() => {
+    if (tabId) setTabDirty(tabId, rows.some((r) => r.product !== null));
+  });
+  onDestroy(() => { if (tabId) clearTabDirty(tabId); });
+
   function newRow(): BatchRow {
     return { id: nextId++, search: "", product: null, qty: 1, keterangan: "", dropOpen: false };
   }
@@ -76,6 +83,30 @@
   onMount(loadProducts);
 
   async function onRowKey(e: KeyboardEvent, row: BatchRow) {
+    const idx = rows.findIndex((r) => r.id === row.id);
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (idx < rows.length - 1) focusSearch(rows[idx + 1].id);
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (idx > 0) focusSearch(rows[idx - 1].id);
+      return;
+    }
+    if (e.key === "ArrowRight") {
+      const input = e.currentTarget as HTMLInputElement;
+      if (input.selectionStart === input.value.length) {
+        e.preventDefault();
+        focusQty(row.id);
+      }
+      return;
+    }
+    if (e.key === "Delete" && !row.search.trim() && !row.product) {
+      e.preventDefault();
+      removeRow(row.id);
+      return;
+    }
     if (e.key !== "Enter") return;
     const term = row.search.trim();
     if (!term) return;
@@ -111,8 +142,9 @@
 
   /** Enter di kolom Jumlah: kalau baris ini yang terakhir, tambah baris baru & fokus ke situ;
    * kalau bukan, lompat ke baris berikutnya. Alur scan berkelanjutan (poin 8). */
-  function onQtyKey(e: KeyboardEvent, row: BatchRow) {
-    if (e.key !== "Enter") return;
+  /** Baris berikutnya (atau baris baru kalau ini baris terakhir) — dipicu Enter
+   * ATAU ArrowDown di kolom Jumlah (poin 4: panah bawah jangan ganggu nilai qty). */
+  function advanceRow(row: BatchRow) {
     if (!row.product || row.qty <= 0) return;
     const idx = rows.findIndex((r) => r.id === row.id);
     if (idx === rows.length - 1) {
@@ -122,6 +154,34 @@
     } else {
       focusSearch(rows[idx + 1].id);
     }
+  }
+
+  function onQtyKey(e: KeyboardEvent, row: BatchRow) {
+    if (e.key === "ArrowLeft") {
+      const input = e.currentTarget as HTMLInputElement;
+      let atStart = true;
+      try {
+        atStart = input.selectionStart === 0;
+      } catch (_) { /* type=number tidak selalu izinkan baca selectionStart */ }
+      if (atStart) {
+        e.preventDefault();
+        focusSearch(row.id);
+      }
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      advanceRow(row);
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      const idx = rows.findIndex((r) => r.id === row.id);
+      if (idx > 0) focusQty(rows[idx - 1].id);
+      return;
+    }
+    if (e.key !== "Enter") return;
+    advanceRow(row);
   }
 
   function addRow() {
@@ -150,6 +210,7 @@
         })),
       });
       showToast(`${batch.no}: ${valid.length} item ${verb.toLowerCase()} tersimpan.`, "success");
+      markStockBatchesDirty();
       lastSaved = batch;
       rows = [newRow()];
       catatan = "";
@@ -250,6 +311,7 @@
           importLog.length ? "error" : "success",
           6000,
         );
+        markStockBatchesDirty();
         lastSaved = batch;
         await loadProducts();
       } catch (err) {

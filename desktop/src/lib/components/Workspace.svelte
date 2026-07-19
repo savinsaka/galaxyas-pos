@@ -15,7 +15,7 @@
       {@const Comp = VIEW_REGISTRY[tab.viewKey]}
       <div style:display={tab.id === $activeTabId ? "block" : "none"} style="height:100%;">
         {#if Comp}
-          <Comp {...(tab.props ?? {})} />
+          <Comp {...(tab.props ?? {})} tabId={tab.id} />
         {:else}
           <p class="text-dim">View tidak ditemukan: {tab.viewKey}</p>
         {/if}

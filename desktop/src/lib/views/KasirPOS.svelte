@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, tick } from "svelte";
   import { api } from "$lib/api";
   import { formatIDR, formatQty, formatTime } from "$lib/format";
   import { showToast, toastError } from "$lib/toast";
@@ -8,12 +8,19 @@
   import { createLiveClock } from "$lib/liveClock.svelte";
   import { todayIso, combineDateAndTime } from "$lib/dateTime";
   import { pendingSales, addPending, removePending } from "$lib/stores/pendingSales";
+  import { markTransactionsDirty } from "$lib/stores/txSignal";
+  import { activeTabId } from "$lib/stores/tabs";
+  import { setTabDirty, clearTabDirty } from "$lib/stores/tabGuard";
   import { parseReceiptConfig, type ReceiptConfig } from "$lib/receipt";
   import { buildReceiptEscPos } from "$lib/escpos";
+  import { formatMoneyInput, onMoneyInput } from "$lib/moneyInput";
   import type { Customer, DiscountPeriod, PaymentMethod, ProductWithStock, SaleInput, Shift, TransactionDetail } from "$lib/types";
+
+  let { tabId }: { tabId?: string } = $props();
 
   const clock = createLiveClock();
   onDestroy(() => clock.stop());
+  onDestroy(() => { if (tabId) clearTabDirty(tabId); });
 
   let tanggal = $state(todayIso());
 
@@ -32,8 +39,10 @@
 
   let discounts = $state<DiscountPeriod[]>([]);
   let search = $state("");
+  let scanQty = $state(1);
   let searchBusy = $state(false);
   let stockAlert = $state<{ name: string; available: number } | null>(null);
+  let warningModal = $state<string | null>(null);
   let showPendingList = $state(false);
 
   // Popup cari-nama: dipicu otomatis saat Enter tapi barcode tidak ditemukan.
@@ -41,7 +50,12 @@
   let popupQuery = $state("");
   let popupResults = $state<ProductWithStock[]>([]);
   let popupLoading = $state(false);
+  let popupHighlight = $state(0);
   let cart = $state<CartLine[]>([]);
+  let selectedCartId = $state<string | null>(null);
+  let cartWrapEl = $state<HTMLDivElement>();
+  let scanInputEl = $state<HTMLInputElement>();
+  let paidInputEl = $state<HTMLInputElement>();
   let paymentMethod = $state<PaymentMethod>("Tunai");
   let paid = $state(0);
   let receiptCfg = $state<ReceiptConfig | null>(null);
@@ -60,10 +74,23 @@
 
   const payments: PaymentMethod[] = ["Tunai", "QRIS", "Transfer", "Kartu"];
 
+  const totalQty = $derived(cart.reduce((s, l) => s + l.qty, 0));
   const subtotal = $derived(cart.reduce((s, l) => s + l.price * l.qty, 0));
   const totalDiscount = $derived(cart.reduce((s, l) => s + l.discount, 0));
   const total = $derived(Math.max(subtotal - totalDiscount, 0));
   const change = $derived(Math.max(paid - total, 0));
+
+  $effect(() => {
+    if (tabId) setTabDirty(tabId, cart.length > 0);
+  });
+
+  // Balik fokus ke scan-input begitu popup konfirmasi cetak struk ditutup
+  // (klik Cetak, Tidak, atau backdrop) — siap untuk scan pelanggan berikutnya.
+  let prevShowPrintConfirm = false;
+  $effect(() => {
+    if (prevShowPrintConfirm && !showPrintConfirm) scanInputEl?.focus();
+    prevShowPrintConfirm = showPrintConfirm;
+  });
 
   async function loadSettings() {
     try {
@@ -165,15 +192,15 @@
     line.discount = Math.min(Math.max(discount, 0), line.price * qty);
   }
 
-  function addToCart(p: ProductWithStock) {
+  function addToCart(p: ProductWithStock, addQty = 1) {
     const ex = cart.find((l) => l.product_id === p.id);
     const currentQty = ex?.qty ?? 0;
-    if (currentQty + 1 > p.stock_qty) {
+    if (currentQty + addQty > p.stock_qty) {
       stockAlert = { name: p.name, available: p.stock_qty };
       return;
     }
     if (ex) {
-      ex.qty += 1;
+      ex.qty += addQty;
       ex.stock_qty = p.stock_qty;
       if (!ex.manualOverride) applyDiscount(ex, ex.qty);
       cart = [...cart];
@@ -182,7 +209,7 @@
         product_id: p.id,
         name: p.name,
         price: p.sell_price,
-        qty: 1,
+        qty: addQty,
         discount: 0,
         brand: p.brand,
         default_discount: p.default_discount,
@@ -190,28 +217,85 @@
         manualOverride: false,
         stock_qty: p.stock_qty,
       };
-      applyDiscount(line, 1);
+      applyDiscount(line, addQty);
       cart = [...cart, line];
     }
   }
 
+  function focusCartRow(id: string) {
+    selectedCartId = id;
+    cartWrapEl?.focus();
+  }
+
+  /** Panah bawah dari search yang kosong: masuk ke mode pilih baris keranjang
+   * (panah atas/bawah pindah baris, Del hapus item — lihat onCartKey). */
+  function enterCartSelection() {
+    if (cart.length === 0) return;
+    focusCartRow(cart[0].product_id);
+  }
+
+  function onCartKey(e: KeyboardEvent) {
+    const idx = cart.findIndex((l) => l.product_id === selectedCartId);
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (idx >= 0 && idx < cart.length - 1) selectedCartId = cart[idx + 1].product_id;
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (idx > 0) {
+        selectedCartId = cart[idx - 1].product_id;
+      } else {
+        selectedCartId = null;
+        scanInputEl?.focus();
+      }
+      return;
+    }
+    if (e.key === "Delete") {
+      e.preventDefault();
+      if (selectedCartId) removeLine(selectedCartId);
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      selectedCartId = null;
+      scanInputEl?.focus();
+    }
+  }
+
   async function onSearchKey(e: KeyboardEvent) {
+    if (e.key === "ArrowDown" && !search.trim()) {
+      e.preventDefault();
+      enterCartSelection();
+      return;
+    }
     if (e.key !== "Enter") return;
     const term = search.trim();
-    if (!term) return;
+    if (!term) {
+      // Search kosong + Enter: lompat cepat ke pembayaran (sudah selesai scan).
+      paidInputEl?.focus();
+      paidInputEl?.select();
+      return;
+    }
     searchBusy = true;
+    let p: ProductWithStock | null = null;
     try {
-      const p = await api.findByBarcode(term);
-      if (p) {
-        addToCart(p);
-        search = "";
-      } else {
-        openSearchPopup(term);
-      }
+      p = await api.findByBarcode(term);
     } catch (e) {
       toastError(e);
-    } finally {
-      searchBusy = false;
+    }
+    // searchBusy dimatikan SEBELUM fokus balik ke search — input yang masih
+    // disabled tidak bisa menerima focus(), itu sebabnya cursor tidak balik.
+    searchBusy = false;
+    await tick();
+    if (p) {
+      addToCart(p, scanQty);
+      search = "";
+      scanQty = 1;
+      scanInputEl?.focus();
+    } else {
+      openSearchPopup(term);
     }
   }
 
@@ -229,6 +313,7 @@
     popupLoading = true;
     try {
       popupResults = await api.listProducts(term, false, 30);
+      popupHighlight = 0;
     } catch (e) {
       toastError(e);
     } finally {
@@ -239,12 +324,38 @@
   function onPopupInput() {
     debouncedPopupSearch(popupQuery);
   }
-  function pickFromPopup(p: ProductWithStock) {
-    addToCart(p);
+  function scrollPopupHighlightIntoView() {
+    document.querySelector(`[data-sr-index="${popupHighlight}"]`)?.scrollIntoView({ block: "nearest" });
+  }
+  function onPopupKey(e: KeyboardEvent) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (popupResults.length) popupHighlight = Math.min(popupHighlight + 1, popupResults.length - 1);
+      scrollPopupHighlightIntoView();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (popupResults.length) popupHighlight = Math.max(popupHighlight - 1, 0);
+      scrollPopupHighlightIntoView();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const p = popupResults[popupHighlight];
+      if (p) pickFromPopup(p);
+    }
+  }
+  async function pickFromPopup(p: ProductWithStock) {
+    addToCart(p, scanQty);
     showSearchPopup = false;
     popupQuery = "";
     popupResults = [];
     search = "";
+    scanQty = 1;
+    await tick();
+    scanInputEl?.focus();
+  }
+
+  const paidDisplay = $derived(formatMoneyInput(paid));
+  function onPaidInput(e: Event) {
+    onMoneyInput(e, (n) => (paid = n));
   }
 
   function setQty(line: CartLine, qty: number) {
@@ -306,9 +417,9 @@
   }
 
   async function doCheckout() {
-    if (cart.length === 0) return showToast("Keranjang kosong.", "info");
-    if (paid < total) return showToast("Pembayaran kurang dari total.", "error");
-    if (!activeShift) return showToast("Buka shift terlebih dahulu sebelum bertransaksi.", "error");
+    if (cart.length === 0) return (warningModal = "Keranjang kosong.");
+    if (paid < total) return (warningModal = "Pembayaran kurang dari total.");
+    if (!activeShift) return (warningModal = "Buka shift terlebih dahulu sebelum bertransaksi.");
     busy = true;
     try {
       const sale: SaleInput = {
@@ -330,10 +441,12 @@
       lastReceipt = tx;
       showPrintConfirm = true;
       showToast(`Transaksi ${tx.invoice_no} tersimpan.`, "success");
+      markTransactionsDirty();
       clearCart();
       selectedCustomer = null;
       customerSearch = "";
       tanggal = todayIso();
+      paymentMethod = "Tunai";
     } catch (e) {
       toastError(e);
     } finally {
@@ -354,6 +467,7 @@
   }
 
   function onGlobalKey(e: KeyboardEvent) {
+    if (tabId && $activeTabId !== tabId) return;
     if (!activeShift) return;
     if (e.key === "F3") {
       e.preventDefault();
@@ -376,9 +490,14 @@
 <div class="pos-page">
 <!-- Informasi header transaksi -->
 <div class="pos-header">
+  <div class="pos-meta-grid">
   <div class="pos-meta">
     <span class="meta-label">No. Struk</span>
     <span class="meta-val mono">{lastReceipt ? lastReceipt.invoice_no : "— (auto)"}</span>
+  </div>
+  <div class="pos-meta">
+    <span class="meta-label">Kasir</span>
+    <span class="meta-val">{$currentUser?.name ?? $currentUser?.username ?? "—"}</span>
   </div>
   <div class="pos-meta">
     <span class="meta-label">Tanggal</span>
@@ -391,10 +510,6 @@
   <div class="pos-meta">
     <span class="meta-label">Jam</span>
     <span class="meta-val mono">{formatTime(clock.now)}</span>
-  </div>
-  <div class="pos-meta">
-    <span class="meta-label">Kasir</span>
-    <span class="meta-val">{$currentUser?.name ?? $currentUser?.username ?? "—"}</span>
   </div>
   <div class="pos-meta pos-customer">
     <span class="meta-label">Pelanggan</span>
@@ -419,12 +534,10 @@
       </div>
     {/if}
   </div>
-  <div class="header-actions">
-    <button class="btn-ghost" disabled={cart.length === 0} onclick={holdCurrentCart} title="Tahan transaksi ini, layani pelanggan lain dulu (F5)">⏸ Pending (F5)</button>
-    {#if $pendingSales.length > 0}
-      <button class="btn-ghost" onclick={() => (showPendingList = true)}>📋 Pending ({$pendingSales.length})</button>
-    {/if}
-    <button class="btn-ghost" disabled={cart.length === 0} onclick={clearCart} title="Kosongkan keranjang (F6)">🗑 Kosongkan (F6)</button>
+  </div>
+  <div class="pos-total-box">
+    <span class="mono total-num">{formatIDR(total)}</span>
+    <div class="kembalian-row"><span>Kembalian</span><span class="mono">{formatIDR(change)}</span></div>
   </div>
 </div>
 
@@ -448,7 +561,14 @@
   <section class="main-panel">
     <!-- Baris scan + item count -->
     <div class="scan-row">
-      <input class="scan-input" placeholder="Scan barcode / cari nama lalu Enter…" bind:value={search} onkeydown={onSearchKey} disabled={searchBusy} />
+      <input class="scan-input" bind:this={scanInputEl} placeholder="Scan barcode / cari nama lalu Enter…" bind:value={search} onkeydown={onSearchKey} disabled={searchBusy} />
+      <input
+        class="scan-qty mono"
+        type="number"
+        min="1"
+        bind:value={scanQty}
+        title="Jumlah untuk scan berikutnya"
+      />
       <button class="btn-ghost" title="Cari nama barang (F3)" onclick={() => openSearchPopup(search.trim())}>🔍</button>
       {#if cart.length > 0}
         <span class="item-count">{cart.reduce((s, l) => s + l.qty, 0)} item</span>
@@ -456,7 +576,7 @@
     </div>
 
     <!-- Tabel keranjang -->
-    <div class="cart-table-wrap">
+    <div class="cart-table-wrap" bind:this={cartWrapEl} tabindex="-1" role="grid" aria-label="Keranjang belanja" onkeydown={onCartKey}>
       <table class="cart-table">
         <thead>
           <tr>
@@ -471,7 +591,10 @@
         </thead>
         <tbody>
           {#each cart as line, i (line.product_id)}
-            <tr>
+            <tr
+              onclick={() => (selectedCartId = line.product_id)}
+              style={selectedCartId === line.product_id ? "background:var(--baby-blue-soft);" : ""}
+            >
               <td class="mono text-dim">{i + 1}</td>
               <td>
                 <div class="cl-name">
@@ -524,21 +647,17 @@
   <!-- Kanan: panel pembayaran (tetap) -->
   <section class="pay-panel card">
     <div class="totals">
+      <div class="trow"><span>Jumlah Barang</span><span class="mono">{formatQty(totalQty)}</span></div>
       <div class="trow"><span>Subtotal</span><span class="mono">{formatIDR(subtotal)}</span></div>
       <div class="trow"><span>Diskon</span><span class="mono">−{formatIDR(totalDiscount)}</span></div>
-      <div class="trow grand"><span>Total</span><span class="mono">{formatIDR(total)}</span></div>
     </div>
-    <div class="change-block">
-      <div class="trow grand"><span>Kembalian</span><span class="mono">{formatIDR(change)}</span></div>
-    </div>
-
     <div class="pay">
       <label>Metode Pembayaran</label>
       <div class="pay-methods">
         {#each payments as m}<button class:active={paymentMethod === m} onclick={() => (paymentMethod = m)}>{m}</button>{/each}
       </div>
       <label>Bayar</label>
-      <input class="mono" type="number" min="0" bind:value={paid} />
+      <input class="mono" type="text" inputmode="numeric" bind:this={paidInputEl} value={paidDisplay} oninput={onPaidInput} />
       <div class="quick">
         <button onclick={() => (paid = total)}>Uang Pas</button>
         <button onclick={() => (paid = 50000)}>50rb</button>
@@ -550,10 +669,13 @@
 </div>
 
 <div class="shortcut-bar no-print">
-  <span><kbd>F3</kbd> Cari Barang</span>
-  <span><kbd>F5</kbd> Pending</span>
-  <span><kbd>F6</kbd> Kosongkan</span>
-  <span><kbd>F9</kbd> Bayar &amp; Simpan</span>
+  <button class="shortcut-item" onclick={() => openSearchPopup(search.trim())}><kbd>F3</kbd> Cari Barang</button>
+  <button class="shortcut-item" disabled={cart.length === 0} onclick={holdCurrentCart}><kbd>F5</kbd> Pending</button>
+  {#if $pendingSales.length > 0}
+    <button class="shortcut-item" onclick={() => (showPendingList = true)}>📋 Lihat Pending ({$pendingSales.length})</button>
+  {/if}
+  <button class="shortcut-item" disabled={cart.length === 0} onclick={clearCart}><kbd>F6</kbd> Kosongkan</button>
+  <button class="shortcut-item" disabled={busy || cart.length === 0} onclick={doCheckout}><kbd>F9</kbd> Bayar &amp; Simpan</button>
 </div>
 {/if}
 </div>
@@ -568,6 +690,17 @@
         <button class="btn-ghost" style="flex:1;" onclick={() => (showPrintConfirm = false)}>Tidak</button>
         <button class="btn-primary" style="flex:1;" onclick={doPrintReceipt}>🖨️ Cetak Struk</button>
       </div>
+    </div>
+  </div>
+{/if}
+
+{#if warningModal}
+  <div class="modal-backdrop" onclick={() => (warningModal = null)} role="presentation">
+    <div class="modal stock-alert" onclick={(e) => e.stopPropagation()} role="presentation">
+      <div class="stock-alert-icon">⚠️</div>
+      <h2>Belum Bisa Checkout</h2>
+      <p class="text-dim" style="margin:0.3rem 0 1rem;">{warningModal}</p>
+      <button class="btn-primary" style="width:100%;" onclick={() => (warningModal = null)}>Tutup</button>
     </div>
   </div>
 {/if}
@@ -625,14 +758,15 @@
         placeholder="Ketik nama atau barcode…"
         bind:value={popupQuery}
         oninput={onPopupInput}
+        onkeydown={onPopupKey}
         autofocus
       />
       <div class="popup-results">
         {#if popupLoading}
           <div class="sr-empty text-dim">Mencari…</div>
         {:else}
-          {#each popupResults as p (p.id)}
-            <button class="sr-row" onclick={() => pickFromPopup(p)}>
+          {#each popupResults as p, i (p.id)}
+            <button class="sr-row" class:active={i === popupHighlight} data-sr-index={i} onclick={() => pickFromPopup(p)}>
               <span class="sr-name">{p.name}</span>
               <span class="sr-meta text-dim">{p.barcode ?? ""}</span>
               <span class="sr-price mono">{formatIDR(p.sell_price)}</span>
@@ -658,42 +792,77 @@
 
   .pos-header {
     display: flex;
-    align-items: center;
-    gap: 1.5rem;
+    align-items: stretch;
+    gap: 1rem;
     background: var(--white);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 0.55rem 1rem;
-    margin-bottom: 0.7rem;
-    flex-wrap: wrap;
+    padding: 0.5rem 0.8rem;
+    margin-bottom: 0.5rem;
     flex-shrink: 0;
   }
-  .pos-meta { display:flex; flex-direction:column; gap:0.05rem; }
-  .meta-label { font-size:0.7rem; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; }
-  .meta-val { font-size:0.9rem; font-weight:600; }
-  .tanggal-input { width:150px; padding:0.3rem 0.5rem; font-size:0.85rem; }
-  .pos-customer { min-width:220px; }
-  .pos-customer input { width:220px; padding:0.35rem 0.5rem; font-size:0.85rem; }
-  .header-actions { display:flex; align-items:center; gap:0.5rem; margin-left:auto; }
+  /* No.Struk+Kasir, Tanggal+Jam berpasangan; Pelanggan penuh 2 kolom (poin 4-6) */
+  .pos-meta-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.25rem 1.2rem;
+    flex: 1;
+    min-width: 0;
+    align-content: center;
+  }
+  .pos-meta { display:flex; flex-direction:column; gap:0.02rem; }
+  .meta-label { font-size:0.62rem; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; }
+  .meta-val { font-size:0.8rem; font-weight:600; }
+  .tanggal-input { width:135px; padding:0.2rem 0.4rem; font-size:0.78rem; }
+  .pos-customer { grid-column: 1 / 3; min-width:0; }
+  .pos-customer input { width:100%; max-width:320px; padding:0.25rem 0.4rem; font-size:0.78rem; }
+
+  /* Total besar + Kembalian kecil di kanan header, gantikan posisi lama di
+     panel bayar (poin A2/A5) — sesuai mockup yang dikirim. */
+  .pos-total-box {
+    flex-shrink: 0;
+    min-width: 260px;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
+    gap: 0.25rem;
+    background: var(--baby-blue-bg);
+    border-radius: var(--radius);
+    padding: 0.4rem 1rem;
+  }
+  .total-num { font-size: 2.7rem; font-weight: 800; line-height: 1; text-align: right; }
+  .kembalian-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 0.82rem; color: var(--text-dim);
+    border-top: 1px solid var(--border); padding-top: 0.25rem;
+  }
+  .kembalian-row .mono { font-weight: 700; color: var(--text); font-size: 0.95rem; }
 
   /* Layout utama: sisa tinggi setelah header, hanya cart-table-wrap yang scroll */
-  .pos { display:grid; grid-template-columns:1fr 340px; gap:0.9rem; flex:1; min-height:0; }
+  .pos { display:grid; grid-template-columns:1fr 400px; gap:0.9rem; flex:1; min-height:0; }
 
   /* Panel kiri */
   .main-panel { display:flex; flex-direction:column; gap:0.5rem; min-height:0; overflow:hidden; }
 
-  /* Bar shortcut keyboard di bawah */
+  /* Bar shortcut keyboard di bawah — sekaligus tombol Pending/Kosongkan (poin 8) */
   .shortcut-bar {
     flex-shrink: 0;
-    display: flex; flex-wrap: wrap; gap: 1rem;
-    margin-top: 0.6rem; padding: 0.4rem 0.2rem;
-    font-size: 0.78rem; color: var(--text-dim);
+    display: flex; flex-wrap: wrap; gap: 0.6rem;
+    margin-top: 0.6rem; padding: 0.3rem 0.2rem;
   }
+  .shortcut-item {
+    display: flex; align-items: center; gap: 0.3rem;
+    background: transparent; border: 1px solid transparent; border-radius: 6px;
+    padding: 0.25rem 0.5rem; font-size: 0.78rem; color: var(--text-dim);
+  }
+  .shortcut-item:hover:not(:disabled) { background: var(--baby-blue-bg); border-color: var(--border); color: var(--text); }
+  .shortcut-item:disabled { opacity: 0.45; cursor: default; }
   .shortcut-bar kbd {
     display: inline-block; min-width: 1.6rem; text-align: center;
     font-family: inherit; font-weight: 700; font-size: 0.72rem;
     background: var(--baby-blue-bg); border: 1px solid var(--border);
-    border-radius: 4px; padding: 0.08rem 0.3rem; margin-right: 0.3rem;
+    border-radius: 4px; padding: 0.08rem 0.3rem;
   }
 
   /* Popup konfirmasi cetak struk setelah transaksi tersimpan */
@@ -702,6 +871,7 @@
   /* Baris scan */
   .scan-row { display:flex; align-items:center; gap:0.6rem; }
   .scan-input { flex:1; font-size:1.25rem; padding:0.85rem 1rem; }
+  .scan-qty { width:64px; text-align:center; font-size:1.1rem; padding:0.85rem 0.3rem; flex-shrink:0; }
   .item-count {
     white-space:nowrap; font-size:0.8rem; font-weight:700;
     background:var(--primary); color:#fff;
@@ -747,12 +917,15 @@
     font-size: 0.85rem;
   }
   .sr-row:last-child { border-bottom: none; }
+  .sr-row.active { background: var(--baby-blue-soft); }
   .sr-name { font-weight: 600; }
   .sr-meta, .sr-stock { font-size: 0.78rem; }
   .sr-empty { padding: 0.7rem 0.8rem; font-size: 0.85rem; }
 
-  /* Tabel keranjang */
-  .cart-table-wrap { flex:1; min-height:0; overflow-y:auto; border:1px solid var(--border); border-radius:var(--radius); background:var(--white); }
+  /* Tabel keranjang — sengaja dipangkas ~5 baris kelihatan (scroll untuk sisanya),
+     supaya header di atas (No.Struk/Kasir/Tanggal/Jam/Pelanggan + Total besar)
+     bisa lebih lega (poin 3). */
+  .cart-table-wrap { max-height:260px; overflow-y:auto; border:1px solid var(--border); border-radius:var(--radius); background:var(--white); }
   .cart-table { width:100%; border-collapse:collapse; }
   .cart-table thead th {
     background: var(--baby-blue-bg);
@@ -786,8 +959,6 @@
   .pay-panel { display:flex; flex-direction:column; min-height:0; overflow-y:auto; }
   .totals { border-bottom:1px solid var(--border); padding-bottom:0.4rem; margin-bottom:0.35rem; flex-shrink:0; }
   .trow { display:flex; justify-content:space-between; padding:0.12rem 0; }
-  .trow.grand { font-size:1.05rem; font-weight:700; border-top:1px solid var(--border); margin-top:0.2rem; padding-top:0.3rem; }
-  .change-block { border-top:1px dashed var(--border); margin:0.25rem 0 0.4rem; padding-top:0.3rem; flex-shrink:0; }
   .pay { flex:1; min-height:0; display:flex; flex-direction:column; gap:0.3rem; }
   .pay label { font-size:0.78rem; font-weight:600; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.04em; margin:0; }
   .pay-methods { display:grid; grid-template-columns:repeat(2,1fr); gap:0.3rem; }

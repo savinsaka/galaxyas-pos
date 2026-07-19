@@ -1,6 +1,10 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import { api } from "$lib/api";
   import { showToast, toastError } from "$lib/toast";
+  import { setTabDirty, clearTabDirty } from "$lib/stores/tabGuard";
+  import { closeTab } from "$lib/stores/tabs";
+  import { formatMoneyInput, onMoneyInput } from "$lib/moneyInput";
   import type { Product, ProductInput } from "$lib/types";
   import BrandPicker from "$lib/components/BrandPicker.svelte";
 
@@ -9,11 +13,13 @@
     submitLabel = "Simpan",
     resetAfterSave = false,
     onSaved = () => {},
+    tabId,
   }: {
     initial?: ProductInput | null;
     submitLabel?: string;
     resetAfterSave?: boolean;
     onSaved?: (p: Product) => void;
+    tabId?: string;
   } = $props();
 
   const blank = (): ProductInput => ({
@@ -31,6 +37,16 @@
 
   let form = $state<ProductInput>(initial ? { ...initial } : blank());
   let busy = $state(false);
+  /** Pilihan setelah simpan (hanya saat resetAfterSave — dipakai tab "Tambah
+   * Barang" — bukan saat form ini dipakai di modal edit/duplikasi). */
+  let savedInput = $state<ProductInput | null>(null);
+
+  // Dirty hanya dipantau kalau dipakai sebagai tab mandiri (Tambah Barang),
+  // bukan saat dipakai di modal edit/duplikasi (tabId tidak dikirim).
+  $effect(() => {
+    if (tabId) setTabDirty(tabId, JSON.stringify(form) !== JSON.stringify(blank()));
+  });
+  onDestroy(() => { if (tabId) clearTabDirty(tabId); });
 
   async function save(e: Event) {
     e.preventDefault();
@@ -51,12 +67,25 @@
       const saved = await api.saveProduct({ ...form, barcode: bc });
       showToast("Barang tersimpan.", "success");
       onSaved(saved);
-      if (resetAfterSave) form = blank();
+      if (resetAfterSave) savedInput = { ...form, barcode: bc };
     } catch (e) {
       toastError(e);
     } finally {
       busy = false;
     }
+  }
+
+  function afterSaveTutup() {
+    if (tabId) { clearTabDirty(tabId); closeTab(tabId); }
+    savedInput = null;
+  }
+  function afterSaveLanjut() {
+    form = blank();
+    savedInput = null;
+  }
+  function afterSaveDuplikat() {
+    if (savedInput) form = { ...savedInput, id: null, barcode: "" };
+    savedInput = null;
   }
 </script>
 
@@ -84,15 +113,15 @@
     </div>
     <div>
       <label>Harga Pokok *</label>
-      <input type="number" min="1" bind:value={form.cost_price} />
+      <input class="mono" inputmode="decimal" value={formatMoneyInput(form.cost_price)} oninput={(e) => onMoneyInput(e, (n) => (form.cost_price = n))} />
     </div>
     <div>
       <label>Harga Jual *</label>
-      <input type="number" min="1" bind:value={form.sell_price} />
+      <input class="mono" inputmode="decimal" value={formatMoneyInput(form.sell_price)} oninput={(e) => onMoneyInput(e, (n) => (form.sell_price = n))} />
     </div>
     <div>
       <label>Default Diskon (Rp)</label>
-      <input type="number" min="0" bind:value={form.default_discount} />
+      <input class="mono" inputmode="decimal" value={formatMoneyInput(form.default_discount)} oninput={(e) => onMoneyInput(e, (n) => (form.default_discount = n))} />
     </div>
     <div>
       <label>Status</label>
@@ -105,3 +134,18 @@
     <button class="btn-primary" disabled={busy} type="submit">{submitLabel}</button>
   </div>
 </form>
+
+{#if savedInput}
+  <div class="modal-backdrop" onclick={afterSaveLanjut} role="presentation">
+    <div class="modal" style="max-width:380px; text-align:center;" onclick={(e) => e.stopPropagation()} role="presentation">
+      <div style="font-size:2.2rem; margin-bottom:0.3rem;">✅</div>
+      <h2>"{savedInput.name}" Tersimpan</h2>
+      <p class="text-dim" style="margin:0.3rem 0 1rem;">Mau lanjut ke mana?</p>
+      <div style="display:flex; flex-direction:column; gap:0.5rem;">
+        <button class="btn-primary" onclick={afterSaveLanjut}>➕ Simpan &amp; Lanjut (form baru kosong)</button>
+        <button onclick={afterSaveDuplikat}>📑 Simpan &amp; Duplikat (isian tetap, barcode dikosongkan)</button>
+        <button class="btn-ghost" onclick={afterSaveTutup}>✔️ Simpan &amp; Tutup</button>
+      </div>
+    </div>
+  </div>
+{/if}

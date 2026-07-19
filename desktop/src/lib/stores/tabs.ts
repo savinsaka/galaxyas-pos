@@ -1,4 +1,5 @@
 import { writable, get } from "svelte/store";
+import { confirmCloseTab, clearTabDirty } from "./tabGuard";
 
 export interface TabDef {
   id: string;
@@ -43,10 +44,12 @@ export function openTab(opts: OpenTabOptions): string {
 }
 
 export function closeTab(id: string) {
+  if (!confirmCloseTab(id)) return;
   const list = get(tabs);
   const idx = list.findIndex((t) => t.id === id);
   const next = list.filter((t) => t.id !== id);
   tabs.set(next);
+  clearTabDirty(id);
   if (get(activeTabId) === id) {
     const fallback = next[idx] ?? next[idx - 1] ?? next[next.length - 1] ?? null;
     activeTabId.set(fallback ? fallback.id : null);

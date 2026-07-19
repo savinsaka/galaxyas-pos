@@ -10,11 +10,15 @@
   import { createLiveClock } from "$lib/liveClock.svelte";
   import { todayIso, combineDateAndTime } from "$lib/dateTime";
   import type { ProductWithStock, StockMovement } from "$lib/types";
+  import { setTabDirty, clearTabDirty } from "$lib/stores/tabGuard";
   import MonthPager from "$lib/components/MonthPager.svelte";
   import ProductSearchPopup from "$lib/components/ProductSearchPopup.svelte";
 
+  let { tabId }: { tabId?: string } = $props();
+
   const clock = createLiveClock();
   onDestroy(() => clock.stop());
+  onDestroy(() => { if (tabId) clearTabDirty(tabId); });
 
   const IMPORT_HEADERS = ["kode_barcode", "nama", "fisik", "keterangan"];
   const IMPORT_EXAMPLE = [
@@ -45,6 +49,9 @@
   let showPopup = $state(false);
 
   const selisih = $derived(selected ? fisik - selected.stock_qty : 0);
+  $effect(() => {
+    if (tabId) setTabDirty(tabId, selected !== null);
+  });
   const filtered = $derived(
     search.trim()
       ? products.filter(
@@ -203,11 +210,12 @@
   }
 </script>
 
+<div class="view-flex">
 <div class="page-head"><h1>Stok Opname</h1></div>
 
 <div class="op-grid">
   <!-- Form input -->
-  <div class="card form-card">
+  <div class="card form-card" style="overflow-y:auto;">
     <h2>Input Opname</h2>
 
     <div class="row op-datetime">
@@ -317,12 +325,12 @@
   </div>
 
   <!-- Riwayat opname terakhir -->
-  <div class="card" style="padding:0; overflow:hidden;">
-    <div style="padding:0.7rem 0.9rem; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.5rem;">
+  <div class="card history-card">
+    <div style="padding:0.7rem 0.9rem; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.5rem; flex-shrink:0;">
       <span style="font-weight:650;">Riwayat Opname Terakhir</span>
       <MonthPager bind:from bind:to onchange={load} />
     </div>
-    <div style="max-height:480px; overflow-y:auto;">
+    <div class="history-scroll">
       <table>
         <thead>
           <tr>
@@ -348,6 +356,7 @@
     </div>
   </div>
 </div>
+</div>
 
 {#if showPopup}
   <ProductSearchPopup
@@ -358,7 +367,10 @@
 {/if}
 
 <style>
-  .op-grid { display: grid; grid-template-columns: 400px 1fr; gap: 1rem; align-items: start; }
+  .view-flex { height:100%; min-height:0; display:flex; flex-direction:column; }
+  .op-grid { display: grid; grid-template-columns: 400px 1fr; gap: 1rem; flex:1; min-height:0; }
+  .history-card { padding:0; overflow:hidden; display:flex; flex-direction:column; min-height:0; }
+  .history-scroll { flex:1; min-height:0; overflow-y:auto; }
   .form-card { display: flex; flex-direction: column; gap: 0.5rem; }
   .op-datetime { gap: 1.2rem; margin-bottom: 0.3rem; }
   .trx-field { display: flex; flex-direction: column; gap: 0.2rem; }

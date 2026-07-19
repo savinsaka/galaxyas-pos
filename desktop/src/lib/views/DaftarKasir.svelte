@@ -90,6 +90,17 @@
     loadTodayTotal();
   });
 
+  function onListKey(e: KeyboardEvent) {
+    const idx = sortedTransactions.findIndex((t) => t.id === selectedId);
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      selectedId = idx < 0 ? sortedTransactions[0]?.id ?? null : (sortedTransactions[idx + 1]?.id ?? selectedId);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (idx > 0) selectedId = sortedTransactions[idx - 1].id;
+    }
+  }
+
   function tambah() {
     const n = get(tabs).filter((t) => t.viewKey === "kasir-pos").length + 1;
     openTab({ viewKey: "kasir-pos", title: `Kasir ${n}`, icon: "🛒", singleton: false });
@@ -127,17 +138,18 @@
   }
 </script>
 
+<div class="view-flex">
 <div class="page-head">
   <h1>Daftar Kasir</h1>
   <span class="text-dim">Penjualan hari ini: <strong class="mono">{formatIDR(totalToday)}</strong></span>
 </div>
 
-<div class="card" style="margin-bottom:0.8rem;">
+<div class="card" style="margin-bottom:0.8rem; flex-shrink:0;">
   <MonthPager bind:from bind:to onchange={reload} />
 </div>
 
-<div class="card" style="padding:0; overflow:hidden;">
-  <div style="max-height:calc(100vh - 360px); overflow:auto;">
+<div class="card list-card">
+  <div class="list-scroll" tabindex="-1" role="grid" aria-label="Daftar Kasir" onkeydown={onListKey}>
     <table>
       <thead>
         <tr>
@@ -148,7 +160,7 @@
       </thead>
       <tbody>
         {#each sortedTransactions as t (t.id)}
-          <tr onclick={() => (selectedId = t.id)} style={selectedId === t.id ? "background:var(--baby-blue-soft);" : ""}>
+          <tr onclick={(e) => { selectedId = t.id; (e.currentTarget.closest(".list-scroll") as HTMLElement)?.focus(); }} style={selectedId === t.id ? "background:var(--baby-blue-soft);" : ""}>
             <td class="mono">{t.invoice_no}</td>
             <td>{formatDateTime(t.created_at)}</td>
             <td>{t.cashier_id}</td>
@@ -181,6 +193,7 @@
   <button class="btn-danger" onclick={hapus} disabled={!selected}>🗑️ Hapus</button>
   <button class="btn-primary" onclick={() => (showLaporan = true)}>📊 Laporan</button>
 </div>
+</div>
 
 {#if detail}
   <Receipt {detail} {storeName} {footer} onClose={() => (detail = null)} />
@@ -195,10 +208,16 @@
 {/if}
 
 <style>
+  /* Kolom flex penuh tinggi workspace — hanya tabel yang scroll sendiri,
+     header/pager/bottom-bar tetap diam di tempat (lihat KasirPOS.svelte). */
+  .view-flex { height:100%; min-height:0; display:flex; flex-direction:column; }
+  .list-card { padding:0; overflow:hidden; flex:1; min-height:0; display:flex; flex-direction:column; }
+  .list-scroll { flex:1; min-height:0; overflow:auto; }
+
   .sortable { cursor: pointer; user-select: none; }
   .sortable:hover { color: var(--primary); }
   .pager {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 0.5rem 0.9rem; border-top: 1px solid var(--border);
+    padding: 0.5rem 0.9rem; border-top: 1px solid var(--border); flex-shrink:0;
   }
 </style>
