@@ -232,6 +232,18 @@ export interface StockMovementBatchPage {
   total: number;
 }
 
+// ---------- Bridge: Pull dari app mobile (galaxyas-mobile, fase 6) ----------
+// Satu baris menu Barang yang barcode+qty dikirimnya sudah keisi (siap di-pull).
+
+export interface PullItem {
+  id: string;
+  barcode: string;
+  name: string | null;
+  qty_dikirim: number;
+  /** false = barcode ini belum match produk apa pun di database toko ini. */
+  known_locally: boolean;
+}
+
 export interface DiscountPeriod {
   id: string;
   code: string;

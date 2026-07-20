@@ -943,6 +943,180 @@ pub async fn sync_all(state: State<'_, AppState>) -> AppResult<SyncResult> {
     })
 }
 
+// ---------- Bridge: Pull dari app mobile (galaxyas-mobile, fase 6) ----------
+//
+// TERPISAH TOTAL dari sync di atas: bridge ini bicara ke server GALAXYAS
+// Mobile (database & auth beda) buat narik batch pengiriman yang dicatat
+// Pengirim lewat app mobile, lalu menuliskannya ke stock_movements lokal —
+// sama seperti "Simpan Semua Item" manual di Item Masuk, cuma sumber datanya
+// dari Pull, bukan input tangan. Dipanggil oleh menu Item Masuk (Pull.svelte).
+
+fn read_bridge_config(state: &State<'_, AppState>) -> AppResult<(String, String)> {
+    let conn = state.lock()?;
+    let server_url = db::get_setting(&conn, "mobile_server_url")?
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::Config("URL server mobile belum diatur (menu Pengaturan).".into()))?;
+    let api_key = db::get_setting(&conn, "mobile_store_api_key")?
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::Config("API key toko belum diatur (menu Pengaturan).".into()))?;
+    Ok((server_url, api_key))
+}
+
+/// Cari produk lokal by barcode, atau buat baru kalau belum ada (barang baru
+/// dari Pengirim yang belum pernah tercatat di POS toko ini). Menghormati
+/// mode Server Pusat (LAN) sama seperti `find_by_barcode`/`save_product`.
+async fn resolve_or_create_product(
+    state: &State<'_, AppState>,
+    barcode: &str,
+    fallback_name: &str,
+) -> AppResult<String> {
+    if let Some(remote) = state.remote_config() {
+        let existing: Option<ProductWithStock> =
+            crate::lan::call(&remote, "find_by_barcode", serde_json::json!({ "barcode": barcode })).await?;
+        if let Some(p) = existing {
+            return Ok(p.product.id);
+        }
+        let input = ProductInput {
+            id: None,
+            name: fallback_name.to_string(),
+            barcode: Some(barcode.to_string()),
+            category: None,
+            brand: None,
+            unit: None,
+            sell_price: 0.0,
+            cost_price: 0.0,
+            default_discount: 0.0,
+            is_active: true,
+        };
+        let created: Product =
+            crate::lan::call(&remote, "save_product", serde_json::json!({ "input": input })).await?;
+        return Ok(created.id);
+    }
+
+    let conn = state.lock()?;
+    if let Some(existing) = db::find_by_barcode(&conn, barcode)? {
+        return Ok(existing.product.id);
+    }
+    let created = db::upsert_product(
+        &conn,
+        ProductInput {
+            id: None,
+            name: fallback_name.to_string(),
+            barcode: Some(barcode.to_string()),
+            category: None,
+            brand: None,
+            unit: None,
+            sell_price: 0.0,
+            cost_price: 0.0,
+            default_discount: 0.0,
+            is_active: true,
+        },
+    )?;
+    Ok(created.id)
+}
+
+/// Cek apakah barcode ini match ke produk yang sudah ada di database toko
+/// ini — dipakai bridge_list_pending buat nandain barcode "gak dikenal" ke
+/// frontend (⚠), bukan buat resolusi produk aslinya (itu tetap di
+/// resolve_or_create_product saat konfirmasi).
+async fn is_known_locally(state: &State<'_, AppState>, barcode: &str) -> AppResult<bool> {
+    if let Some(remote) = state.remote_config() {
+        let existing: Option<ProductWithStock> =
+            crate::lan::call(&remote, "find_by_barcode", serde_json::json!({ "barcode": barcode })).await?;
+        return Ok(existing.is_some());
+    }
+    let conn = state.lock()?;
+    Ok(db::find_by_barcode(&conn, barcode)?.is_some())
+}
+
+/// Daftar baris menu Barang yang masih menunggu di-pull buat toko ini
+/// (barcode+qty dikirim sudah keisi di app mobile). App mobile TIDAK connect
+/// ke katalog POS — nama barang di sana cuma referensi manual, jadi di sini
+/// tiap barcode dicek lokal & ditandai kalau belum dikenal produk POS toko ini.
+#[tauri::command]
+pub async fn bridge_list_pending(state: State<'_, AppState>) -> AppResult<Vec<crate::pull::PullItem>> {
+    let (server_url, api_key) = read_bridge_config(&state)?;
+    let mut items = crate::pull::list_pending(&server_url, &api_key).await?;
+    for item in &mut items {
+        item.known_locally = is_known_locally(&state, &item.barcode).await?;
+    }
+    Ok(items)
+}
+
+/// Konfirmasi sejumlah baris sekaligus: `items` dikirim balik dari frontend
+/// dengan qty_dikirim yang SUDAH dikoreksi kasir kalau perlu (beda dari yang
+/// diklaim Pengirim). Nulis satu batch stock_movements lokal (kind=in) —
+/// tiap baris di-tag `[pull-row:<id>]` per item, baru menandai baris-baris
+/// itu `confirmed` di server.
+#[tauri::command]
+pub async fn bridge_confirm_pull(
+    state: State<'_, AppState>,
+    items: Vec<crate::pull::PullItem>,
+    user_id: Option<String>,
+) -> AppResult<crate::models::StockMovementBatchDetail> {
+    if items.is_empty() {
+        return Err(AppError::Other("Tidak ada baris yang dipilih.".into()));
+    }
+
+    {
+        let conn = state.lock()?;
+        for item in &items {
+            let tag = format!("[pull-row:{}]", item.id);
+            if db::stock_movement_note_contains(&conn, &tag)? {
+                return Err(AppError::Other(format!(
+                    "Baris {} sudah pernah ditulis ke stok lokal (kemungkinan konfirmasi ke server sempat \
+                     gagal di percobaan sebelumnya). Cek Daftar Item Masuk & hubungi Bos — jangan pull ulang.",
+                    item.barcode
+                )));
+            }
+        }
+    }
+
+    let mut batch_items = Vec::with_capacity(items.len());
+    for item in &items {
+        let fallback_name = item.name.clone().unwrap_or_else(|| item.barcode.clone());
+        let product_id = resolve_or_create_product(&state, &item.barcode, &fallback_name).await?;
+        batch_items.push(crate::models::StockMovementBatchItemInput {
+            product_id,
+            qty: item.qty_dikirim,
+            note: Some(format!("[pull-row:{}] dari app mobile", item.id)),
+        });
+    }
+
+    let input = crate::models::StockMovementBatchInput {
+        kind: "in".into(),
+        note: Some("Pull dari app mobile".into()),
+        user_id,
+        items: batch_items,
+        created_at: None,
+    };
+
+    let detail = if let Some(remote) = state.remote_config() {
+        crate::lan::call(&remote, "create_stock_movement_batch", serde_json::json!({ "input": input })).await?
+    } else {
+        let mut conn = state.lock()?;
+        db::create_stock_movement_batch(&mut conn, input)?
+    };
+
+    // Stok lokal sudah aman ke-tulis di atas. Kalau langkah di bawah ini
+    // gagal (mis. jaringan putus), baris-baris ini tetap `pending` di server
+    // — guard idempotensi di atas mencegah pull berikutnya nulis dobel ke stok.
+    let (server_url, api_key) = read_bridge_config(&state)?;
+    let confirmed_items: Vec<(String, f64)> = items.iter().map(|i| (i.id.clone(), i.qty_dikirim)).collect();
+    crate::pull::confirm(&server_url, &api_key, &confirmed_items).await?;
+
+    Ok(detail)
+}
+
+/// Tolak 1 baris (mis. ternyata salah kirim ke toko ini) — TIDAK menulis apa
+/// pun ke stok lokal.
+#[tauri::command]
+pub async fn bridge_reject_pull(state: State<'_, AppState>, row_id: String) -> AppResult<()> {
+    let (server_url, api_key) = read_bridge_config(&state)?;
+    crate::pull::reject(&server_url, &api_key, &row_id).await?;
+    Ok(())
+}
+
 // ---------- Server Pusat (LAN) ----------
 
 /// Port tetap untuk Server Pusat (dipakai host maupun ditampilkan ke user

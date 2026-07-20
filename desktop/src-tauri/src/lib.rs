@@ -3,6 +3,7 @@ mod db;
 mod error;
 mod lan;
 mod models;
+mod pull;
 mod servers;
 mod stores;
 mod sync;
@@ -169,6 +170,9 @@ pub fn run() {
             commands::sync_push,
             commands::sync_pull,
             commands::sync_all,
+            commands::bridge_list_pending,
+            commands::bridge_confirm_pull,
+            commands::bridge_reject_pull,
             commands::list_servers,
             commands::current_server,
             commands::ping_server,

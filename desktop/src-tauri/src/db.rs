@@ -1139,6 +1139,25 @@ fn stock_movement_batch_where(
     (sql, args)
 }
 
+/// Cek apakah sudah ada baris stock_movements lokal yang note-nya mengandung
+/// `needle` — dipakai bridge Pull (lihat commands.rs:bridge_confirm_pull)
+/// sebagai guard idempotensi PER BARIS menu Barang (di-tag `[pull-row:<id>]`
+/// per item), biar satu baris dari app mobile gak ketulis dobel ke stok
+/// kalau konfirmasi ke server sempat gagal di percobaan sebelumnya (bukan
+/// sebagai retry, tapi biar gagal jelas & aman).
+pub fn stock_movement_note_contains(conn: &Connection, needle: &str) -> AppResult<bool> {
+    let pattern = format!("%{needle}%");
+    let found: bool = conn
+        .query_row(
+            "SELECT 1 FROM stock_movements WHERE note LIKE ?1 LIMIT 1",
+            params![pattern],
+            |_| Ok(true),
+        )
+        .optional()?
+        .unwrap_or(false);
+    Ok(found)
+}
+
 pub fn list_stock_movement_batches(
     conn: &Connection,
     kind: Option<String>,

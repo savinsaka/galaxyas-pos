@@ -16,6 +16,7 @@ import type {
   OpenShiftInput,
   Product,
   ProductInput,
+  PullItem,
   ProductPage,
   ProductSalesRow,
   ProductWithStock,
@@ -191,6 +192,13 @@ export const api = {
   syncPush: () => invoke<SyncResult>("sync_push"),
   syncPull: () => invoke<SyncResult>("sync_pull"),
   syncAll: () => invoke<SyncResult>("sync_all"),
+
+  // Bridge: Pull dari app mobile (galaxyas-mobile, fase 6) — server & auth
+  // TERPISAH dari Sinkronisasi di atas (itu ke server POS, ini ke server mobile).
+  bridgeListPending: () => invoke<PullItem[]>("bridge_list_pending"),
+  bridgeConfirmPull: (items: PullItem[], userId: string | null) =>
+    invoke<StockMovementBatchDetail>("bridge_confirm_pull", { items, userId }),
+  bridgeRejectPull: (rowId: string) => invoke<void>("bridge_reject_pull", { rowId }),
 
   // Server Pusat (multi-kasir LAN)
   listServers: () => invoke<ServerInfo[]>("list_servers"),

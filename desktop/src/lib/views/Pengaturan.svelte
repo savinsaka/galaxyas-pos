@@ -45,6 +45,13 @@
     { key: "store_id", label: "ID Toko", hint: "Identitas untuk sinkronisasi" },
     { key: "server_url", label: "URL Server Sync", hint: "http://localhost:8000" },
   ];
+  // Server GALAXYAS Mobile (bridge tombol "Pull" di Item Masuk) — TERPISAH
+  // dari Server Sinkronisasi di atas (beda server, beda database, beda auth).
+  const mobileFields = [
+    { key: "mobile_server_url", label: "URL Server Mobile", hint: "https://mobile-api.jjapps.net" },
+    { key: "mobile_store_api_key", label: "API Key Toko", hint: "Diminta ke Bos (dari app mobile)" },
+  ];
+  let savingMobile = $state(false);
   const receiptKeys = [
     "receipt_paper", "receipt_printer", "receipt_font_size",
     "receipt_line_height", "receipt_margin", "receipt_header", "receipt_footer",
@@ -128,6 +135,8 @@
       settings.store_whatsapp ??= "";
       settings.store_id ??= "";
       settings.server_url ??= "";
+      settings.mobile_server_url ??= "";
+      settings.mobile_store_api_key ??= "";
       settings.tax_percent ??= "0";
       settings.theme ??= "baby-blue";
       activeTheme = settings.theme;
@@ -164,6 +173,14 @@
       for (const f of serverFields) await api.updateSetting(f.key, String(settings[f.key] ?? ""));
       showToast("Pengaturan server tersimpan.", "success");
     } catch (e) { toastError(e); } finally { savingServer = false; }
+  }
+
+  async function saveMobile() {
+    savingMobile = true;
+    try {
+      for (const f of mobileFields) await api.updateSetting(f.key, String(settings[f.key] ?? ""));
+      showToast("Pengaturan server mobile tersimpan.", "success");
+    } catch (e) { toastError(e); } finally { savingMobile = false; }
   }
 
   async function saveReceipt() {
@@ -294,6 +311,26 @@
     <div class="row" style="justify-content:flex-end;">
       <button class="btn-primary" disabled={savingServer} onclick={saveServer}>
         Simpan Pengaturan Server
+      </button>
+    </div>
+  </div>
+
+  <div class="card" style="max-width:520px; margin-top:0.8rem;">
+    <h2>Server Mobile (Bridge Pull)</h2>
+    <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
+      Server terpisah untuk app mobile (order/pengirim/absen/gaji/dst). Diisi
+      sekali agar tombol "Pull" di menu Item Masuk bisa menarik pengiriman
+      dari Pengirim. API Key didapat dari Bos lewat app mobile.
+    </p>
+    {#each mobileFields as f}
+      <div style="margin-bottom:0.9rem;">
+        <label>{f.label}</label>
+        <input bind:value={settings[f.key]} placeholder={f.hint} />
+      </div>
+    {/each}
+    <div class="row" style="justify-content:flex-end;">
+      <button class="btn-primary" disabled={savingMobile} onclick={saveMobile}>
+        Simpan Pengaturan Mobile
       </button>
     </div>
   </div>
