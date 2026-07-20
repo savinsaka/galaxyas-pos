@@ -92,6 +92,7 @@ export const RIBBON: RibbonCategory[] = [
         label: "Stok Opname",
         actions: [
           { key: "opname", label: "Opname", icon: "📊", viewKey: "opname", title: "Stok Opname", singleton: true },
+          { key: "opname-brand", label: "Opname per Merek", icon: "🗂️", viewKey: "opname-brand", title: "Opname per Merek", singleton: true },
         ],
       },
       {

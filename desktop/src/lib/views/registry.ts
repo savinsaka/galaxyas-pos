@@ -11,6 +11,7 @@ import DaftarKasir from "./DaftarKasir.svelte";
 import EditKasir from "./EditKasir.svelte";
 import KasirPOS from "./KasirPOS.svelte";
 import Opname from "./Opname.svelte";
+import OpnamePerMerek from "./OpnamePerMerek.svelte";
 import ItemMasuk from "./ItemMasuk.svelte";
 import ItemKeluar from "./ItemKeluar.svelte";
 import DaftarItemMasuk from "./DaftarItemMasuk.svelte";
@@ -39,6 +40,7 @@ export const VIEW_REGISTRY: Record<string, Component<any>> = {
   "edit-kasir": EditKasir,
   "kasir-pos": KasirPOS,
   opname: Opname,
+  "opname-brand": OpnamePerMerek,
   "item-masuk": ItemMasuk,
   "item-keluar": ItemKeluar,
   "daftar-item-masuk": DaftarItemMasuk,
