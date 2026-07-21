@@ -98,6 +98,29 @@
   --shadow-sm: 0 1px 3px rgba(139, 95, 191, 0.12);
   color-scheme: light;
 }
+/* Kontras tinggi — hitam pekat di atas putih, border & teks-dim tegas
+   (bukan pastel) untuk kondisi pencahayaan toko yang keras. */
+:root[data-theme="high-contrast"] {
+  --baby-blue: #000000;
+  --baby-blue-soft: #e0e0e0;
+  --baby-blue-bg: #f0f0f0;
+  --primary: #000000;
+  --primary-hover: #262626;
+  --primary-dark: #000000;
+  --white: #ffffff;
+  --bg: #ffffff;
+  --panel: #ffffff;
+  --border: #000000;
+  --border-strong: #000000;
+  --text: #000000;
+  --text-dim: #3d3d3d;
+  --success: #0a6e2d;
+  --danger: #b30000;
+  --warning: #8a5a00;
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
+  color-scheme: light;
+}
 
 * {
   box-sizing: border-box;

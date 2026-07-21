@@ -6,6 +6,7 @@
   import { debounce } from "$lib/debounce";
   import { activeTabId, closeTab } from "$lib/stores/tabs";
   import { markTransactionsDirty } from "$lib/stores/txSignal";
+  import { formatMoneyInput, onMoneyInput } from "$lib/moneyInput";
   import type { Customer, PaymentMethod, ProductWithStock, SaleInput, TransactionDetail } from "$lib/types";
 
   let { transactionId }: { transactionId: string } = $props();
@@ -23,6 +24,8 @@
   let lines = $state<EditLine[]>([]);
   let paymentMethod = $state<PaymentMethod>("Tunai");
   let paid = $state(0);
+  let paidCash = $state(0);
+  let paidQris = $state(0);
   let busy = $state(false);
 
   let search = $state("");
@@ -35,7 +38,14 @@
   let customerSearch = $state("");
   let selectedCustomer = $state<Customer | null>(null);
 
-  const payments: PaymentMethod[] = ["Tunai", "QRIS", "Transfer", "Kartu"];
+  const payments: PaymentMethod[] = ["Tunai", "QRIS", "Kombinasi", "Kartu"];
+
+  function onPaidCashInput(e: Event) {
+    onMoneyInput(e, (n) => { paidCash = n; paid = paidCash + paidQris; });
+  }
+  function onPaidQrisInput(e: Event) {
+    onMoneyInput(e, (n) => { paidQris = n; paid = paidCash + paidQris; });
+  }
 
   const subtotal = $derived(lines.reduce((s, l) => s + l.price * l.qty, 0));
   const totalDiscount = $derived(lines.reduce((s, l) => s + l.discount, 0));
@@ -70,6 +80,8 @@
       }));
       paymentMethod = (d.payment_method as PaymentMethod) ?? "Tunai";
       paid = d.paid;
+      paidCash = d.paid_cash ?? 0;
+      paidQris = d.paid_qris ?? 0;
       selectedCustomer = d.customer_id ? customers.find((x) => x.id === d.customer_id) ?? null : null;
     } catch (e) {
       toastError(e);
@@ -199,6 +211,7 @@
         })),
         customer_id: selectedCustomer?.id ?? null,
         shift_id: detail.shift_id,
+        ...(paymentMethod === "Kombinasi" ? { paid_cash: paidCash, paid_qris: paidQris } : {}),
       };
       await api.updateTransaction(detail.id, sale);
       showToast(`Transaksi ${detail.invoice_no} diperbarui.`, "success");
@@ -318,8 +331,15 @@
       <div class="trow"><span>Subtotal</span><span class="mono">{formatIDR(subtotal)}</span></div>
       <div class="trow"><span>Diskon</span><span class="mono">−{formatIDR(totalDiscount)}</span></div>
       <div class="trow grand"><span>Total</span><span class="mono">{formatIDR(total)}</span></div>
-      <label style="margin-top:0.6rem;">Bayar</label>
-      <input class="mono" type="number" min="0" bind:value={paid} />
+      {#if paymentMethod === "Kombinasi"}
+        <label style="margin-top:0.6rem;">QRIS</label>
+        <input class="mono" type="text" inputmode="numeric" value={formatMoneyInput(paidQris)} oninput={onPaidQrisInput} />
+        <label style="margin-top:0.4rem;">Tunai</label>
+        <input class="mono" type="text" inputmode="numeric" value={formatMoneyInput(paidCash)} oninput={onPaidCashInput} />
+      {:else}
+        <label style="margin-top:0.6rem;">Bayar</label>
+        <input class="mono" type="number" min="0" bind:value={paid} />
+      {/if}
       <div class="trow"><span>Kembalian</span><span class="mono">{formatIDR(change)}</span></div>
     </div>
   </div>

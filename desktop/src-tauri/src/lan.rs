@@ -344,6 +344,8 @@ fn dispatch(
             struct A {
                 from: Option<String>,
                 to: Option<String>,
+                #[serde(default)]
+                search: Option<String>,
                 limit: Option<i64>,
                 offset: Option<i64>,
             }
@@ -352,6 +354,7 @@ fn dispatch(
                 conn,
                 a.from,
                 a.to,
+                a.search,
                 a.limit.unwrap_or(100),
                 a.offset.unwrap_or(0),
             )?)

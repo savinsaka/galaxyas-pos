@@ -95,7 +95,8 @@ export const api = {
     to: string | null = null,
     limit = 50,
     offset = 0,
-  ) => invoke<TransactionPage>("list_transactions", { from, to, limit, offset }),
+    search: string | null = null,
+  ) => invoke<TransactionPage>("list_transactions", { from, to, search, limit, offset }),
   getTransaction: (id: string) =>
     invoke<TransactionDetail | null>("get_transaction", { id }),
   deleteTransaction: (id: string) => invoke<void>("delete_transaction", { id }),

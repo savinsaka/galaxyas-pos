@@ -10,9 +10,11 @@
   import { todayIso, combineDateAndTime } from "$lib/dateTime";
   import { markStockBatchesDirty } from "$lib/stores/stockBatchSignal";
   import { setTabDirty, clearTabDirty } from "$lib/stores/tabGuard";
+  import { activeTabId } from "$lib/stores/tabs";
   import type { ProductWithStock, StockKind, StockMovementBatchDetail } from "$lib/types";
   import ProductSearchPopup from "$lib/components/ProductSearchPopup.svelte";
   import StockDocPrint from "$lib/components/StockDocPrint.svelte";
+  import ShortcutBar from "$lib/components/ShortcutBar.svelte";
 
   let { kind, title, tabId }: { kind: StockKind; title: string; tabId?: string } = $props();
 
@@ -81,6 +83,21 @@
     } catch (e) { toastError(e); }
   }
   onMount(loadProducts);
+
+  // F9 = Simpan Semua Item, F6 = Tambah Baris — sama tombol dengan Kasir POS/
+  // Opname tapi beda arti per tab (legend ada di ShortcutBar di bawah tabel).
+  function onGlobalKey(e: KeyboardEvent) {
+    if (tabId && $activeTabId !== tabId) return;
+    if (e.key === "F9") {
+      e.preventDefault();
+      if (!busy) simpan();
+    } else if (e.key === "F6") {
+      e.preventDefault();
+      addRow();
+    }
+  }
+  onMount(() => window.addEventListener("keydown", onGlobalKey));
+  onDestroy(() => window.removeEventListener("keydown", onGlobalKey));
 
   async function onRowKey(e: KeyboardEvent, row: BatchRow) {
     const idx = rows.findIndex((r) => r.id === row.id);
@@ -467,6 +484,10 @@
   </button>
   <span class="text-dim" style="margin-left:auto; font-size:0.82rem;">Riwayat &amp; edit ada di menu "Daftar Item {verb}".</span>
 </div>
+<ShortcutBar items={[
+  { key: "F9", label: `Simpan Semua Item ${verb}`, action: simpan, disabled: busy },
+  { key: "F6", label: "Tambah Baris", action: addRow },
+]} />
 
 {#if showPrint && lastSaved}
   <StockDocPrint detail={lastSaved} onClose={() => (showPrint = false)} />

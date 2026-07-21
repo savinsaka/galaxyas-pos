@@ -50,7 +50,7 @@ pub struct SaleItemInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SaleInput {
     pub cashier_id: String,
-    pub payment_method: String, // Tunai | QRIS | Transfer | Kartu
+    pub payment_method: String, // Tunai | QRIS | Kombinasi | Kartu
     pub paid: f64,
     pub items: Vec<SaleItemInput>,
     #[serde(default)]
@@ -61,6 +61,11 @@ pub struct SaleInput {
     /// transaksi mundur (tanggal kemarin dsb). Kosong = pakai waktu sekarang.
     #[serde(default)]
     pub created_at: Option<String>,
+    /// Hanya diisi kalau payment_method = "Kombinasi" — pecahan bayar tunai/QRIS.
+    #[serde(default)]
+    pub paid_cash: Option<f64>,
+    #[serde(default)]
+    pub paid_qris: Option<f64>,
 }
 
 /// Ringkasan transaksi tersimpan (untuk struk & history).
@@ -80,6 +85,10 @@ pub struct Transaction {
     pub customer_id: Option<String>,
     #[serde(default)]
     pub shift_id: Option<String>,
+    #[serde(default)]
+    pub paid_cash: Option<f64>,
+    #[serde(default)]
+    pub paid_qris: Option<f64>,
 }
 
 /// Halaman hasil list_transactions dengan total untuk pagination.

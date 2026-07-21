@@ -14,6 +14,7 @@
   import { parseReceiptConfig, type ReceiptConfig } from "$lib/receipt";
   import { buildReceiptEscPos } from "$lib/escpos";
   import { formatMoneyInput, onMoneyInput } from "$lib/moneyInput";
+  import ShortcutBar from "$lib/components/ShortcutBar.svelte";
   import type { Customer, DiscountPeriod, PaymentMethod, ProductWithStock, SaleInput, Shift, TransactionDetail } from "$lib/types";
 
   let { tabId }: { tabId?: string } = $props();
@@ -56,8 +57,13 @@
   let cartWrapEl = $state<HTMLDivElement>();
   let scanInputEl = $state<HTMLInputElement>();
   let paidInputEl = $state<HTMLInputElement>();
+  let printNoBtnEl = $state<HTMLButtonElement>();
+  let printYesBtnEl = $state<HTMLButtonElement>();
   let paymentMethod = $state<PaymentMethod>("Tunai");
   let paid = $state(0);
+  // Field terpisah untuk metode "Kombinasi" (sebagian tunai, sebagian QRIS) — poin 7.
+  let paidCash = $state(0);
+  let paidQris = $state(0);
   let receiptCfg = $state<ReceiptConfig | null>(null);
   let lastReceipt = $state<TransactionDetail | null>(null);
   let showPrintConfirm = $state(false);
@@ -72,7 +78,26 @@
   let customerSearch = $state("");
   let selectedCustomer = $state<Customer | null>(null);
 
-  const payments: PaymentMethod[] = ["Tunai", "QRIS", "Transfer", "Kartu"];
+  const payments: PaymentMethod[] = ["Tunai", "QRIS", "Kombinasi", "Kartu"];
+
+  /** Pilih metode bayar. QRIS otomatis isi "uang pas" (poin 8); Kombinasi
+   * reset ke 2 field terpisah (Tunai/QRIS) yang dijumlah jadi `paid`. */
+  function selectPaymentMethod(m: PaymentMethod) {
+    paymentMethod = m;
+    if (m === "QRIS") {
+      paid = total;
+    } else if (m === "Kombinasi") {
+      paidCash = 0;
+      paidQris = 0;
+      paid = 0;
+    }
+  }
+  function onPaidCashInput(e: Event) {
+    onMoneyInput(e, (n) => { paidCash = n; paid = paidCash + paidQris; });
+  }
+  function onPaidQrisInput(e: Event) {
+    onMoneyInput(e, (n) => { paidQris = n; paid = paidCash + paidQris; });
+  }
 
   const totalQty = $derived(cart.reduce((s, l) => s + l.qty, 0));
   const subtotal = $derived(cart.reduce((s, l) => s + l.price * l.qty, 0));
@@ -89,8 +114,21 @@
   let prevShowPrintConfirm = false;
   $effect(() => {
     if (prevShowPrintConfirm && !showPrintConfirm) scanInputEl?.focus();
+    // Default fokus ke tombol Cetak (kanan) begitu popup muncul — Enter langsung
+    // cetak, panah kiri/kanan pindah ke tombol Tidak kalau mau batal (poin 3).
+    if (!prevShowPrintConfirm && showPrintConfirm) tick().then(() => printYesBtnEl?.focus());
     prevShowPrintConfirm = showPrintConfirm;
   });
+
+  function onPrintConfirmKey(e: KeyboardEvent) {
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      e.preventDefault();
+      (e.key === "ArrowLeft" ? printNoBtnEl : printYesBtnEl)?.focus();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      showPrintConfirm = false;
+    }
+  }
 
   async function loadSettings() {
     try {
@@ -227,6 +265,14 @@
     cartWrapEl?.focus();
   }
 
+  /** Field Jumlah ditaruh sebelum search bar (poin 2), tapi fokus tetap balik
+   * ke search bar setelah Enter — alur: isi angka, Enter, langsung scan barcode. */
+  function onQtyKeyBeforeScan(e: KeyboardEvent) {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    scanInputEl?.focus();
+  }
+
   /** Panah bawah dari search yang kosong: masuk ke mode pilih baris keranjang
    * (panah atas/bawah pindah baris, Del hapus item — lihat onCartKey). */
   function enterCartSelection() {
@@ -357,6 +403,11 @@
   function onPaidInput(e: Event) {
     onMoneyInput(e, (n) => (paid = n));
   }
+  function onPaidKey(e: KeyboardEvent) {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    if (!busy) doCheckout();
+  }
 
   function setQty(line: CartLine, qty: number) {
     const wanted = Math.max(1, qty);
@@ -386,6 +437,8 @@
   function clearCart() {
     cart = [];
     paid = 0;
+    paidCash = 0;
+    paidQris = 0;
   }
 
   function holdCurrentCart() {
@@ -396,6 +449,8 @@
       customerId: selectedCustomer?.id ?? null,
       paymentMethod,
       paid,
+      paidCash,
+      paidQris,
     });
     clearCart();
     selectedCustomer = null;
@@ -412,6 +467,8 @@
     customerSearch = "";
     paymentMethod = p.paymentMethod as PaymentMethod;
     paid = p.paid;
+    paidCash = p.paidCash ?? 0;
+    paidQris = p.paidQris ?? 0;
     removePending(id);
     showPendingList = false;
   }
@@ -436,6 +493,7 @@
         customer_id: selectedCustomer?.id ?? null,
         shift_id: activeShift.id,
         created_at: combineDateAndTime(tanggal, clock.now),
+        ...(paymentMethod === "Kombinasi" ? { paid_cash: paidCash, paid_qris: paidQris } : {}),
       };
       const tx = await api.checkout(sale);
       lastReceipt = tx;
@@ -466,16 +524,33 @@
     }
   }
 
+  // Rumpun F1-F4 khusus metode pembayaran (jangan dipencar dengan aksi lain — poin 1),
+  // F5 uang pas masih serumpun (aksi bayar juga), F6-F8 alur keranjang, F9 aksi akhir.
   function onGlobalKey(e: KeyboardEvent) {
     if (tabId && $activeTabId !== tabId) return;
     if (!activeShift) return;
-    if (e.key === "F3") {
+    if (e.key === "F1") {
       e.preventDefault();
-      openSearchPopup(search.trim());
+      selectPaymentMethod("Tunai");
+    } else if (e.key === "F2") {
+      e.preventDefault();
+      selectPaymentMethod("QRIS");
+    } else if (e.key === "F3") {
+      e.preventDefault();
+      selectPaymentMethod("Kombinasi");
+    } else if (e.key === "F4") {
+      e.preventDefault();
+      selectPaymentMethod("Kartu");
     } else if (e.key === "F5") {
       e.preventDefault();
-      if (cart.length > 0) holdCurrentCart();
+      paid = total;
     } else if (e.key === "F6") {
+      e.preventDefault();
+      openSearchPopup(search.trim());
+    } else if (e.key === "F7") {
+      e.preventDefault();
+      if (cart.length > 0) holdCurrentCart();
+    } else if (e.key === "F8") {
       e.preventDefault();
       if (cart.length > 0) clearCart();
     } else if (e.key === "F9") {
@@ -561,15 +636,16 @@
   <section class="main-panel">
     <!-- Baris scan + item count -->
     <div class="scan-row">
-      <input class="scan-input" bind:this={scanInputEl} placeholder="Scan barcode / cari nama lalu Enter…" bind:value={search} onkeydown={onSearchKey} disabled={searchBusy} />
       <input
         class="scan-qty mono"
         type="number"
         min="1"
         bind:value={scanQty}
+        onkeydown={onQtyKeyBeforeScan}
         title="Jumlah untuk scan berikutnya"
       />
-      <button class="btn-ghost" title="Cari nama barang (F3)" onclick={() => openSearchPopup(search.trim())}>🔍</button>
+      <input class="scan-input" bind:this={scanInputEl} placeholder="Scan barcode / cari nama lalu Enter…" bind:value={search} onkeydown={onSearchKey} disabled={searchBusy} />
+      <button class="btn-ghost" title="Cari nama barang (F6)" onclick={() => openSearchPopup(search.trim())}>🔍</button>
       {#if cart.length > 0}
         <span class="item-count">{cart.reduce((s, l) => s + l.qty, 0)} item</span>
       {/if}
@@ -654,41 +730,56 @@
     <div class="pay">
       <label>Metode Pembayaran</label>
       <div class="pay-methods">
-        {#each payments as m}<button class:active={paymentMethod === m} onclick={() => (paymentMethod = m)}>{m}</button>{/each}
+        {#each payments as m}<button class:active={paymentMethod === m} onclick={() => selectPaymentMethod(m)}>{m}</button>{/each}
       </div>
-      <label>Bayar</label>
-      <input class="mono" type="text" inputmode="numeric" bind:this={paidInputEl} value={paidDisplay} oninput={onPaidInput} />
-      <div class="quick">
-        <button onclick={() => (paid = total)}>Uang Pas</button>
-        <button onclick={() => (paid = 50000)}>50rb</button>
-        <button onclick={() => (paid = 100000)}>100rb</button>
-      </div>
+      {#if paymentMethod === "Kombinasi"}
+        <label>QRIS</label>
+        <input class="mono" type="text" inputmode="numeric" value={formatMoneyInput(paidQris)} oninput={onPaidQrisInput} />
+        <label>Tunai</label>
+        <input class="mono" type="text" inputmode="numeric" bind:this={paidInputEl} value={formatMoneyInput(paidCash)} oninput={onPaidCashInput} onkeydown={onPaidKey} />
+      {:else}
+        <label>Bayar</label>
+        <input class="mono" type="text" inputmode="numeric" bind:this={paidInputEl} value={paidDisplay} oninput={onPaidInput} onkeydown={onPaidKey} />
+        <div class="quick">
+          <button onclick={() => (paid = total)}>Uang Pas</button>
+          <button onclick={() => (paid = 50000)}>50rb</button>
+          <button onclick={() => (paid = 100000)}>100rb</button>
+        </div>
+      {/if}
       <button class="btn-primary checkout" disabled={busy || cart.length === 0} onclick={doCheckout} title="Bayar & Simpan (F9)">Bayar &amp; Simpan (F9)</button>
     </div>
   </section>
 </div>
 
-<div class="shortcut-bar no-print">
-  <button class="shortcut-item" onclick={() => openSearchPopup(search.trim())}><kbd>F3</kbd> Cari Barang</button>
-  <button class="shortcut-item" disabled={cart.length === 0} onclick={holdCurrentCart}><kbd>F5</kbd> Pending</button>
-  {#if $pendingSales.length > 0}
-    <button class="shortcut-item" onclick={() => (showPendingList = true)}>📋 Lihat Pending ({$pendingSales.length})</button>
-  {/if}
-  <button class="shortcut-item" disabled={cart.length === 0} onclick={clearCart}><kbd>F6</kbd> Kosongkan</button>
-  <button class="shortcut-item" disabled={busy || cart.length === 0} onclick={doCheckout}><kbd>F9</kbd> Bayar &amp; Simpan</button>
-</div>
+<ShortcutBar items={[
+  { key: "F1", label: "Pilih Tunai", action: () => selectPaymentMethod("Tunai") },
+  { key: "F2", label: "Pilih QRIS", action: () => selectPaymentMethod("QRIS") },
+  { key: "F3", label: "Pilih Kombinasi", action: () => selectPaymentMethod("Kombinasi") },
+  { key: "F4", label: "Pilih Kartu", action: () => selectPaymentMethod("Kartu") },
+  { key: "F5", label: "Uang Pas", action: () => (paid = total) },
+  { key: "F6", label: "Cari Barang", action: () => openSearchPopup(search.trim()) },
+  { key: "F7", label: "Pending", action: holdCurrentCart, disabled: cart.length === 0 },
+  { key: "F8", label: "Kosongkan", action: clearCart, disabled: cart.length === 0 },
+  { key: "F9", label: "Bayar & Simpan", action: doCheckout, disabled: busy || cart.length === 0 },
+]}>
+  {#snippet children()}
+    {#if $pendingSales.length > 0}
+      <button class="shortcut-item" onclick={() => (showPendingList = true)}>📋 Lihat Pending ({$pendingSales.length})</button>
+    {/if}
+  {/snippet}
+</ShortcutBar>
 {/if}
 </div>
 
 {#if showPrintConfirm && lastReceipt}
   <div class="modal-backdrop" onclick={() => (showPrintConfirm = false)} role="presentation">
-    <div class="modal print-confirm" onclick={(e) => e.stopPropagation()} role="presentation">
+    <div class="modal print-confirm" onclick={(e) => e.stopPropagation()} onkeydown={onPrintConfirmKey} role="presentation">
       <div class="stock-alert-icon">✅</div>
       <h2>Transaksi Tersimpan</h2>
       <p class="text-dim mono" style="margin:0.3rem 0 1rem;">{lastReceipt.invoice_no} · {formatIDR(lastReceipt.total)}</p>
       <div class="row" style="gap:0.5rem;">
-        <button class="btn-ghost" style="flex:1;" onclick={() => (showPrintConfirm = false)}>Tidak</button>
-        <button class="btn-primary" style="flex:1;" onclick={doPrintReceipt}>🖨️ Cetak Struk</button>
+        <button class="btn-ghost" style="flex:1;" bind:this={printNoBtnEl} onclick={() => (showPrintConfirm = false)}>Tidak</button>
+        <button class="btn-primary" style="flex:1;" bind:this={printYesBtnEl} onclick={doPrintReceipt}>🖨️ Cetak Struk</button>
       </div>
     </div>
   </div>
@@ -845,25 +936,7 @@
   /* Panel kiri */
   .main-panel { display:flex; flex-direction:column; gap:0.5rem; min-height:0; overflow:hidden; }
 
-  /* Bar shortcut keyboard di bawah — sekaligus tombol Pending/Kosongkan (poin 8) */
-  .shortcut-bar {
-    flex-shrink: 0;
-    display: flex; flex-wrap: wrap; gap: 0.6rem;
-    margin-top: 0.6rem; padding: 0.3rem 0.2rem;
-  }
-  .shortcut-item {
-    display: flex; align-items: center; gap: 0.3rem;
-    background: transparent; border: 1px solid transparent; border-radius: 6px;
-    padding: 0.25rem 0.5rem; font-size: 0.78rem; color: var(--text-dim);
-  }
-  .shortcut-item:hover:not(:disabled) { background: var(--baby-blue-bg); border-color: var(--border); color: var(--text); }
-  .shortcut-item:disabled { opacity: 0.45; cursor: default; }
-  .shortcut-bar kbd {
-    display: inline-block; min-width: 1.6rem; text-align: center;
-    font-family: inherit; font-weight: 700; font-size: 0.72rem;
-    background: var(--baby-blue-bg); border: 1px solid var(--border);
-    border-radius: 4px; padding: 0.08rem 0.3rem;
-  }
+  /* Bar shortcut keyboard di bawah — komponen ShortcutBar.svelte reusable. */
 
   /* Popup konfirmasi cetak struk setelah transaksi tersimpan */
   .print-confirm { max-width: 340px; text-align: center; }

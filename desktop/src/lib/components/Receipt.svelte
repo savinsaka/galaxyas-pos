@@ -121,7 +121,14 @@
           {#if cfg.show.subtotal}<div class="r-line"><span>Subtotal</span><span>{formatIDR(detail.subtotal)}</span></div>{/if}
           {#if cfg.show.discount}<div class="r-line"><span>Diskon</span><span>−{formatIDR(detail.discount)}</span></div>{/if}
           {#if cfg.show.total}<div class="r-line r-bold"><span>TOTAL</span><span>{formatIDR(detail.total)}</span></div>{/if}
-          {#if cfg.show.paymentMethod}<div class="r-line"><span>{detail.payment_method}</span><span>{formatIDR(detail.paid)}</span></div>{/if}
+          {#if cfg.show.paymentMethod}
+            {#if detail.payment_method === "Kombinasi"}
+              <div class="r-line"><span>Tunai</span><span>{formatIDR(detail.paid_cash ?? 0)}</span></div>
+              <div class="r-line"><span>QRIS</span><span>{formatIDR(detail.paid_qris ?? 0)}</span></div>
+            {:else}
+              <div class="r-line"><span>{detail.payment_method}</span><span>{formatIDR(detail.paid)}</span></div>
+            {/if}
+          {/if}
           {#if cfg.show.change}<div class="r-line"><span>Kembali</span><span>{formatIDR(detail.change)}</span></div>{/if}
           <div class="r-sep"></div>
         {/if}

@@ -229,6 +229,18 @@ pub fn init_schema(conn: &Connection) -> AppResult<()> {
         conn.execute("CREATE INDEX IF NOT EXISTS idx_mov_batch ON stock_movements(batch_id)", [])?;
     }
 
+    // Migrasi: kolom paid_cash & paid_qris pada tabel transactions, untuk
+    // pembayaran metode "Kombinasi" (sebagian tunai, sebagian QRIS).
+    let has_tx_paid_cash: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('transactions') WHERE name='paid_cash'")?
+        .query_row([], |_| Ok(true))
+        .optional()?
+        .unwrap_or(false);
+    if !has_tx_paid_cash {
+        conn.execute("ALTER TABLE transactions ADD COLUMN paid_cash REAL", [])?;
+        conn.execute("ALTER TABLE transactions ADD COLUMN paid_qris REAL", [])?;
+    }
+
     Ok(())
 }
 
@@ -701,11 +713,12 @@ pub fn create_sale(conn: &mut Connection, input: SaleInput) -> AppResult<Transac
     db_tx.execute(
         "INSERT INTO transactions
             (id, invoice_no, cashier_id, subtotal, discount, total, paid, change, payment_method,
-             created_at, customer_id, shift_id)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+             created_at, customer_id, shift_id, paid_cash, paid_qris)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
         params![
             tx_id, invoice_no, input.cashier_id, subtotal, total_discount, total,
-            input.paid, change, input.payment_method, now, input.customer_id, input.shift_id
+            input.paid, change, input.payment_method, now, input.customer_id, input.shift_id,
+            input.paid_cash, input.paid_qris
         ],
     )?;
     for it in &items {
@@ -749,6 +762,8 @@ pub fn create_sale(conn: &mut Connection, input: SaleInput) -> AppResult<Transac
             created_at: now,
             customer_id: input.customer_id,
             shift_id: input.shift_id,
+            paid_cash: input.paid_cash,
+            paid_qris: input.paid_qris,
         },
         items,
     })
@@ -768,10 +783,16 @@ fn map_transaction(r: &rusqlite::Row) -> rusqlite::Result<Transaction> {
         created_at: r.get("created_at")?,
         customer_id: r.get("customer_id")?,
         shift_id: r.get("shift_id")?,
+        paid_cash: r.get("paid_cash")?,
+        paid_qris: r.get("paid_qris")?,
     })
 }
 
-fn transaction_where(from: &Option<String>, to: &Option<String>) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
+fn transaction_where(
+    from: &Option<String>,
+    to: &Option<String>,
+    search: &Option<String>,
+) -> (String, Vec<Box<dyn rusqlite::ToSql>>) {
     let mut sql = String::from(" WHERE 1=1");
     let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
     if let Some(f) = from {
@@ -786,6 +807,16 @@ fn transaction_where(from: &Option<String>, to: &Option<String>) -> (String, Vec
         sql.push(')');
         args.push(Box::new(t.clone()));
     }
+    if let Some(s) = search {
+        let term = s.trim();
+        if !term.is_empty() {
+            sql.push_str(" AND invoice_no LIKE ?");
+            sql.push_str(&(args.len() + 1).to_string());
+            sql.push_str(" ESCAPE '\\'");
+            let escaped = term.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+            args.push(Box::new(format!("%{escaped}%")));
+        }
+    }
     (sql, args)
 }
 
@@ -793,17 +824,18 @@ pub fn list_transactions(
     conn: &Connection,
     from: Option<String>,
     to: Option<String>,
+    search: Option<String>,
     limit: i64,
     offset: i64,
 ) -> AppResult<crate::models::TransactionPage> {
-    let (count_where, count_args) = transaction_where(&from, &to);
+    let (count_where, count_args) = transaction_where(&from, &to, &search);
     let total: i64 = {
         let count_sql = format!("SELECT COUNT(*) FROM transactions{count_where}");
         let params_ref: Vec<&dyn rusqlite::ToSql> = count_args.iter().map(|b| b.as_ref()).collect();
         conn.query_row(&count_sql, params_ref.as_slice(), |r| r.get(0))?
     };
 
-    let (where_sql, mut args) = transaction_where(&from, &to);
+    let (where_sql, mut args) = transaction_where(&from, &to, &search);
     let sql = format!(
         "SELECT * FROM transactions{where_sql} ORDER BY created_at DESC LIMIT ?{} OFFSET ?{}",
         args.len() + 1,
@@ -1636,10 +1668,10 @@ pub fn update_transaction(
     // 5. Update header transaksi (id/invoice_no/cashier_id/shift_id/created_at tetap).
     db_tx.execute(
         "UPDATE transactions SET subtotal=?2, discount=?3, total=?4, paid=?5, change=?6,
-            payment_method=?7, customer_id=?8 WHERE id=?1",
+            payment_method=?7, customer_id=?8, paid_cash=?9, paid_qris=?10 WHERE id=?1",
         params![
             id, subtotal, total_discount, total, input.paid, change,
-            input.payment_method, input.customer_id
+            input.payment_method, input.customer_id, input.paid_cash, input.paid_qris
         ],
     )?;
     db_tx.commit()?;
@@ -1658,6 +1690,8 @@ pub fn update_transaction(
             created_at: existing.created_at,
             customer_id: input.customer_id,
             shift_id: existing.shift_id,
+            paid_cash: input.paid_cash,
+            paid_qris: input.paid_qris,
         },
         items,
     })
@@ -1894,13 +1928,23 @@ pub fn open_shift(conn: &Connection, input: OpenShiftInput) -> AppResult<Shift> 
 }
 
 /// Ringkasan penjualan selama shift (dipakai untuk hitung `expected_cash`).
+/// Untuk metode "Kombinasi": bagian tunai yang masuk laci = paid_cash dikurangi
+/// kembalian (asumsi kembalian selalu diberikan tunai dari laci, praktik
+/// standar), dibatasi minimum 0. Sisanya (total - bagian tunai) dihitung
+/// sebagai non-tunai, supaya cash_sales + non_cash_sales tetap = total penjualan.
 pub fn shift_summary(conn: &Connection, shift_id: &str) -> AppResult<ShiftSummary> {
     conn.query_row(
         "SELECT
             COUNT(*),
             COALESCE(SUM(total), 0),
-            COALESCE(SUM(CASE WHEN payment_method = 'Tunai' THEN total ELSE 0 END), 0),
-            COALESCE(SUM(CASE WHEN payment_method != 'Tunai' THEN total ELSE 0 END), 0)
+            COALESCE(SUM(CASE
+                WHEN payment_method = 'Tunai' THEN total
+                WHEN payment_method = 'Kombinasi' THEN MAX(COALESCE(paid_cash,0) - (paid - total), 0)
+                ELSE 0 END), 0),
+            COALESCE(SUM(CASE
+                WHEN payment_method = 'Tunai' THEN 0
+                WHEN payment_method = 'Kombinasi' THEN total - MAX(COALESCE(paid_cash,0) - (paid - total), 0)
+                ELSE total END), 0)
          FROM transactions WHERE shift_id = ?1",
         params![shift_id],
         |r| {

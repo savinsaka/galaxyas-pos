@@ -115,7 +115,14 @@ export function buildReceiptEscPos(detail: TransactionDetail, cfg: ReceiptConfig
     if (show.subtotal) b.line(two("Subtotal", money(detail.subtotal)));
     if (show.discount) b.line(two("Diskon", "-" + money(detail.discount)));
     if (show.total) b.bold(true).line(two("TOTAL", money(detail.total))).bold(false);
-    if (show.paymentMethod) b.line(two(detail.payment_method, money(detail.paid)));
+    if (show.paymentMethod) {
+      if (detail.payment_method === "Kombinasi") {
+        b.line(two("Tunai", money(detail.paid_cash ?? 0)));
+        b.line(two("QRIS", money(detail.paid_qris ?? 0)));
+      } else {
+        b.line(two(detail.payment_method, money(detail.paid)));
+      }
+    }
     if (show.change) b.line(two("Kembali", money(detail.change)));
     b.line(line());
   }

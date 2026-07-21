@@ -11,8 +11,10 @@
   import { todayIso, combineDateAndTime } from "$lib/dateTime";
   import type { ProductWithStock, StockMovement } from "$lib/types";
   import { setTabDirty, clearTabDirty } from "$lib/stores/tabGuard";
+  import { activeTabId } from "$lib/stores/tabs";
   import MonthPager from "$lib/components/MonthPager.svelte";
   import ProductSearchPopup from "$lib/components/ProductSearchPopup.svelte";
+  import ShortcutBar from "$lib/components/ShortcutBar.svelte";
 
   let { tabId }: { tabId?: string } = $props();
 
@@ -88,6 +90,21 @@
     [from, to] = currentMonthBounds();
     load();
   });
+
+  // F9 = Simpan Opname, F6 = Batal — sama tombol dengan Kasir POS tapi beda
+  // arti per tab (legend ada di ShortcutBar di bawah form).
+  function onGlobalKey(e: KeyboardEvent) {
+    if (tabId && $activeTabId !== tabId) return;
+    if (e.key === "F9") {
+      e.preventDefault();
+      if (selected && !busy) simpan();
+    } else if (e.key === "F6") {
+      e.preventDefault();
+      if (selected) resetForm();
+    }
+  }
+  onMount(() => window.addEventListener("keydown", onGlobalKey));
+  onDestroy(() => window.removeEventListener("keydown", onGlobalKey));
 
   async function onSearchKey(e: KeyboardEvent) {
     if (e.key !== "Enter") return;
@@ -368,6 +385,10 @@
     </div>
   </div>
 </div>
+<ShortcutBar items={[
+  { key: "F9", label: "Simpan Opname", action: simpan, disabled: !selected || busy },
+  { key: "F6", label: "Batal", action: resetForm, disabled: !selected },
+]} />
 </div>
 
 {#if showPopup}

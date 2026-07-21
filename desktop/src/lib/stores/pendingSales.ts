@@ -21,6 +21,8 @@ export interface PendingSale {
   customerId: string | null;
   paymentMethod: string;
   paid: number;
+  paidCash?: number;
+  paidQris?: number;
   createdAt: string;
 }
 

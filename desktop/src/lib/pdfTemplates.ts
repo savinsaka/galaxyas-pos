@@ -73,7 +73,7 @@ function kasirDetailTemplate(): Template {
             ["Total", "Rp 0"],
             ["Pembayaran Tunai", "Rp 0"],
             ["Pembayaran QRIS", "Rp 0"],
-            ["Pembayaran Transfer", "Rp 0"],
+            ["Pembayaran Kombinasi", "Rp 0"],
             ["Pembayaran Kartu", "Rp 0"],
           ]),
           showHead: true,

@@ -12,6 +12,7 @@ export const THEMES: ThemeDef[] = [
   { key: "forest", label: "Forest", swatch: "#2f9e6b" },
   { key: "sunset", label: "Sunset", swatch: "#e08a3b" },
   { key: "grape", label: "Grape", swatch: "#8b5fbf" },
+  { key: "high-contrast", label: "Kontras Tinggi", swatch: "#000000" },
 ];
 
 const DEFAULT_THEME = "baby-blue";

@@ -244,16 +244,17 @@ pub async fn list_transactions(
     state: State<'_, AppState>,
     from: Option<String>,
     to: Option<String>,
+    search: Option<String>,
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> AppResult<crate::models::TransactionPage> {
     if let Some(remote) = state.remote_config() {
         return crate::lan::call(&remote, "list_transactions", serde_json::json!({
-            "from": from, "to": to, "limit": limit, "offset": offset
+            "from": from, "to": to, "search": search, "limit": limit, "offset": offset
         })).await;
     }
     let conn = state.lock()?;
-    db::list_transactions(&conn, from, to, limit.unwrap_or(100), offset.unwrap_or(0))
+    db::list_transactions(&conn, from, to, search, limit.unwrap_or(100), offset.unwrap_or(0))
 }
 
 #[tauri::command]

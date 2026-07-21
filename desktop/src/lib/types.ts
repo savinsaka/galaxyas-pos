@@ -53,6 +53,9 @@ export interface SaleInput {
   customer_id?: string | null;
   shift_id?: string | null;
   created_at?: string | null;
+  /** Hanya diisi kalau payment_method = "Kombinasi". */
+  paid_cash?: number | null;
+  paid_qris?: number | null;
 }
 
 export interface Transaction {
@@ -68,6 +71,8 @@ export interface Transaction {
   created_at: string;
   customer_id: string | null;
   shift_id: string | null;
+  paid_cash?: number | null;
+  paid_qris?: number | null;
 }
 
 export interface TransactionItem {
@@ -95,7 +100,7 @@ export interface SyncResult {
   message: string;
 }
 
-export type PaymentMethod = "Tunai" | "QRIS" | "Transfer" | "Kartu";
+export type PaymentMethod = "Tunai" | "QRIS" | "Kombinasi" | "Kartu";
 
 export interface Brand {
   id: string;

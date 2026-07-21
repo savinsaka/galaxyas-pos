@@ -36,7 +36,7 @@
 
   const totalTx = $derived(txs.length);
   const totalNet = $derived(txs.reduce((s, t) => s + t.total, 0));
-  const methods: PaymentMethod[] = ["Tunai", "QRIS", "Transfer", "Kartu"];
+  const methods: PaymentMethod[] = ["Tunai", "QRIS", "Kombinasi", "Kartu"];
   const byMethod = $derived(
     new Map(methods.map((m) => [m, txs.filter((t) => t.payment_method === m).reduce((s, t) => s + t.total, 0)])),
   );

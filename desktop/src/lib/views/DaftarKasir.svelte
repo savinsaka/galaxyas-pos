@@ -4,6 +4,7 @@
   import { api } from "$lib/api";
   import { formatIDR, formatDateTime } from "$lib/format";
   import { showToast, toastError } from "$lib/toast";
+  import { debounce } from "$lib/debounce";
   import { currentMonthBounds } from "$lib/monthPager";
   import { todayIso } from "$lib/dateTime";
   import { currentUser } from "$lib/stores/auth";
@@ -29,6 +30,7 @@
   let to = $state("");
   let sortDir = $state<"asc" | "desc">("desc");
   let totalToday = $state(0);
+  let search = $state("");
 
   const selected = $derived(transactions.find((t) => t.id === selectedId) ?? null);
   const totalPages = $derived(Math.max(1, Math.ceil(total / PAGE_SIZE)));
@@ -43,7 +45,10 @@
 
   async function load() {
     try {
-      const res = await api.listTransactionsPage(from, to, PAGE_SIZE, page * PAGE_SIZE);
+      const term = search.trim();
+      // Cari ID struk: lintas semua tanggal, abaikan filter bulan MonthPager.
+      const [f, t] = term ? [null, null] : [from, to];
+      const res = await api.listTransactionsPage(f, t, PAGE_SIZE, page * PAGE_SIZE, term || null);
       transactions = res.items;
       total = res.total;
       const s = await api.getSettings();
@@ -56,6 +61,10 @@
   function reload() {
     page = 0;
     load();
+  }
+  const debouncedSearch = debounce(() => reload(), 300);
+  function onSearchInput() {
+    debouncedSearch();
   }
   function goPage(delta: number) {
     const next = page + delta;
@@ -144,8 +153,15 @@
   <span class="text-dim">Penjualan hari ini: <strong class="mono">{formatIDR(totalToday)}</strong></span>
 </div>
 
-<div class="card" style="margin-bottom:0.8rem; flex-shrink:0;">
+<div class="card" style="margin-bottom:0.8rem; flex-shrink:0; display:flex; align-items:center; gap:1rem; flex-wrap:wrap;">
   <MonthPager bind:from bind:to onchange={reload} />
+  <input
+    class="invoice-search"
+    placeholder="🔍 Cari No. Invoice / ID Struk…"
+    bind:value={search}
+    oninput={onSearchInput}
+    style="max-width:260px;"
+  />
 </div>
 
 <div class="card list-card">
