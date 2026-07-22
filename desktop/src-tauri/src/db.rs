@@ -970,6 +970,10 @@ pub fn apply_pulled_products(
                 "INSERT OR IGNORE INTO stock (product_id, qty, updated_at) VALUES (?1, 0, ?2)",
                 params![p.id, p.updated_at],
             )?;
+            // Sama seperti upsert_product (input manual/Excel) — merek dari
+            // produk hasil pull juga harus masuk tabel brands, bukan cuma
+            // tersimpan sebagai teks bebas di products.brand.
+            ensure_brand_exists(conn, p.brand.as_deref(), &p.updated_at)?;
             applied += 1;
             log.push(SyncLogEntry { id: p.id.clone(), name: p.name.clone(), action: "Diterapkan".into() });
         } else {
