@@ -40,7 +40,7 @@ struct ConfirmRequest<'a> {
 
 fn client() -> AppResult<reqwest::Client> {
     Ok(reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(90))
+        .timeout(std::time::Duration::from_secs(30))
         .build()?)
 }
 
