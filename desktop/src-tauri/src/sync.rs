@@ -28,7 +28,9 @@ pub struct PushResponse {
 
 fn client() -> AppResult<reqwest::Client> {
     Ok(reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        // Full pull (mis. setelah reset data) bisa membawa ribuan produk
+        // (>1MB JSON) — 30s pernah kepotong di kondisi koneksi kurang stabil.
+        .timeout(std::time::Duration::from_secs(90))
         .build()?)
 }
 
