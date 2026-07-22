@@ -1,5 +1,6 @@
 import { api } from "$lib/api";
 import { toastError } from "$lib/toast";
+import type { ReportEscPosDoc, ReportEscPosRow, ReportEscPosSection } from "$lib/escpos";
 
 /**
  * Cetak lewat window Tauri terpisah: konten di-clone + seluruh CSS aplikasi
@@ -83,4 +84,47 @@ export function printReceiptElement(elementId: string, widthMm: number, title = 
     #print-root { background: #fff !important; color: #000 !important; }
   `;
   openPrintWindow(clone.outerHTML, currentAppCss() + overrides, title, widthMm >= 80 ? 460 : 380, 700);
+}
+
+/**
+ * Baca tabel-tabel di dalam elemen `elementId` (kartu berisi <table>, format
+ * yang dipakai semua laporan) dan petakan jadi struktur ReportEscPosDoc,
+ * supaya bisa dicetak langsung ke printer thermal (bukan lewat dialog print
+ * — dialog print browser/webview mencetak hasil raster yang buram di kertas
+ * thermal, sama seperti struk transaksi & dokumen stok yang sudah lebih
+ * dulu pakai jalur cetak-langsung ESC/POS).
+ */
+export function extractReportForEscPos(
+  elementId: string,
+  title: string,
+  subtitle: string | undefined,
+  meta: string,
+): ReportEscPosDoc | null {
+  const root = document.getElementById(elementId);
+  if (!root) return null;
+
+  const sections: ReportEscPosSection[] = [];
+  root.querySelectorAll(".card").forEach((card) => {
+    const table = card.querySelector("table");
+    if (!table) return;
+
+    const heading = card.querySelector(":scope > div > b")?.textContent?.trim() || undefined;
+    const columns = Array.from(table.querySelectorAll("thead th")).map((th) => th.textContent?.trim() || "");
+
+    const rows: ReportEscPosRow[] = [];
+    table.querySelectorAll("tbody tr").forEach((tr) => {
+      const tds = Array.from(tr.querySelectorAll("td"));
+      if (tds.length <= 1) return; // baris placeholder "Tidak ada data" (colspan)
+      rows.push({
+        cells: tds.map((td) => td.textContent?.trim() || ""),
+        bold: tds.some((td) => td.classList.contains("fw-bold")),
+      });
+    });
+    if (rows.length === 0) return;
+
+    sections.push({ heading, columns: columns.length ? columns : undefined, rows });
+  });
+
+  if (sections.length === 0) return null;
+  return { title, subtitle, meta, sections };
 }

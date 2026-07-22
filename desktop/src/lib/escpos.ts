@@ -202,3 +202,76 @@ export function buildStockDocEscPos(detail: StockMovementBatchDetail, cfg: Recei
 
   return b.build();
 }
+
+/** Satu baris data pada tabel/ringkasan laporan yang mau dicetak sebagai struk. */
+export interface ReportEscPosRow {
+  cells: string[];
+  bold?: boolean;
+}
+
+/** Satu kartu/tabel dalam laporan (mis. "Per Barang", ringkasan pembayaran). */
+export interface ReportEscPosSection {
+  heading?: string;
+  /** Nama kolom (dari <thead>). Kosong/undefined untuk tabel label/nilai (2 kolom, tanpa header). */
+  columns?: string[];
+  rows: ReportEscPosRow[];
+}
+
+export interface ReportEscPosDoc {
+  title: string;
+  subtitle?: string;
+  meta?: string;
+  sections: ReportEscPosSection[];
+}
+
+/**
+ * Bangun urutan byte ESC/POS untuk laporan generik (dipetakan dari tabel HTML
+ * di layar) yang dicetak langsung ke printer thermal, diakhiri feed + autocut.
+ */
+export function buildReportEscPos(doc: ReportEscPosDoc, cfg: ReceiptConfig): Uint8Array {
+  const w = paperCols(cfg.paper);
+  const line = (ch = "-") => ch.repeat(w);
+  const two = (l: string, r: string) => {
+    const left = l.slice(0, Math.max(0, w - r.length - 1));
+    const space = Math.max(1, w - left.length - r.length);
+    return left + " ".repeat(space) + r;
+  };
+
+  const b = new EscPosBuilder();
+  b.init();
+  b.align("center");
+  b.bold(true).doubleHeight(true).line(doc.title).doubleHeight(false).bold(false);
+  if (doc.subtitle) b.line(doc.subtitle);
+  if (doc.meta) b.line(doc.meta);
+
+  for (const sec of doc.sections) {
+    b.align("left").line(line());
+    if (sec.heading) b.bold(true).line(sec.heading.slice(0, w)).bold(false);
+
+    const wide = (sec.columns?.length ?? 0) > 2;
+    if (wide) {
+      for (const row of sec.rows) {
+        const [first, ...rest] = row.cells;
+        b.bold(!!row.bold).line((first ?? "").slice(0, w)).bold(false);
+        rest.forEach((val, i) => {
+          const header = sec.columns![i + 1] ?? "";
+          if (val) b.line(two(`  ${header}`, val));
+        });
+      }
+    } else {
+      for (const row of sec.rows) {
+        const [label, value] = row.cells;
+        b.bold(!!row.bold);
+        b.line(two(label ?? "", value ?? ""));
+        b.bold(false);
+      }
+    }
+  }
+  b.align("left").line(line());
+
+  b.align("center");
+  b.feed(3);
+  b.cut(true);
+
+  return b.build();
+}

@@ -1,6 +1,10 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
-  import { printElement } from "$lib/print";
+  import { printElement, extractReportForEscPos } from "$lib/print";
+  import { buildReportEscPos } from "$lib/escpos";
+  import { api } from "$lib/api";
+  import { parseReceiptConfig } from "$lib/receipt";
+  import { showToast, toastError } from "$lib/toast";
 
   let {
     title,
@@ -9,11 +13,32 @@
     children,
   }: { title: string; subtitle?: string; onClose: () => void; children: Snippet } = $props();
 
+  let strukBusy = $state(false);
+
   const printedAt = () =>
     new Date().toLocaleString("id-ID", { day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
   function printDialog() {
     printElement("printable-report-content", title);
+  }
+
+  /** Cetak langsung ke printer thermal (ESC/POS) — bukan lewat dialog print, supaya tidak buram. */
+  async function printStruk() {
+    strukBusy = true;
+    try {
+      const cfg = parseReceiptConfig(await api.getSettings());
+      const doc = extractReportForEscPos("printable-report-content", title, subtitle, `Dicetak: ${printedAt()}`);
+      if (!doc) {
+        toastError("Tidak ada data untuk dicetak.");
+        return;
+      }
+      await api.printEscposTo(cfg.printer, buildReportEscPos(doc, cfg));
+      showToast(cfg.printer ? `Dikirim ke printer: ${cfg.printer}` : "Dikirim ke printer default.", "success");
+    } catch (e) {
+      toastError(e);
+    } finally {
+      strukBusy = false;
+    }
   }
 </script>
 
@@ -24,6 +49,9 @@
       <h2>{title}</h2>
       <div class="row">
         <button onclick={printDialog}>🖨️ Print</button>
+        <button disabled={strukBusy} onclick={printStruk} title="Cetak langsung ke printer thermal (ESC/POS)">
+          {strukBusy ? "Mencetak…" : "🧾 Cetak Struk"}
+        </button>
         <button class="btn-ghost" onclick={onClose}>Tutup</button>
       </div>
     </div>
