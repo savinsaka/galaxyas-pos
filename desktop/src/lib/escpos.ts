@@ -44,6 +44,10 @@ class EscPosBuilder {
   bold(on: boolean): this {
     return this.raw(ESC, 0x45, on ? 1 : 0);
   }
+  /** Double-height text (GS ! n). Makes text taller while keeping normal width. */
+  doubleHeight(on: boolean): this {
+    return this.raw(GS, 0x21, on ? 0x01 : 0x00);
+  }
   feed(lines: number): this {
     return this.raw(ESC, 0x64, Math.max(0, Math.min(255, lines)));
   }
@@ -76,10 +80,12 @@ export function buildReceiptEscPos(detail: TransactionDetail, cfg: ReceiptConfig
   b.init();
   b.align("center");
 
-  if (show.storeName) b.bold(true).line(cfg.storeName).bold(false);
-  if (show.address && cfg.address.trim()) cfg.address.split("\n").map((x) => x.trim()).filter(Boolean).forEach((a) => b.line(center(a)));
-  if (show.phone && cfg.phone.trim()) b.line(center(cfg.phone.trim()));
-  if (show.taxId && cfg.taxId.trim()) b.line(center(`NPWP: ${cfg.taxId.trim()}`));
+  // Header — printer is already in center-align mode (ESC a 1), so do NOT
+  // also pad with center(); that double-centres the text (shifts it right).
+  if (show.storeName) b.bold(true).doubleHeight(true).line(cfg.storeName).doubleHeight(false).bold(false);
+  if (show.address && cfg.address.trim()) cfg.address.split("\n").map((x) => x.trim()).filter(Boolean).forEach((a) => b.line(a));
+  if (show.phone && cfg.phone.trim()) b.line(cfg.phone.trim());
+  if (show.taxId && cfg.taxId.trim()) b.line(`NPWP: ${cfg.taxId.trim()}`);
   if (show.social) {
     const social = [
       cfg.instagram.trim() && `IG: ${cfg.instagram.trim()}`,
@@ -88,17 +94,17 @@ export function buildReceiptEscPos(detail: TransactionDetail, cfg: ReceiptConfig
     ]
       .filter(Boolean)
       .join(" · ");
-    if (social) b.line(center(social));
+    if (social) b.line(social);
   }
   if (show.header) {
     cfg.header
       .split("\n")
       .map((x) => x.trim())
       .filter(Boolean)
-      .forEach((h) => b.line(center(h)));
+      .forEach((h) => b.line(h));
   }
-  if (show.date) b.line(center(new Date(detail.created_at).toLocaleString("id-ID")));
-  if (show.invoiceNo) b.line(center(detail.invoice_no));
+  if (show.date) b.line(new Date(detail.created_at).toLocaleString("id-ID"));
+  if (show.invoiceNo) b.line(detail.invoice_no);
 
   if (show.items) {
     b.align("left").line(line());
@@ -129,14 +135,15 @@ export function buildReceiptEscPos(detail: TransactionDetail, cfg: ReceiptConfig
 
   if (show.footer && cfg.footer.trim()) {
     b.align("center");
+    // Footer — same as header: printer is in center-align, so no manual padding.
     cfg.footer
       .split("\n")
       .map((x) => x.trim())
       .filter(Boolean)
-      .forEach((f) => b.line(center(f)));
+      .forEach((f) => b.line(f));
   }
 
-  b.feed(4);
+  b.feed(3);
   b.cut(true);
 
   return b.build();
@@ -163,10 +170,10 @@ export function buildStockDocEscPos(detail: StockMovementBatchDetail, cfg: Recei
   b.init();
   b.align("center");
 
-  if (show.storeName && cfg.storeName.trim()) b.bold(true).line(cfg.storeName).bold(false);
+  if (show.storeName && cfg.storeName.trim()) b.bold(true).doubleHeight(true).line(cfg.storeName).doubleHeight(false).bold(false);
   b.bold(true).line(verb).bold(false);
-  b.line(center(detail.no));
-  b.line(center(new Date(detail.created_at).toLocaleString("id-ID")));
+  b.line(detail.no);
+  b.line(new Date(detail.created_at).toLocaleString("id-ID"));
 
   b.align("left").line(line());
   for (const it of detail.items) {
@@ -187,10 +194,10 @@ export function buildStockDocEscPos(detail: StockMovementBatchDetail, cfg: Recei
       .split("\n")
       .map((x) => x.trim())
       .filter(Boolean)
-      .forEach((f) => b.line(center(f)));
+      .forEach((f) => b.line(f));
   }
 
-  b.feed(4);
+  b.feed(2);
   b.cut(true);
 
   return b.build();
