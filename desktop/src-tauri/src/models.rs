@@ -139,6 +139,18 @@ fn default_one() -> i64 {
     1
 }
 
+/// Satu baris log sinkronisasi (produk apa, diapakan) — ditampilkan di UI
+/// Sync Center supaya kelihatan barang mana yang berubah, bukan cuma angka.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncLogEntry {
+    pub id: String,
+    pub name: String,
+    /// "Diterapkan" | "Dilewati" (pull) | "Dikirim" (push — server tidak
+    /// mengembalikan breakdown per-ID, jadi push cuma bisa melaporkan apa
+    /// yang DIKIRIM, bukan status per-item hasil server).
+    pub action: String,
+}
+
 /// Hasil ringkas operasi sinkronisasi yang dikembalikan ke UI.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SyncResult {
@@ -146,6 +158,8 @@ pub struct SyncResult {
     pub pulled: i64,
     pub skipped: i64,
     pub message: String,
+    #[serde(default)]
+    pub log: Vec<SyncLogEntry>,
 }
 
 // ---------- Pengguna / hak akses ----------

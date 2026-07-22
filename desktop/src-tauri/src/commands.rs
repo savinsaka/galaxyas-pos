@@ -11,8 +11,8 @@ use crate::error::{AppError, AppResult};
 use crate::models::{
     BrandSalesRow, CloseShiftInput, Customer, CustomerInput, DiscountPeriod, DiscountPeriodInput,
     Expense, ExpenseInput, OpenShiftInput, Product, ProductInput, ProductSalesRow,
-    ProductWithStock, SaleInput, Shift, StockMovement, StockMovementInput, StoreInfo, SyncResult,
-    TransactionDetail, User, UserInput,
+    ProductWithStock, SaleInput, Shift, StockMovement, StockMovementInput, StoreInfo, SyncLogEntry,
+    SyncResult, TransactionDetail, User, UserInput,
 };
 use crate::stores;
 use crate::sync;
@@ -887,6 +887,13 @@ pub async fn sync_push(state: State<'_, AppState>) -> AppResult<SyncResult> {
 
     let resp = sync::push(&server_url, &store_id, &dirty).await?;
 
+    // Server tidak mengembalikan breakdown per-ID (cuma agregat applied/skipped),
+    // jadi log push cuma bisa melaporkan apa yang DIKIRIM, bukan status per-item.
+    let log: Vec<SyncLogEntry> = dirty
+        .iter()
+        .map(|p| SyncLogEntry { id: p.id.clone(), name: p.name.clone(), action: "Dikirim".into() })
+        .collect();
+
     let ids: Vec<String> = dirty.iter().map(|p| p.id.clone()).collect();
     {
         let conn = state.lock()?;
@@ -901,6 +908,7 @@ pub async fn sync_push(state: State<'_, AppState>) -> AppResult<SyncResult> {
             "Upload selesai: {} diterapkan, {} dilewati (server lebih baru).",
             resp.applied, resp.skipped
         ),
+        log,
     })
 }
 
@@ -912,7 +920,7 @@ pub async fn sync_pull(state: State<'_, AppState>) -> AppResult<SyncResult> {
     let since = if last_pull.is_empty() { None } else { Some(last_pull.as_str()) };
     let resp = sync::pull(&server_url, &store_id, since).await?;
 
-    let (applied, skipped) = {
+    let (applied, skipped, log) = {
         let conn = state.lock()?;
         let res = db::apply_pulled_products(&conn, &resp.products)?;
         // Catat waktu klien sebagai watermark pull berikutnya.
@@ -928,6 +936,7 @@ pub async fn sync_pull(state: State<'_, AppState>) -> AppResult<SyncResult> {
             "Download selesai: {} diperbarui, {} dilewati (lokal lebih baru).",
             applied, skipped
         ),
+        log,
     })
 }
 
@@ -936,11 +945,14 @@ pub async fn sync_pull(state: State<'_, AppState>) -> AppResult<SyncResult> {
 pub async fn sync_all(state: State<'_, AppState>) -> AppResult<SyncResult> {
     let push_res = sync_push(state.clone()).await?;
     let pull_res = sync_pull(state).await?;
+    let mut log = push_res.log;
+    log.extend(pull_res.log);
     Ok(SyncResult {
         pushed: push_res.pushed,
         pulled: pull_res.pulled,
         skipped: push_res.skipped + pull_res.skipped,
         message: format!("{} {}", push_res.message, pull_res.message),
+        log,
     })
 }
 

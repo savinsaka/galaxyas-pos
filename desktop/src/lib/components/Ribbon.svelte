@@ -20,7 +20,9 @@
       groups: c.groups
         .map((g) => ({
           ...g,
-          actions: g.actions.filter((a) => !($isRemoteClient && a.key === "sync")),
+          actions: g.actions.filter(
+          (a) => !($isRemoteClient && ["sync", "pengaturan-server", "pengaturan-lanjutan"].includes(a.key)),
+        ),
         }))
         .filter((g) => g.actions.length > 0),
     })),
@@ -45,6 +47,7 @@
       title,
       icon: action.icon,
       singleton: action.singleton !== false,
+      props: action.props,
     });
   }
 

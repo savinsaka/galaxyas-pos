@@ -11,6 +11,7 @@
   import { markTransactionsDirty } from "$lib/stores/txSignal";
   import { activeTabId } from "$lib/stores/tabs";
   import { setTabDirty, clearTabDirty } from "$lib/stores/tabGuard";
+  import { activeShiftStore } from "$lib/stores/shift";
   import { parseReceiptConfig, type ReceiptConfig } from "$lib/receipt";
   import { buildReceiptEscPos } from "$lib/escpos";
   import { formatMoneyInput, onMoneyInput } from "$lib/moneyInput";
@@ -41,6 +42,11 @@
   let discounts = $state<DiscountPeriod[]>([]);
   let search = $state("");
   let scanQty = $state(1);
+  // Preferensi Kasir (Pengaturan → Preferensi Kasir): "scan_first" (default,
+  // scan langsung masuk keranjang) atau "jumlah_first" (scan dulu, tunggu
+  // isi Jumlah baru masuk keranjang).
+  let scanMode = $state<"scan_first" | "jumlah_first">("scan_first");
+  let pendingScanProduct = $state<ProductWithStock | null>(null);
   let searchBusy = $state(false);
   let stockAlert = $state<{ name: string; available: number } | null>(null);
   let warningModal = $state<string | null>(null);
@@ -56,6 +62,7 @@
   let selectedCartId = $state<string | null>(null);
   let cartWrapEl = $state<HTMLDivElement>();
   let scanInputEl = $state<HTMLInputElement>();
+  let scanQtyEl = $state<HTMLInputElement>();
   let paidInputEl = $state<HTMLInputElement>();
   let printNoBtnEl = $state<HTMLButtonElement>();
   let printYesBtnEl = $state<HTMLButtonElement>();
@@ -134,6 +141,7 @@
     try {
       const s = await api.getSettings();
       receiptCfg = parseReceiptConfig(s);
+      scanMode = s.kasir_scan_mode === "jumlah_first" ? "jumlah_first" : "scan_first";
     } catch (e) {
       toastError(e);
     }
@@ -148,6 +156,14 @@
   async function loadShift() {
     try {
       activeShift = await api.getActiveShift();
+      activeShiftStore.set(activeShift);
+      // Default modal awal = uang fisik saat tutup shift SEBELUMNYA (poin 1) —
+      // cuma prefill, tetap bisa diubah. Kalau belum ada shift terakhir sama
+      // sekali (pertama kali), tetap 0.
+      if (!activeShift) {
+        const last = await api.listShifts(1);
+        openingCash = last[0]?.closing_cash ?? 0;
+      }
     } catch (e) {
       toastError(e);
     } finally {
@@ -177,6 +193,7 @@
         user_name: $currentUser.name,
         opening_cash: openingCash,
       });
+      activeShiftStore.set(activeShift);
       showToast("Shift dibuka. Selamat berjualan!", "success");
       openingCash = 0;
     } catch (e) {
@@ -268,8 +285,23 @@
   /** Field Jumlah ditaruh sebelum search bar (poin 2), tapi fokus tetap balik
    * ke search bar setelah Enter — alur: isi angka, Enter, langsung scan barcode. */
   function onQtyKeyBeforeScan(e: KeyboardEvent) {
+    if (e.key === "Escape" && pendingScanProduct) {
+      e.preventDefault();
+      pendingScanProduct = null;
+      scanQty = 1;
+      scanInputEl?.focus();
+      return;
+    }
     if (e.key !== "Enter") return;
     e.preventDefault();
+    if (scanMode === "jumlah_first" && pendingScanProduct) {
+      addToCart(pendingScanProduct, scanQty);
+      pendingScanProduct = null;
+      scanQty = 1;
+      search = "";
+      scanInputEl?.focus();
+      return;
+    }
     scanInputEl?.focus();
   }
 
@@ -336,10 +368,20 @@
     searchBusy = false;
     await tick();
     if (p) {
-      addToCart(p, scanQty);
-      search = "";
-      scanQty = 1;
-      scanInputEl?.focus();
+      if (scanMode === "jumlah_first") {
+        // Jangan langsung masuk keranjang — tunggu kasir isi Jumlah dulu (Enter
+        // di field Jumlah yang benar-benar memasukkannya, lihat onQtyKeyBeforeScan).
+        pendingScanProduct = p;
+        search = "";
+        await tick();
+        scanQtyEl?.focus();
+        scanQtyEl?.select();
+      } else {
+        addToCart(p, scanQty);
+        search = "";
+        scanQty = 1;
+        scanInputEl?.focus();
+      }
     } else {
       openSearchPopup(term);
     }
@@ -524,14 +566,17 @@
     }
   }
 
-  // Rumpun F1-F4 khusus metode pembayaran (jangan dipencar dengan aksi lain — poin 1),
-  // F5 uang pas masih serumpun (aksi bayar juga), F6-F8 alur keranjang, F9 aksi akhir.
+  // F1 fokus ke field Jumlah (Tunai sudah default, tidak perlu shortcut sendiri).
+  // Rumpun F2-F4 metode pembayaran (selain Tunai), F5-F7 alur keranjang, F9 aksi
+  // akhir (konsisten dengan Opname/Item Masuk-Keluar), F10-F12 rumpun uang cepat —
+  // tiap rumpun dikelompokkan, tidak dipencar (poin 1).
   function onGlobalKey(e: KeyboardEvent) {
     if (tabId && $activeTabId !== tabId) return;
     if (!activeShift) return;
     if (e.key === "F1") {
       e.preventDefault();
-      selectPaymentMethod("Tunai");
+      scanQtyEl?.focus();
+      scanQtyEl?.select();
     } else if (e.key === "F2") {
       e.preventDefault();
       selectPaymentMethod("QRIS");
@@ -543,19 +588,25 @@
       selectPaymentMethod("Kartu");
     } else if (e.key === "F5") {
       e.preventDefault();
-      paid = total;
+      openSearchPopup(search.trim());
     } else if (e.key === "F6") {
       e.preventDefault();
-      openSearchPopup(search.trim());
-    } else if (e.key === "F7") {
-      e.preventDefault();
       if (cart.length > 0) holdCurrentCart();
-    } else if (e.key === "F8") {
+    } else if (e.key === "F7") {
       e.preventDefault();
       if (cart.length > 0) clearCart();
     } else if (e.key === "F9") {
       e.preventDefault();
       if (!busy) doCheckout();
+    } else if (e.key === "F10") {
+      e.preventDefault();
+      paid = total;
+    } else if (e.key === "F11") {
+      e.preventDefault();
+      paid = 50000;
+    } else if (e.key === "F12") {
+      e.preventDefault();
+      paid = 100000;
     }
   }
   onMount(() => window.addEventListener("keydown", onGlobalKey));
@@ -640,16 +691,29 @@
         class="scan-qty mono"
         type="number"
         min="1"
+        style="order:{scanMode === 'scan_first' ? 1 : 2};"
+        bind:this={scanQtyEl}
         bind:value={scanQty}
         onkeydown={onQtyKeyBeforeScan}
-        title="Jumlah untuk scan berikutnya"
+        title="Jumlah untuk scan berikutnya (F1)"
       />
-      <input class="scan-input" bind:this={scanInputEl} placeholder="Scan barcode / cari nama lalu Enter…" bind:value={search} onkeydown={onSearchKey} disabled={searchBusy} />
-      <button class="btn-ghost" title="Cari nama barang (F6)" onclick={() => openSearchPopup(search.trim())}>🔍</button>
+      <input
+        class="scan-input"
+        style="order:{scanMode === 'scan_first' ? 2 : 1};"
+        bind:this={scanInputEl}
+        placeholder="Scan barcode / cari nama lalu Enter…"
+        bind:value={search}
+        onkeydown={onSearchKey}
+        disabled={searchBusy}
+      />
+      <button class="btn-ghost" style="order:3;" title="Cari nama barang (F5)" onclick={() => openSearchPopup(search.trim())}>🔍</button>
       {#if cart.length > 0}
-        <span class="item-count">{cart.reduce((s, l) => s + l.qty, 0)} item</span>
+        <span class="item-count" style="order:4;">{cart.reduce((s, l) => s + l.qty, 0)} item</span>
       {/if}
     </div>
+    {#if pendingScanProduct}
+      <div class="pending-scan-hint">Jumlah untuk: <b>{pendingScanProduct.name}</b> — isi jumlah lalu Enter (Esc untuk batal)</div>
+    {/if}
 
     <!-- Tabel keranjang -->
     <div class="cart-table-wrap" bind:this={cartWrapEl} tabindex="-1" role="grid" aria-label="Keranjang belanja" onkeydown={onCartKey}>
@@ -752,15 +816,17 @@
 </div>
 
 <ShortcutBar items={[
-  { key: "F1", label: "Pilih Tunai", action: () => selectPaymentMethod("Tunai") },
+  { key: "F1", label: "Fokus Jumlah", action: () => { scanQtyEl?.focus(); scanQtyEl?.select(); } },
   { key: "F2", label: "Pilih QRIS", action: () => selectPaymentMethod("QRIS") },
   { key: "F3", label: "Pilih Kombinasi", action: () => selectPaymentMethod("Kombinasi") },
   { key: "F4", label: "Pilih Kartu", action: () => selectPaymentMethod("Kartu") },
-  { key: "F5", label: "Uang Pas", action: () => (paid = total) },
-  { key: "F6", label: "Cari Barang", action: () => openSearchPopup(search.trim()) },
-  { key: "F7", label: "Pending", action: holdCurrentCart, disabled: cart.length === 0 },
-  { key: "F8", label: "Kosongkan", action: clearCart, disabled: cart.length === 0 },
+  { key: "F5", label: "Cari Barang", action: () => openSearchPopup(search.trim()) },
+  { key: "F6", label: "Pending", action: holdCurrentCart, disabled: cart.length === 0 },
+  { key: "F7", label: "Kosongkan", action: clearCart, disabled: cart.length === 0 },
   { key: "F9", label: "Bayar & Simpan", action: doCheckout, disabled: busy || cart.length === 0 },
+  { key: "F10", label: "Uang Pas", action: () => (paid = total) },
+  { key: "F11", label: "50rb", action: () => (paid = 50000) },
+  { key: "F12", label: "100rb", action: () => (paid = 100000) },
 ]}>
   {#snippet children()}
     {#if $pendingSales.length > 0}
@@ -949,6 +1015,11 @@
     white-space:nowrap; font-size:0.8rem; font-weight:700;
     background:var(--primary); color:#fff;
     padding:0.25rem 0.7rem; border-radius:999px;
+  }
+  .pending-scan-hint {
+    font-size:0.8rem; color:var(--primary-dark); font-weight:600;
+    background:var(--baby-blue-bg); border:1px solid var(--border);
+    border-radius:var(--radius); padding:0.35rem 0.7rem; margin-top:0.4rem;
   }
 
   /* Popup transaksi pending */

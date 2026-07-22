@@ -81,7 +81,29 @@
           <div><div class="text-dim">Dilewati</div><strong class="mono">{lastResult.skipped}</strong></div>
         </div>
         <div class="text-dim" style="margin-top:0.5rem;">{lastResult.message}</div>
+        {#if lastResult.log.length > 0}
+          <div class="sync-log-head">📋 Detail barang ({lastResult.log.length})</div>
+          <div class="sync-log">
+            {#each lastResult.log as l}
+              <div class="log-row log-{l.action === 'Diterapkan' ? 'applied' : l.action === 'Dikirim' ? 'sent' : 'skipped'}">
+                <span>{l.name}</span>
+                <span class="log-action">{l.action}</span>
+              </div>
+            {/each}
+          </div>
+        {/if}
       </div>
     {/if}
   </div>
 </div>
+
+<style>
+  .sync-log-head { font-weight: 650; font-size: 0.85rem; margin-top: 0.8rem; margin-bottom: 0.3rem; }
+  .sync-log { max-height: 240px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--white); }
+  .log-row { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; padding: 0.3rem 0.6rem; font-size: 0.8rem; border-bottom: 1px solid var(--border); }
+  .log-row:last-child { border-bottom: none; }
+  .log-action { font-size: 0.7rem; font-weight: 700; padding: 0.1rem 0.4rem; border-radius: 999px; white-space: nowrap; }
+  .log-applied .log-action { background: var(--success); color: #fff; }
+  .log-sent .log-action { background: var(--primary); color: #fff; }
+  .log-skipped .log-action { background: var(--border-strong); color: var(--text-dim); }
+</style>

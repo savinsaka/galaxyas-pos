@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::models::{
-    Product, ProductInput, ProductWithStock, SaleInput, Transaction, TransactionDetail,
-    TransactionItem,
+    Product, ProductInput, ProductWithStock, SaleInput, SyncLogEntry, Transaction,
+    TransactionDetail, TransactionItem,
 };
 
 /// Buat semua tabel lokal bila belum ada. Stok & transaksi 100% lokal (tidak di-sync).
@@ -239,6 +239,20 @@ pub fn init_schema(conn: &Connection) -> AppResult<()> {
     if !has_tx_paid_cash {
         conn.execute("ALTER TABLE transactions ADD COLUMN paid_cash REAL", [])?;
         conn.execute("ALTER TABLE transactions ADD COLUMN paid_qris REAL", [])?;
+    }
+
+    // Migrasi: kolom ever_synced pada tabel products — 1 = server sudah pernah
+    // tahu ID produk ini (lewat pull ATAU push yang berhasil), jadi LWW timestamp
+    // normal berlaku. 0 = murni lokal, belum pernah "kenal" server — kalau nanti
+    // pull membawa ID yang sama, data server WAJIB menang mutlak walau updated_at
+    // lokal terlihat lebih baru (skenario reset data / import awal).
+    let has_prod_ever_synced: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('products') WHERE name='ever_synced'")?
+        .query_row([], |_| Ok(true))
+        .optional()?
+        .unwrap_or(false);
+    if !has_prod_ever_synced {
+        conn.execute("ALTER TABLE products ADD COLUMN ever_synced INTEGER NOT NULL DEFAULT 0", [])?;
     }
 
     Ok(())
@@ -597,7 +611,10 @@ pub fn dedupe_products_by_barcode(conn: &Connection) -> AppResult<crate::models:
 
 /// Hapus SELURUH data transaksional & master (barang, stok, transaksi,
 /// pergerakan stok, diskon, merek). Akun pengguna & pengaturan toko TIDAK
-/// ikut terhapus agar aplikasi tetap bisa login setelah reset.
+/// ikut terhapus agar aplikasi tetap bisa login setelah reset — KECUALI
+/// `last_pull_at`: watermark itu HARUS ikut dikosongkan, karena kalau tidak,
+/// sync-in berikutnya cuma minta delta sejak watermark lama (bukan full pull)
+/// padahal tabel products sudah kosong total — barang tidak akan balik.
 pub fn reset_data(conn: &Connection) -> AppResult<()> {
     conn.execute_batch(
         "DELETE FROM transaction_items;
@@ -606,7 +623,8 @@ pub fn reset_data(conn: &Connection) -> AppResult<()> {
          DELETE FROM stock;
          DELETE FROM discount_periods;
          DELETE FROM products;
-         DELETE FROM brands;",
+         DELETE FROM brands;
+         DELETE FROM settings WHERE key = 'last_pull_at';",
     )?;
     Ok(())
 }
@@ -888,44 +906,59 @@ pub fn get_dirty_products(conn: &Connection) -> AppResult<Vec<Product>> {
     Ok(rows)
 }
 
+/// Dipanggil setelah push sukses. `ever_synced=1` ikut di-set: begitu produk
+/// berhasil dikirim ke server, server sudah "kenal" ID ini, jadi LWW timestamp
+/// normal berlaku untuk pull berikutnya (kalau tidak, produk yang baru dibuat
+/// lokal lalu di-push, saat di-pull lagi malah dianggap "belum pernah sync"
+/// dan bisa ketimpa mundur oleh respons server yang lebih lama).
 pub fn mark_products_synced(conn: &Connection, ids: &[String]) -> AppResult<()> {
     for id in ids {
-        conn.execute("UPDATE products SET dirty = 0 WHERE id = ?1", params![id])?;
+        conn.execute("UPDATE products SET dirty = 0, ever_synced = 1 WHERE id = ?1", params![id])?;
     }
     Ok(())
 }
 
-/// Terapkan produk hasil pull dari server dengan Last Write Wins berbasis `updated_at`.
-pub fn apply_pulled_products(conn: &Connection, incoming: &[Product]) -> AppResult<(i64, i64)> {
+/// Terapkan produk hasil pull dari server dengan Last Write Wins berbasis
+/// `updated_at` — KECUALI kalau produk itu `ever_synced=0` (belum pernah
+/// benar-benar tersinkron dengan server, mis. row lokal usang dari sebelum
+/// reset/first-sync): dalam kasus itu data server WAJIB diterapkan, terlepas
+/// dari `updated_at` lokal terlihat lebih baru.
+pub fn apply_pulled_products(
+    conn: &Connection,
+    incoming: &[Product],
+) -> AppResult<(i64, i64, Vec<SyncLogEntry>)> {
     let mut applied = 0i64;
     let mut skipped = 0i64;
+    let mut log: Vec<SyncLogEntry> = Vec::with_capacity(incoming.len());
     for p in incoming {
-        let local_updated: Option<String> = conn
+        let local: Option<(String, bool)> = conn
             .query_row(
-                "SELECT updated_at FROM products WHERE id = ?1",
+                "SELECT updated_at, ever_synced FROM products WHERE id = ?1",
                 params![p.id],
-                |r| r.get(0),
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? != 0)),
             )
             .optional()?;
 
-        let should_apply = match &local_updated {
+        let should_apply = match &local {
             None => true,
             // Bandingkan ISO-8601 (UTC) secara leksikografis = urutan kronologis.
-            Some(local) => p.updated_at.as_str() > local.as_str(),
+            Some((local_updated, ever_synced)) => {
+                !ever_synced || p.updated_at.as_str() > local_updated.as_str()
+            }
         };
 
         if should_apply {
             conn.execute(
                 "INSERT INTO products
                     (id, name, barcode, category, brand, unit, sell_price, cost_price,
-                     default_discount, is_active, is_deleted, updated_at, dirty)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,0)
+                     default_discount, is_active, is_deleted, updated_at, dirty, ever_synced)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,0,1)
                  ON CONFLICT(id) DO UPDATE SET
                     name=excluded.name, barcode=excluded.barcode, category=excluded.category,
                     brand=excluded.brand, unit=excluded.unit, sell_price=excluded.sell_price,
                     cost_price=excluded.cost_price, default_discount=excluded.default_discount,
                     is_active=excluded.is_active, is_deleted=excluded.is_deleted,
-                    updated_at=excluded.updated_at, dirty=0",
+                    updated_at=excluded.updated_at, dirty=0, ever_synced=1",
                 params![
                     p.id, p.name, p.barcode, p.category, p.brand, p.unit, p.sell_price,
                     p.cost_price, p.default_discount, p.is_active as i64, p.is_deleted as i64,
@@ -938,11 +971,13 @@ pub fn apply_pulled_products(conn: &Connection, incoming: &[Product]) -> AppResu
                 params![p.id, p.updated_at],
             )?;
             applied += 1;
+            log.push(SyncLogEntry { id: p.id.clone(), name: p.name.clone(), action: "Diterapkan".into() });
         } else {
             skipped += 1;
+            log.push(SyncLogEntry { id: p.id.clone(), name: p.name.clone(), action: "Dilewati".into() });
         }
     }
-    Ok((applied, skipped))
+    Ok((applied, skipped, log))
 }
 
 // ---------- Pengguna / hak akses ----------
@@ -1984,6 +2019,34 @@ pub fn list_shifts(conn: &Connection, limit: i64) -> AppResult<Vec<Shift>> {
     let mut stmt = conn.prepare("SELECT * FROM shifts ORDER BY opened_at DESC LIMIT ?1")?;
     let rows = stmt.query_map(params![limit], map_shift)?.collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
+}
+
+/// Dipanggil sekali saat startup (sebelum window utama dibuka). Kalau sesi
+/// sebelumnya TIDAK sempat menutup dengan bersih (crash / mati listrik / force
+/// close via Task Manager — ditandai lewat setting `app_running` yang masih
+/// "1" karena tidak pernah di-clear), dan ada shift yang masih terbuka, shift
+/// itu otomatis ditutup dengan uang fisik = 0 supaya tidak mengganjal toko
+/// besoknya. Penanda `app_running` di-set "1" lagi setelahnya untuk sesi ini,
+/// dan di-clear balik ke "0" saat window utama benar-benar ditutup (lihat
+/// `WindowEvent::Destroyed` di lib.rs) — TIDAK bisa mengandalkan cleanup di
+/// titik lain karena kalau proses dibunuh paksa, tidak ada kode yang sempat jalan.
+pub fn recover_stale_shift(conn: &Connection) -> AppResult<()> {
+    let was_running = get_setting(conn, "app_running")?.as_deref() == Some("1");
+    if was_running {
+        if let Some(shift) = get_active_shift(conn)? {
+            close_shift(
+                conn,
+                CloseShiftInput {
+                    id: shift.id,
+                    closing_cash: 0.0,
+                    note: Some(
+                        "Ditutup otomatis — aplikasi sebelumnya berhenti tidak wajar (force close / mati listrik).".into(),
+                    ),
+                },
+            )?;
+        }
+    }
+    set_setting(conn, "app_running", "1")
 }
 
 // ---------- Laporan per barang / per merek ----------

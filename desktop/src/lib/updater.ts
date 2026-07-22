@@ -51,6 +51,6 @@ export async function installUpdate() {
   }
 }
 
-export function dismissUpdateBanner() {
+export function dismissUpdate() {
   updateState.set({ status: "idle" });
 }

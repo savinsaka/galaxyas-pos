@@ -1,71 +1,64 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import { updateState, checkForUpdate, installUpdate, dismissUpdateBanner } from "$lib/updater";
+  import { updateState, checkForUpdate, installUpdate, dismissUpdate } from "$lib/updater";
+  import { currentUser } from "$lib/stores/auth";
 
-  onMount(() => {
-    checkForUpdate();
+  // Cek update baru dipicu SETELAH login (bukan di layar login) — sekali per
+  // sesi login, supaya popup tidak mengganggu sebelum kasir sempat masuk.
+  let checked = false;
+  $effect(() => {
+    if ($currentUser && !checked) {
+      checked = true;
+      checkForUpdate();
+    } else if (!$currentUser) {
+      checked = false;
+    }
   });
 </script>
 
-{#if $updateState.status === "available"}
-  <div class="update-banner">
-    <span>🔔 Versi <b>{$updateState.version}</b> tersedia.</span>
-    <div class="row" style="gap:0.4rem;">
-      <button class="btn-primary" onclick={installUpdate}>Update Sekarang</button>
-      <button class="btn-ghost" onclick={dismissUpdateBanner}>Nanti</button>
+{#if $currentUser && $updateState.status !== "idle"}
+  <div class="modal-backdrop" onclick={() => $updateState.status === "available" && dismissUpdate()} role="presentation">
+    <div class="modal update-modal" onclick={(e) => e.stopPropagation()} role="presentation">
+      {#if $updateState.status === "available"}
+        <div class="update-icon">🔔</div>
+        <h2>Update Tersedia</h2>
+        <p class="text-dim" style="margin:0.3rem 0 1rem;">Sudah ada update versi <b>{$updateState.version}</b>.</p>
+        <div class="row" style="gap:0.5rem;">
+          <button class="btn-ghost" style="flex:1;" onclick={dismissUpdate}>Nanti</button>
+          <button class="btn-primary" style="flex:1;" onclick={installUpdate}>Update Sekarang</button>
+        </div>
+      {:else if $updateState.status === "downloading"}
+        <div class="update-icon">⬇️</div>
+        <h2>Mengunduh Update</h2>
+        <p class="text-dim" style="margin:0.3rem 0 1rem;">Versi {$updateState.version} — {$updateState.progress}%</p>
+        <div class="update-progress-bar">
+          <div class="update-progress-fill" style="width:{$updateState.progress}%"></div>
+        </div>
+      {:else if $updateState.status === "ready"}
+        <div class="update-icon">✅</div>
+        <h2>Update Siap</h2>
+        <p class="text-dim" style="margin:0.3rem 0 0;">Aplikasi akan restart otomatis…</p>
+      {:else if $updateState.status === "error"}
+        <div class="update-icon">⚠️</div>
+        <h2>Update Gagal</h2>
+        <p class="text-dim" style="margin:0.3rem 0 1rem;">{$updateState.message}</p>
+        <button class="btn-primary" style="width:100%;" onclick={dismissUpdate}>Tutup</button>
+      {/if}
     </div>
-  </div>
-{:else if $updateState.status === "downloading"}
-  <div class="update-banner">
-    <span>⬇️ Mengunduh update {$updateState.version}… {$updateState.progress}%</span>
-    <div class="update-progress-bar">
-      <div class="update-progress-fill" style="width:{$updateState.progress}%"></div>
-    </div>
-  </div>
-{:else if $updateState.status === "ready"}
-  <div class="update-banner">
-    <span>✅ Update siap. Aplikasi akan restart…</span>
-  </div>
-{:else if $updateState.status === "error"}
-  <div class="update-banner update-banner-error">
-    <span>⚠️ Update gagal: {$updateState.message}</span>
-    <button class="btn-ghost" onclick={dismissUpdateBanner}>Tutup</button>
   </div>
 {/if}
 
 <style>
-  .update-banner {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    z-index: 9999;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 1rem;
-    padding: 0.5rem 1rem;
-    background: var(--primary);
-    color: #fff;
-    font-size: 0.85rem;
-  }
-  .update-banner-error {
-    background: var(--danger);
-  }
-  .update-banner :global(button) {
-    color: #fff;
-    border-color: rgba(255, 255, 255, 0.5);
-  }
+  .update-modal { max-width: 360px; text-align: center; }
+  .update-icon { font-size: 2.2rem; margin-bottom: 0.3rem; }
   .update-progress-bar {
-    width: 160px;
-    height: 6px;
+    height: 8px;
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.35);
+    background: var(--baby-blue-bg);
     overflow: hidden;
   }
   .update-progress-fill {
     height: 100%;
-    background: #fff;
+    background: var(--primary);
     transition: width 0.15s linear;
   }
 </style>

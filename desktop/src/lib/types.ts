@@ -93,11 +93,18 @@ export interface TransactionPage {
   total: number;
 }
 
+export interface SyncLogEntry {
+  id: string;
+  name: string;
+  action: string;
+}
+
 export interface SyncResult {
   pushed: number;
   pulled: number;
   skipped: number;
   message: string;
+  log: SyncLogEntry[];
 }
 
 export type PaymentMethod = "Tunai" | "QRIS" | "Kombinasi" | "Kartu";

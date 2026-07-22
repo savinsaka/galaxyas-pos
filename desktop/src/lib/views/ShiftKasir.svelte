@@ -5,6 +5,7 @@
   import { showToast, toastError } from "$lib/toast";
   import { currentUser } from "$lib/stores/auth";
   import { printElement } from "$lib/print";
+  import { activeShiftStore } from "$lib/stores/shift";
   import type { Shift } from "$lib/types";
 
   let active = $state<Shift | null>(null);
@@ -18,6 +19,11 @@
   async function load() {
     try {
       [active, history] = await Promise.all([api.getActiveShift(), api.listShifts(50)]);
+      activeShiftStore.set(active);
+      // Default modal awal = uang fisik saat tutup shift SEBELUMNYA (poin 1) —
+      // cuma prefill, tetap bisa diubah. history diurut terbaru dulu; kalau
+      // tidak ada shift aktif, entri pertama adalah shift terakhir yang ditutup.
+      if (!active) openingCash = history[0]?.closing_cash ?? 0;
     } catch (e) {
       toastError(e);
     }
@@ -33,6 +39,7 @@
         user_name: $currentUser.name,
         opening_cash: openingCash,
       });
+      activeShiftStore.set(active);
       showToast("Shift dibuka.", "success");
       openingCash = 0;
       await load();

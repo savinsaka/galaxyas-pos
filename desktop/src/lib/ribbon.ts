@@ -8,6 +8,8 @@ export interface RibbonAction {
   title: string;
   /** Fokus tab yang sudah ada (default true). Set false untuk tab yang bisa banyak (POS kasir). */
   singleton?: boolean;
+  /** Props diteruskan ke komponen tab (mis. `section` untuk Pengaturan yang dipecah per menu). */
+  props?: Record<string, unknown>;
 }
 
 export interface RibbonGroup {
@@ -134,7 +136,13 @@ export const RIBBON: RibbonCategory[] = [
       {
         label: "Aplikasi",
         actions: [
-          { key: "pengaturan", label: "Pengaturan", icon: "⚙️", viewKey: "pengaturan", title: "Pengaturan", singleton: true },
+          { key: "pengaturan-toko", label: "Info Toko", icon: "🏪", viewKey: "pengaturan-toko", title: "Informasi Toko", singleton: true, props: { section: "toko" } },
+          { key: "pengaturan-server", label: "Server Sinkronisasi", icon: "🔄", viewKey: "pengaturan-server", title: "Server Sinkronisasi", singleton: true, props: { section: "server" } },
+          { key: "pengaturan-lan", label: "Server Pusat", icon: "🖧", viewKey: "pengaturan-lan", title: "Server Pusat", singleton: true, props: { section: "lan" } },
+          { key: "pengaturan-struk", label: "Struk & Printer", icon: "🖨️", viewKey: "pengaturan-struk", title: "Struk & Printer", singleton: true, props: { section: "struk" } },
+          { key: "pengaturan-tema", label: "Tema", icon: "🎨", viewKey: "pengaturan-tema", title: "Tema", singleton: true, props: { section: "tema" } },
+          { key: "pengaturan-kasir", label: "Preferensi Kasir", icon: "🧮", viewKey: "pengaturan-kasir", title: "Preferensi Kasir", singleton: true, props: { section: "kasir" } },
+          { key: "pengaturan-lanjutan", label: "Lanjutan", icon: "⚠️", viewKey: "pengaturan-lanjutan", title: "Lanjutan", singleton: true, props: { section: "lanjutan" } },
           { key: "hak-akses", label: "Hak Akses", icon: "🔐", viewKey: "hak-akses", title: "Hak Akses & Pengguna", singleton: true },
         ],
       },

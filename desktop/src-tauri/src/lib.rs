@@ -23,6 +23,20 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        // Tandai shutdown BERSIH (lawan dari crash/force-close) hanya untuk window
+        // utama — window cetak (label "print-*") dibuka/ditutup berkali-kali dan
+        // tidak boleh ikut meng-clear penanda ini. Lihat db::recover_stale_shift.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                if window.label() == "main" {
+                    let state = window.app_handle().state::<AppState>();
+                    let lock_result = state.conn.lock();
+                    if let Ok(conn) = lock_result {
+                        let _ = db::set_setting(&conn, "app_running", "0");
+                    }
+                }
+            }
+        })
         .setup(|app| {
             // Database lokal disimpan di app data dir (per instalasi). Bisa berisi
             // sampai 3 toko terpisah (lihat `stores.rs`); toko aktif ditentukan
@@ -40,6 +54,12 @@ pub fn run() {
             let conn = Connection::open(&db_path).expect("gagal membuka database SQLite");
             db::init_schema(&conn).expect("gagal inisialisasi skema");
             db::seed_defaults(&conn).expect("gagal seeding data awal");
+            // Pulihkan shift yang tertinggal kalau sesi sebelumnya berhenti tidak
+            // wajar (crash/force close/mati listrik) — jangan gagalkan startup
+            // kalau ini error, cukup catat.
+            if let Err(e) = db::recover_stale_shift(&conn) {
+                eprintln!("gagal memulihkan shift yang tertinggal: {e}");
+            }
 
             // Baca pengaturan Server Pusat (host) dari koneksi lokal SEBELUM
             // dipindah ke Arc<Mutex<>>, supaya auto-start di bawah bisa pakai

@@ -9,8 +9,17 @@
   import { currentServer, isRemoteClient } from "$lib/stores/activeServer";
   import Receipt from "$lib/components/Receipt.svelte";
 
-  type PTab = "toko" | "server" | "lan" | "struk" | "tema" | "lanjutan";
-  let activeTab = $state<PTab>("toko");
+  type PTab = "toko" | "server" | "lan" | "struk" | "tema" | "kasir" | "lanjutan";
+  let { section }: { section: PTab; tabId?: string } = $props();
+  const SECTION_TITLES: Record<PTab, string> = {
+    toko: "Informasi Toko",
+    server: "Server Sinkronisasi",
+    lan: "Server Pusat",
+    struk: "Struk & Printer",
+    tema: "Tema Tampilan",
+    kasir: "Preferensi Kasir",
+    lanjutan: "Lanjutan",
+  };
   let activeTheme = $state("baby-blue");
   let savingTheme = $state(false);
 
@@ -140,10 +149,25 @@
       settings.tax_percent ??= "0";
       settings.theme ??= "baby-blue";
       activeTheme = settings.theme;
+      settings.kasir_scan_mode ??= "scan_first";
       for (const { setting } of RECEIPT_SHOW_KEYS) settings[setting] ??= "1";
     } catch (e) { toastError(e); }
   }
   onMount(load);
+
+  let savingScanMode = $state(false);
+  async function pickScanMode(mode: "scan_first" | "jumlah_first") {
+    savingScanMode = true;
+    try {
+      await api.updateSetting("kasir_scan_mode", mode);
+      settings.kasir_scan_mode = mode;
+      showToast("Preferensi kasir diterapkan.", "success");
+    } catch (e) {
+      toastError(e);
+    } finally {
+      savingScanMode = false;
+    }
+  }
 
   async function pickTheme(key: string) {
     activeTheme = key;
@@ -230,27 +254,6 @@
     onSpacingInput();
   }
 
-  // Di mode client (konek ke Server Pusat PC lain): sync manual & reset data
-  // disembunyikan — data memang sudah live-shared lewat Server Pusat, dan
-  // reset data dari PC sekunder berisiko menghapus data toko yang dipakai
-  // bersama.
-  const PTABS = $derived(
-    (
-      [
-        { key: "toko", label: "Informasi Toko", icon: "🏪" },
-        { key: "server", label: "Server Sinkronisasi", icon: "🔄" },
-        { key: "lan", label: "Server Pusat", icon: "🖧" },
-        { key: "struk", label: "Struk & Printer", icon: "🖨️" },
-        { key: "tema", label: "Tema", icon: "🎨" },
-        { key: "lanjutan", label: "Lanjutan", icon: "⚠️" },
-      ] as { key: PTab; label: string; icon: string }[]
-    ).filter((t) => !$isRemoteClient || (t.key !== "server" && t.key !== "lanjutan")),
-  );
-
-  $effect(() => {
-    if (!PTABS.some((t) => t.key === activeTab)) activeTab = "toko";
-  });
-
   async function doResetData() {
     if (resetConfirmText.trim() !== RESET_PHRASE) return;
     if (!confirm("Ini akan menghapus SEMUA data barang, stok, transaksi, diskon, dan merek secara permanen. Lanjutkan?")) return;
@@ -267,19 +270,10 @@
   }
 </script>
 
-<div class="page-head"><h1>Pengaturan</h1></div>
+<div class="page-head"><h1>{SECTION_TITLES[section]}</h1></div>
 
-<!-- Tab navigasi internal -->
-<div class="ptab-bar">
-  {#each PTABS as t}
-    <button class="ptab-btn" class:active={activeTab === t.key} onclick={() => (activeTab = t.key)}>
-      {t.icon} {t.label}
-    </button>
-  {/each}
-</div>
-
-<!-- ── Tab: Informasi Toko ── -->
-{#if activeTab === "toko"}
+<!-- ── Informasi Toko ── -->
+{#if section === "toko"}
   <div class="card" style="max-width:520px;">
     <h2>Informasi Toko</h2>
     {#each tokoFields as f}
@@ -295,7 +289,7 @@
 {/if}
 
 <!-- ── Tab: Server Sinkronisasi ── -->
-{#if activeTab === "server"}
+{#if section === "server"}
   <div class="card" style="max-width:520px;">
     <h2>Server Sinkronisasi</h2>
     <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
@@ -337,7 +331,7 @@
 {/if}
 
 <!-- ── Tab: Server Pusat (LAN multi-kasir) ── -->
-{#if activeTab === "lan"}
+{#if section === "lan"}
   <div class="card" style="max-width:560px;">
     {#if $isRemoteClient}
       <h2>Server Pusat</h2>
@@ -390,7 +384,7 @@
 {/if}
 
 <!-- ── Tab: Struk & Printer ── -->
-{#if activeTab === "struk"}
+{#if section === "struk"}
   <div class="card">
     <h2>Struk &amp; Printer</h2>
     <div class="struk-grid">
@@ -463,7 +457,7 @@
 {/if}
 
 <!-- ── Tab: Tema ── -->
-{#if activeTab === "tema"}
+{#if section === "tema"}
   <div class="card" style="max-width:640px;">
     <h2>Tema Tampilan</h2>
     <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
@@ -481,8 +475,44 @@
   </div>
 {/if}
 
+<!-- ── Tab: Preferensi Kasir ── -->
+{#if section === "kasir"}
+  <div class="card" style="max-width:640px;">
+    <h2>Preferensi Kasir</h2>
+    <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
+      Atur alur scan barang di layar Kasir POS. Berlaku langsung untuk semua kasir di toko ini.
+    </p>
+    <div class="scanmode-grid">
+      <button
+        class="scanmode-card"
+        class:active={(settings.kasir_scan_mode ?? "scan_first") === "scan_first"}
+        disabled={savingScanMode}
+        onclick={() => pickScanMode("scan_first")}
+      >
+        <span class="scanmode-name">Scan First <span class="text-dim" style="font-weight:400;">(default)</span></span>
+        <span class="text-dim" style="font-size:0.82rem;">
+          Isi Jumlah dulu (opsional), lalu scan barcode / Enter di search — barang langsung masuk daftar keranjang.
+        </span>
+        {#if (settings.kasir_scan_mode ?? "scan_first") === "scan_first"}<span class="theme-check">✓</span>{/if}
+      </button>
+      <button
+        class="scanmode-card"
+        class:active={settings.kasir_scan_mode === "jumlah_first"}
+        disabled={savingScanMode}
+        onclick={() => pickScanMode("jumlah_first")}
+      >
+        <span class="scanmode-name">Jumlah First</span>
+        <span class="text-dim" style="font-size:0.82rem;">
+          Scan barcode dulu — barang TIDAK langsung masuk, cursor pindah ke Jumlah. Isi jumlah lalu Enter baru masuk daftar keranjang.
+        </span>
+        {#if settings.kasir_scan_mode === "jumlah_first"}<span class="theme-check">✓</span>{/if}
+      </button>
+    </div>
+  </div>
+{/if}
+
 <!-- ── Tab: Lanjutan (Zona Berbahaya) ── -->
-{#if activeTab === "lanjutan"}
+{#if section === "lanjutan"}
   <div class="card danger-zone" style="max-width:560px;">
     <h2>⚠️ Reset Data</h2>
     <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
@@ -513,26 +543,6 @@
     border-color: var(--danger);
     background: color-mix(in srgb, var(--danger) 6%, var(--white));
   }
-  .ptab-bar {
-    display: flex;
-    gap: 0.3rem;
-    margin-bottom: 1rem;
-    border-bottom: 2px solid var(--border);
-    padding-bottom: 0;
-  }
-  .ptab-btn {
-    border: none;
-    border-bottom: 3px solid transparent;
-    border-radius: 0;
-    background: transparent;
-    padding: 0.55rem 1.1rem;
-    font-size: 0.9rem;
-    font-weight: 500;
-    color: var(--text-dim);
-    margin-bottom: -2px;
-  }
-  .ptab-btn:hover { background: var(--baby-blue-soft); color: var(--text); }
-  .ptab-btn.active { border-bottom-color: var(--primary); color: var(--primary); font-weight: 700; }
   .struk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px,1fr)); gap: 0.7rem; }
   .block-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px,1fr)); gap: 0.4rem; margin-top: 0.4rem; }
   .block-cb { margin: 0; gap: 0.35rem; font-weight: 400; font-size: 0.85rem; }
@@ -555,4 +565,17 @@
     position: absolute; top: 0.4rem; right: 0.5rem;
     color: var(--primary); font-weight: 700;
   }
+
+  .scanmode-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px,1fr)); gap: 0.8rem; margin-top: 0.8rem; }
+  .scanmode-card {
+    position: relative;
+    display: flex; flex-direction: column; align-items: flex-start; gap: 0.35rem;
+    text-align: left;
+    padding: 1rem;
+    border: 2px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--panel);
+  }
+  .scanmode-card.active { border-color: var(--primary); }
+  .scanmode-name { font-size: 0.92rem; font-weight: 700; }
 </style>
