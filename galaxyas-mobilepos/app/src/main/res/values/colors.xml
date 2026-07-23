@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Latar adaptive icon: hitam, menyatu dengan latar logo GALAXYAS. -->
+    <color name="ic_launcher_background">#000000</color>
+</resources>

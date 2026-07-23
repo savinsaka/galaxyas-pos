@@ -18,11 +18,16 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.galaxyas.mobilepos.data.ServerRegistry
@@ -109,6 +114,14 @@ fun MenuScreen(
                 OutlinedButton(onClick = onOpenPrinter, modifier = Modifier.fillMaxWidth()) {
                     Text("🖨️ Printer & Kertas", modifier = Modifier.fillMaxWidth())
                 }
+                OutlinedButton(onClick = { onOpen("toko") }, modifier = Modifier.fillMaxWidth()) {
+                    Text("🏪 Info Toko & Struk", modifier = Modifier.fillMaxWidth())
+                }
+                if (user?.role == "admin") {
+                    OutlinedButton(onClick = { onOpen("users") }, modifier = Modifier.fillMaxWidth()) {
+                        Text("🔑 Hak Akses", modifier = Modifier.fillMaxWidth())
+                    }
+                }
             }
         }
 
@@ -143,8 +156,39 @@ fun MenuScreen(
             }
         }
 
+        // Cek versi baru (maks sekali per buka tab) — Android tanpa auto-updater.
+        var update by remember { mutableStateOf<com.galaxyas.mobilepos.data.network.MobileRelease?>(null) }
+        LaunchedEffect(Unit) {
+            update = com.galaxyas.mobilepos.data.network.UpdateChecker.check(
+                com.galaxyas.mobilepos.BuildConfig.VERSION_NAME,
+            )
+        }
+        update?.let { rel ->
+            val ctx = LocalContext.current
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Versi ${rel.version} tersedia", fontWeight = FontWeight.SemiBold)
+                    if (rel.notes.isNotBlank()) {
+                        Text(rel.notes, style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            ctx.startActivity(
+                                android.content.Intent(
+                                    android.content.Intent.ACTION_VIEW,
+                                    android.net.Uri.parse(rel.apk_url),
+                                ),
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Unduh APK") }
+                }
+            }
+        }
+
         Text(
-            "GALAXYAS Mobile POS",
+            "GALAXYAS Mobile POS v${com.galaxyas.mobilepos.BuildConfig.VERSION_NAME}",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.fillMaxWidth().padding(top = 6.dp),

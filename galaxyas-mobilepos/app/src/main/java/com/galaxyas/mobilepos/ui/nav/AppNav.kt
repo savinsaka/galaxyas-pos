@@ -31,8 +31,11 @@ import com.galaxyas.mobilepos.ui.kasir.KasirScreen
 import com.galaxyas.mobilepos.ui.kasir.KasirViewModel
 import com.galaxyas.mobilepos.ui.kasir.TransactionHistoryScreen
 import com.galaxyas.mobilepos.ui.login.LoginScreen
+import com.galaxyas.mobilepos.ui.laporan.ReportsScreen
 import com.galaxyas.mobilepos.ui.menu.MenuScreen
 import com.galaxyas.mobilepos.ui.menu.SettingsPrinterScreen
+import com.galaxyas.mobilepos.ui.menu.SettingsStoreScreen
+import com.galaxyas.mobilepos.ui.menu.UsersScreen
 import com.galaxyas.mobilepos.ui.onboarding.PairingScreen
 import com.galaxyas.mobilepos.ui.persediaan.ExpensesScreen
 import com.galaxyas.mobilepos.ui.persediaan.OpnameScreen
@@ -204,8 +207,10 @@ private fun MainShell(container: AppContainer, onChangeServer: () -> Unit) {
                 }
                 composable("pengeluaran") { ExpensesScreen(container.api, container.session) }
                 composable("laporan") {
-                    ComingSoon("📊", "Laporan", "Laporan penjualan & persediaan hadir di P4.")
+                    ReportsScreen(container.api, container.settings)
                 }
+                composable("toko") { SettingsStoreScreen(container.settings) }
+                composable("users") { UsersScreen(container.api, container.session) }
                 composable("menu") {
                     MenuScreen(
                         session = container.session,
