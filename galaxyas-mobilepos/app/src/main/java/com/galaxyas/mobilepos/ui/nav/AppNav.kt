@@ -26,8 +26,13 @@ import androidx.navigation.compose.rememberNavController
 import com.galaxyas.mobilepos.AppContainer
 import com.galaxyas.mobilepos.ui.common.ComingSoon
 import com.galaxyas.mobilepos.ui.common.ConnectionBanner
+import com.galaxyas.mobilepos.ui.kasir.HistoryViewModel
+import com.galaxyas.mobilepos.ui.kasir.KasirScreen
+import com.galaxyas.mobilepos.ui.kasir.KasirViewModel
+import com.galaxyas.mobilepos.ui.kasir.TransactionHistoryScreen
 import com.galaxyas.mobilepos.ui.login.LoginScreen
 import com.galaxyas.mobilepos.ui.menu.MenuScreen
+import com.galaxyas.mobilepos.ui.menu.SettingsPrinterScreen
 import com.galaxyas.mobilepos.ui.onboarding.PairingScreen
 import com.galaxyas.mobilepos.ui.produk.ProductListScreen
 import com.galaxyas.mobilepos.ui.produk.ProductListViewModel
@@ -100,6 +105,13 @@ private fun MainShell(container: AppContainer, onChangeServer: () -> Unit) {
                     )
                 },
                 actions = {
+                    if (currentRoute == "kasir") {
+                        androidx.compose.material3.TextButton(
+                            onClick = { navController.navigate("riwayat") },
+                        ) {
+                            Text("Riwayat", color = MaterialTheme.colorScheme.onPrimary)
+                        }
+                    }
                     Text(
                         user?.name ?: "",
                         style = MaterialTheme.typography.bodySmall,
@@ -138,7 +150,19 @@ private fun MainShell(container: AppContainer, onChangeServer: () -> Unit) {
             }
             NavHost(navController = navController, startDestination = startRoute) {
                 composable("kasir") {
-                    ComingSoon("🧾", "Kasir", "Layar kasir lengkap hadir di tahap berikutnya (P2).")
+                    val vm: KasirViewModel = viewModel {
+                        KasirViewModel(
+                            container.api, container.session, container.settings,
+                            container.pendingSales, container.appContext,
+                        )
+                    }
+                    KasirScreen(vm, container.api)
+                }
+                composable("riwayat") {
+                    val vm: HistoryViewModel = viewModel {
+                        HistoryViewModel(container.api, container.session, container.settings, container.appContext)
+                    }
+                    TransactionHistoryScreen(vm)
                 }
                 composable("produk") {
                     val vm: ProductListViewModel = viewModel { ProductListViewModel(container.api) }
@@ -153,7 +177,11 @@ private fun MainShell(container: AppContainer, onChangeServer: () -> Unit) {
                         registry = container.serverRegistry,
                         settings = container.settings,
                         onChangeServer = onChangeServer,
+                        onOpenPrinter = { navController.navigate("printer") },
                     )
+                }
+                composable("printer") {
+                    SettingsPrinterScreen(container.settings)
                 }
             }
         }

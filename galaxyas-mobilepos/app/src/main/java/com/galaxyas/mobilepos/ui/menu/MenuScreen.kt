@@ -42,6 +42,7 @@ fun MenuScreen(
     registry: ServerRegistry,
     settings: SettingsRepository,
     onChangeServer: () -> Unit,
+    onOpenPrinter: () -> Unit,
 ) {
     val user by session.user.collectAsState()
     val server by registry.activeServer.collectAsState()
@@ -80,6 +81,16 @@ fun MenuScreen(
                         onClick = onChangeServer,
                         modifier = Modifier.weight(1f),
                     ) { Text("Ganti Server") }
+                }
+            }
+        }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Pengaturan", style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                OutlinedButton(onClick = onOpenPrinter, modifier = Modifier.fillMaxWidth()) {
+                    Text("🖨️ Printer & Kertas", modifier = Modifier.fillMaxWidth())
                 }
             }
         }
