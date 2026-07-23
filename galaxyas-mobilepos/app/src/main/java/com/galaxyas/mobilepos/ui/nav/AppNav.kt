@@ -2,7 +2,13 @@ package com.galaxyas.mobilepos.ui.nav
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.PointOfSale
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -17,6 +23,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
@@ -51,15 +58,17 @@ import com.galaxyas.mobilepos.ui.produk.ProductListViewModel
 private data class Tab(
     val route: String,
     val label: String,
-    val icon: String,
+    val icon: ImageVector,
     val perm: String?, // null = selalu tampil
 )
 
+// Material icons (bukan emoji) — rendering konsisten lintas HP; emoji seperti
+// U+1F5A7 ternyata tidak punya glyph di sebagian font Android (tampil kotak).
 private val TABS = listOf(
-    Tab("kasir", "Kasir", "🧾", "penjualan"),
-    Tab("produk", "Produk", "📦", "master"),
-    Tab("laporan", "Laporan", "📊", "laporan"),
-    Tab("menu", "Menu", "☰", null),
+    Tab("kasir", "Kasir", Icons.Default.PointOfSale, "penjualan"),
+    Tab("produk", "Produk", Icons.Default.Inventory2, "master"),
+    Tab("laporan", "Laporan", Icons.Default.BarChart, "laporan"),
+    Tab("menu", "Menu", Icons.Default.Menu, null),
 )
 
 /** Gate boot: belum pairing → Pairing; belum login → Login; else shell tab. */
@@ -148,7 +157,7 @@ private fun MainShell(container: AppContainer, onChangeServer: () -> Unit) {
                                 restoreState = true
                             }
                         },
-                        icon = { Text(tab.icon) },
+                        icon = { Icon(tab.icon, contentDescription = tab.label) },
                         label = { Text(tab.label) },
                     )
                 }

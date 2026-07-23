@@ -81,7 +81,7 @@ fun LoginScreen(
             color = MaterialTheme.colorScheme.secondary,
         )
         Text(
-            "Masuk untuk melanjutkan" + (active?.let { " · 🖧 ${it.name}" } ?: ""),
+            "Masuk untuk melanjutkan" + (active?.let { " · 📶 ${it.name}" } ?: ""),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -113,6 +113,6 @@ fun LoginScreen(
             enabled = !busy && pin.isNotBlank(),
             modifier = Modifier.fillMaxWidth(),
         ) { Text(if (busy) "Memproses…" else "Masuk") }
-        TextButton(onClick = onChangeServer, enabled = !busy) { Text("🖧 Ganti Server") }
+        TextButton(onClick = onChangeServer, enabled = !busy) { Text("📶 Ganti Server") }
     }
 }

@@ -69,7 +69,7 @@ fun MenuScreen(
                     Text(user?.role ?: "", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Row {
-                    Text("🖧 ${server?.name ?: "-"}", modifier = Modifier.weight(1f))
+                    Text("📶 ${server?.name ?: "-"}", modifier = Modifier.weight(1f))
                     Text(
                         server?.let { "${it.host}:${it.port}" } ?: "",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
