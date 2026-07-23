@@ -29,6 +29,24 @@ data class AppExtraColors(
     val warning: Color,
 )
 
+/**
+ * Isi slot surfaceContainer* / surfaceTint secara eksplisit. WAJIB: kalau
+ * dibiarkan default, Material3 memakai baseline palette ungu bawaannya —
+ * kartu & bottom nav jadi merah muda walau primary sudah biru (terlihat saat
+ * uji di HP). surfaceTint transparan supaya tonal elevation tidak menggeser
+ * warna dari palet desktop.
+ */
+private fun ColorScheme.withSurfaces(panel: Color, bg: Color, soft: Color): ColorScheme = copy(
+    surfaceContainerLowest = panel,
+    surfaceContainerLow = panel,
+    surfaceContainer = bg,
+    surfaceContainerHigh = soft,
+    surfaceContainerHighest = soft,
+    surfaceBright = panel,
+    surfaceDim = bg,
+    surfaceTint = Color.Transparent,
+)
+
 private val BabyBlue = AppTheme(
     key = "baby-blue",
     label = "Baby Blue (Default)",
@@ -54,7 +72,7 @@ private val BabyBlue = AppTheme(
         outlineVariant = Color(0xFFCFE3F5),
         error = Color(0xFFD9534F),
         onError = Color.White,
-    ),
+    ).withSurfaces(Color(0xFFFFFFFF), Color(0xFFF2F9FF), Color(0xFFD6ECFB)),
 )
 
 private val Dark = AppTheme(
@@ -82,7 +100,7 @@ private val Dark = AppTheme(
         outlineVariant = Color(0xFF2E3F4F),
         error = Color(0xFFE57470),
         onError = Color(0xFF10171F),
-    ),
+    ).withSurfaces(Color(0xFF1E2A36), Color(0xFF1A2530), Color(0xFF24313F)),
 )
 
 private val Forest = AppTheme(
@@ -110,7 +128,7 @@ private val Forest = AppTheme(
         outlineVariant = Color(0xFFCDEAD9),
         error = Color(0xFFD9534F),
         onError = Color.White,
-    ),
+    ).withSurfaces(Color(0xFFFFFFFF), Color(0xFFF2FAF4), Color(0xFFDCF1E1)),
 )
 
 private val Sunset = AppTheme(
@@ -138,7 +156,7 @@ private val Sunset = AppTheme(
         outlineVariant = Color(0xFFF0DCC0),
         error = Color(0xFFD9534F),
         onError = Color.White,
-    ),
+    ).withSurfaces(Color(0xFFFFFFFF), Color(0xFFFFF8F0), Color(0xFFFBE8D2)),
 )
 
 private val Grape = AppTheme(
@@ -166,7 +184,7 @@ private val Grape = AppTheme(
         outlineVariant = Color(0xFFE3D3F2),
         error = Color(0xFFD9534F),
         onError = Color.White,
-    ),
+    ).withSurfaces(Color(0xFFFFFFFF), Color(0xFFF8F2FC), Color(0xFFECDFF8)),
 )
 
 private val HighContrast = AppTheme(
@@ -194,7 +212,7 @@ private val HighContrast = AppTheme(
         outlineVariant = Color(0xFF000000),
         error = Color(0xFFB30000),
         onError = Color.White,
-    ),
+    ).withSurfaces(Color(0xFFFFFFFF), Color(0xFFF0F0F0), Color(0xFFE0E0E0)),
 )
 
 val APP_THEMES: List<AppTheme> = listOf(BabyBlue, Dark, Forest, Sunset, Grape, HighContrast)
