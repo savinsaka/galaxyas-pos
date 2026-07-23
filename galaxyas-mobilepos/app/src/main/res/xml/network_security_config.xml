@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Server Pusat = HTTP polos di IP LAN yang diketik user; Android 9+ memblokir
+     cleartext secara default. domain-config tidak bisa mengekspresikan rentang IP,
+     jadi base-config diizinkan — app ini tidak bicara ke host lain selain
+     Server Pusat (HTTP) dan GitHub (HTTPS, tidak terpengaruh). -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

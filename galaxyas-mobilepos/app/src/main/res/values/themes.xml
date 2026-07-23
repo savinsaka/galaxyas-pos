@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tema dasar window saja (splash sebelum Compose) — tema aplikasi
+         sesungguhnya (6 palet) diterapkan via Compose GalaxyasTheme. -->
+    <style name="Theme.GalaxyasMobilePos" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#F2F9FF</item>
+        <item name="android:statusBarColor">#4A90D9</item>
+    </style>
+</resources>
