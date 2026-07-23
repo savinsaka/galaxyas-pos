@@ -34,6 +34,14 @@ import com.galaxyas.mobilepos.ui.login.LoginScreen
 import com.galaxyas.mobilepos.ui.menu.MenuScreen
 import com.galaxyas.mobilepos.ui.menu.SettingsPrinterScreen
 import com.galaxyas.mobilepos.ui.onboarding.PairingScreen
+import com.galaxyas.mobilepos.ui.persediaan.ExpensesScreen
+import com.galaxyas.mobilepos.ui.persediaan.OpnameScreen
+import com.galaxyas.mobilepos.ui.persediaan.StockBatchScreen
+import com.galaxyas.mobilepos.ui.produk.BrandsScreen
+import com.galaxyas.mobilepos.ui.produk.CustomersScreen
+import com.galaxyas.mobilepos.ui.produk.DataSheetScreen
+import com.galaxyas.mobilepos.ui.produk.DiscountsScreen
+import com.galaxyas.mobilepos.ui.produk.ProductEditScreen
 import com.galaxyas.mobilepos.ui.produk.ProductListScreen
 import com.galaxyas.mobilepos.ui.produk.ProductListViewModel
 
@@ -166,8 +174,35 @@ private fun MainShell(container: AppContainer, onChangeServer: () -> Unit) {
                 }
                 composable("produk") {
                     val vm: ProductListViewModel = viewModel { ProductListViewModel(container.api) }
-                    ProductListScreen(vm)
+                    ProductListScreen(
+                        vm = vm,
+                        onEdit = { p ->
+                            container.buffer.product = p
+                            navController.navigate("produk/edit")
+                        },
+                        onAdd = {
+                            container.buffer.product = null
+                            navController.navigate("produk/edit")
+                        },
+                        onOpen = { navController.navigate(it) },
+                    )
                 }
+                composable("produk/edit") {
+                    ProductEditScreen(
+                        api = container.api,
+                        initial = container.buffer.product,
+                        onSaved = { navController.popBackStack() },
+                    )
+                }
+                composable("merek") { BrandsScreen(container.api) }
+                composable("diskon") { DiscountsScreen(container.api) }
+                composable("pelanggan") { CustomersScreen(container.api) }
+                composable("datasheet") { DataSheetScreen(container.api) }
+                composable("opname") { OpnameScreen(container.api, container.session) }
+                composable("batch") {
+                    StockBatchScreen(container.api, container.session, container.settings)
+                }
+                composable("pengeluaran") { ExpensesScreen(container.api, container.session) }
                 composable("laporan") {
                     ComingSoon("📊", "Laporan", "Laporan penjualan & persediaan hadir di P4.")
                 }
@@ -178,6 +213,7 @@ private fun MainShell(container: AppContainer, onChangeServer: () -> Unit) {
                         settings = container.settings,
                         onChangeServer = onChangeServer,
                         onOpenPrinter = { navController.navigate("printer") },
+                        onOpen = { navController.navigate(it) },
                     )
                 }
                 composable("printer") {

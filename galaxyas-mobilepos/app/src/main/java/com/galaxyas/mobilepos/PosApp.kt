@@ -24,8 +24,18 @@ class PosApp : Application() {
     }
 }
 
+/**
+ * Titipan objek antar-layar saat navigasi (Compose Navigation hanya membawa
+ * argumen primitif). Dipakai daftar barang -> form edit supaya tidak refetch.
+ */
+class UiBuffer {
+    var product: com.galaxyas.mobilepos.data.model.ProductWithStock? = null
+    var opnameBrand: String? = null
+}
+
 class AppContainer(app: Application) {
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val buffer = UiBuffer()
     val serverRegistry = ServerRegistry(app, appScope)
     val settings = SettingsRepository(app, appScope)
     val pendingSales = PendingSalesStore(app, appScope)

@@ -18,6 +18,9 @@ fun formatIDR(n: Double): String = rupiah.format(n)
 fun formatQty(n: Double): String =
     if (n == Math.floor(n) && !n.isInfinite()) n.toLong().toString() else String.format(localeId, "%.2f", n)
 
+/** Tanggal hari ini "YYYY-MM-DD" (lokal) — padanan todayIso desktop. */
+fun todayIso(): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(java.util.Date())
+
 /** "23 Jul 2026, 10.30.00" — padanan formatDateTime desktop (id-ID). */
 fun formatDateTime(iso: String): String {
     if (iso.isBlank()) return "-"

@@ -43,6 +43,7 @@ fun MenuScreen(
     settings: SettingsRepository,
     onChangeServer: () -> Unit,
     onOpenPrinter: () -> Unit,
+    onOpen: (String) -> Unit = {},
 ) {
     val user by session.user.collectAsState()
     val server by registry.activeServer.collectAsState()
@@ -81,6 +82,22 @@ fun MenuScreen(
                         onClick = onChangeServer,
                         modifier = Modifier.weight(1f),
                     ) { Text("Ganti Server") }
+                }
+            }
+        }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Persediaan", style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                listOf(
+                    "opname" to "📋 Stok Opname",
+                    "batch" to "📦 Item Masuk / Keluar",
+                    "pengeluaran" to "💸 Pengeluaran",
+                ).forEach { (route, label) ->
+                    OutlinedButton(onClick = { onOpen(route) }, modifier = Modifier.fillMaxWidth()) {
+                        Text(label, modifier = Modifier.fillMaxWidth())
+                    }
                 }
             }
         }

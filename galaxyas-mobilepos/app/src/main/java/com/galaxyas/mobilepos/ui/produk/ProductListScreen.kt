@@ -1,6 +1,9 @@
 package com.galaxyas.mobilepos.ui.produk
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -9,7 +12,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -19,6 +28,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -83,9 +93,16 @@ class ProductListViewModel(private val api: ApiClient) : ViewModel() {
     }
 }
 
-/** Daftar Barang (read-only di P1) — bukti alur RPC end-to-end. */
+/**
+ * Daftar Barang + pintasan master data lain. Tap baris = edit, FAB = tambah.
+ */
 @Composable
-fun ProductListScreen(vm: ProductListViewModel) {
+fun ProductListScreen(
+    vm: ProductListViewModel,
+    onEdit: (ProductWithStock) -> Unit = {},
+    onAdd: () -> Unit = {},
+    onOpen: (String) -> Unit = {},
+) {
     val state by vm.state.collectAsState()
     val query by vm.search.collectAsState()
     val listState = rememberLazyListState()
@@ -104,6 +121,7 @@ fun ProductListScreen(vm: ProductListViewModel) {
         if (nearEnd && !state.loading && !state.exhausted) vm.load(reset = false)
     }
 
+    Box(Modifier.fillMaxSize()) {
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
         OutlinedTextField(
             value = query,
@@ -112,6 +130,21 @@ fun ProductListScreen(vm: ProductListViewModel) {
             singleLine = true,
             modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
         )
+
+        // Pintasan master data lain
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            listOf(
+                "merek" to "Merek",
+                "diskon" to "Diskon",
+                "pelanggan" to "Pelanggan",
+                "datasheet" to "Cek Harga",
+            ).forEach { (route, label) ->
+                AssistChip(onClick = { onOpen(route) }, label = { Text(label) })
+            }
+        }
 
         state.error?.let {
             Text(
@@ -127,7 +160,7 @@ fun ProductListScreen(vm: ProductListViewModel) {
             verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxSize(),
         ) {
-            items(state.items, key = { it.id }) { p -> ProductRow(p) }
+            items(state.items, key = { it.id }) { p -> ProductRow(p) { onEdit(p) } }
             item {
                 Text(
                     when {
@@ -142,11 +175,16 @@ fun ProductListScreen(vm: ProductListViewModel) {
             }
         }
     }
+        FloatingActionButton(
+            onClick = onAdd,
+            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+        ) { Icon(Icons.Default.Add, contentDescription = "Tambah barang") }
+    }
 }
 
 @Composable
-private fun ProductRow(p: ProductWithStock) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+private fun ProductRow(p: ProductWithStock, onClick: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth().clickable { onClick() }) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
         ) {
