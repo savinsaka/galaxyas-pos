@@ -181,7 +181,9 @@ fun ProductSearchSheet(api: ApiClient, onPick: (ProductWithStock) -> Unit, onClo
                         Row(Modifier.fillMaxWidth()) {
                             Column(Modifier.weight(1f)) {
                                 Text(p.name, fontWeight = FontWeight.SemiBold)
-                                Text("stok ${formatQty(p.stock_qty)}",
+                                // Barcode di bawah nama — memudahkan memastikan
+                                // barang yang benar saat nama-nama mirip.
+                                Text("${p.barcode ?: "tanpa barcode"} · stok ${formatQty(p.stock_qty)}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }

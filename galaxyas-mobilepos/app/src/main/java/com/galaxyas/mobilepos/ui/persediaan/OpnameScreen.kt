@@ -214,7 +214,14 @@ fun OpnameScreen(api: ApiClient, session: Session) {
                 Card(Modifier.fillMaxWidth()) {
                     TextButton(onClick = { selected = p; fisik = "" }, modifier = Modifier.fillMaxWidth()) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text(p.name, Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                            Column(Modifier.weight(1f)) {
+                                Text(p.name, fontWeight = FontWeight.SemiBold)
+                                // Barcode di bawah nama — memudahkan mencocokkan
+                                // barang saat menyusuri daftar opname.
+                                Text(p.barcode ?: "tanpa barcode",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                             Text("stok ${formatQty(p.stock_qty)}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant)
