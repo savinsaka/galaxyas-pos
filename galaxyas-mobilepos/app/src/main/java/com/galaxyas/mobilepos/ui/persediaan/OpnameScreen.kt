@@ -71,11 +71,14 @@ fun OpnameScreen(api: ApiClient, session: Session) {
         brands = runCatching { api.listBrands().map { it.name } }.getOrDefault(emptyList())
     }
     // Mode "per merek": langsung tampilkan semua barang merek tsb untuk disusuri.
+    // Filter merek dilakukan di server (list_products_page) — jangan tarik daftar
+    // ber-limit lalu saring di klien, karena barang di luar limit akan hilang
+    // (mis. toko 800+ barang, limit 500 → sebagian merek ke-potong).
     LaunchedEffect(brandFilter) {
         if (brandFilter != null) {
-            results = runCatching { api.listProducts("", false, 500) }
-                .getOrDefault(emptyList())
-                .filter { it.brand == brandFilter }
+            results = runCatching {
+                api.listProductsPage(brand = brandFilter, limit = 100_000L, offset = 0L).items
+            }.getOrDefault(emptyList())
         }
     }
     LaunchedEffect(query) {
@@ -122,8 +125,9 @@ fun OpnameScreen(api: ApiClient, session: Session) {
                 selected = null; fisik = ""; note = ""
                 // Muat ulang daftar agar stok terbaru terlihat.
                 if (brandFilter != null) {
-                    results = runCatching { api.listProducts("", false, 500) }
-                        .getOrDefault(emptyList()).filter { it.brand == brandFilter }
+                    results = runCatching {
+                        api.listProductsPage(brand = brandFilter, limit = 100_000L, offset = 0L).items
+                    }.getOrDefault(emptyList())
                 } else if (query.isNotBlank()) {
                     results = runCatching { api.listProducts(query.trim(), false, 30) }.getOrDefault(emptyList())
                 }

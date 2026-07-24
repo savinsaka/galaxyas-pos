@@ -440,6 +440,14 @@ tbody tr:hover {
   color: var(--text-dim);
   font-size: 0.84rem;
   max-width: 220px;
+  /* Jangan mengkerut: biar tab menjaga ukurannya dan strip-nya menggeser
+     (overflow-x) saat penuh, bukan menyempit kaku seperti sebelumnya. */
+  flex-shrink: 0;
+  user-select: none;
+  touch-action: none;
+}
+.tab.dragging {
+  opacity: 0.5;
 }
 .tab:hover {
   background: #e7f3fd;

@@ -28,6 +28,8 @@
   let footer = $state("");
   let from = $state("");
   let to = $state("");
+  type SortKey = "invoice_no" | "created_at" | "cashier_id" | "payment_method" | "total";
+  let sortBy = $state<SortKey>("created_at");
   let sortDir = $state<"asc" | "desc">("desc");
   let totalToday = $state(0);
   let search = $state("");
@@ -35,12 +37,24 @@
   const selected = $derived(transactions.find((t) => t.id === selectedId) ?? null);
   const totalPages = $derived(Math.max(1, Math.ceil(total / PAGE_SIZE)));
   const sortedTransactions = $derived(
-    [...transactions].sort((a, b) =>
-      sortDir === "asc" ? a.created_at.localeCompare(b.created_at) : b.created_at.localeCompare(a.created_at),
-    ),
+    [...transactions].sort((a, b) => {
+      const dir = sortDir === "asc" ? 1 : -1;
+      if (sortBy === "total") return (a.total - b.total) * dir;
+      return String(a[sortBy]).localeCompare(String(b[sortBy]), "id-ID", { numeric: true }) * dir;
+    }),
   );
-  function toggleSort() {
-    sortDir = sortDir === "asc" ? "desc" : "asc";
+  // Klik header: kolom sama → balik arah; kolom baru → mulai menaik (waktu default menurun).
+  function sortByCol(key: SortKey) {
+    if (sortBy === key) {
+      sortDir = sortDir === "asc" ? "desc" : "asc";
+    } else {
+      sortBy = key;
+      sortDir = key === "created_at" ? "desc" : "asc";
+    }
+  }
+  function sortArrow(key: SortKey): string {
+    if (sortBy !== key) return "";
+    return sortDir === "asc" ? " ↑" : " ↓";
   }
 
   async function load() {
@@ -169,9 +183,11 @@
     <table>
       <thead>
         <tr>
-          <th>Invoice</th>
-          <th class="sortable" onclick={toggleSort}>Waktu{sortDir === "asc" ? " ↑" : " ↓"}</th>
-          <th>Kasir</th><th>Metode</th><th class="text-right">Total</th>
+          <th class="sortable" onclick={() => sortByCol("invoice_no")}>Invoice{sortArrow("invoice_no")}</th>
+          <th class="sortable" onclick={() => sortByCol("created_at")}>Waktu{sortArrow("created_at")}</th>
+          <th class="sortable" onclick={() => sortByCol("cashier_id")}>Kasir{sortArrow("cashier_id")}</th>
+          <th class="sortable" onclick={() => sortByCol("payment_method")}>Metode{sortArrow("payment_method")}</th>
+          <th class="sortable text-right" onclick={() => sortByCol("total")}>Total{sortArrow("total")}</th>
         </tr>
       </thead>
       <tbody>

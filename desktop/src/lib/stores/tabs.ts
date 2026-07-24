@@ -69,3 +69,17 @@ export function closeAllTabs() {
 export function renameTab(id: string, title: string) {
   tabs.update((list) => list.map((t) => (t.id === id ? { ...t, title } : t)));
 }
+
+/** Pindahkan tab `fromId` ke posisi tab `toId` (untuk seret-susun ala Chrome). */
+export function moveTab(fromId: string, toId: string) {
+  if (fromId === toId) return;
+  tabs.update((list) => {
+    const from = list.findIndex((t) => t.id === fromId);
+    const to = list.findIndex((t) => t.id === toId);
+    if (from < 0 || to < 0) return list;
+    const next = [...list];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    return next;
+  });
+}
