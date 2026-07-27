@@ -90,7 +90,6 @@ fun OpnameScreen(api: ApiClient, session: Session) {
 
     if (scanning) {
         ScannerScreen(
-            continuous = false,
             onResult = { code ->
                 scanning = false
                 scope.launch {

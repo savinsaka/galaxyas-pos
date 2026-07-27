@@ -81,7 +81,6 @@ fun ProductEditScreen(
 
     if (scanning) {
         ScannerScreen(
-            continuous = false,
             onResult = { barcode = it; scanning = false },
             onClose = { scanning = false },
         )

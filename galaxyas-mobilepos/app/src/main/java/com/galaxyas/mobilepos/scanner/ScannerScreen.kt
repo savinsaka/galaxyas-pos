@@ -42,17 +42,18 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
+import java.util.concurrent.Executor
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 
 /**
  * Scanner barcode kamera penuh-layar (CameraX + ML Kit bundled). Format 1D
- * umum POS + QR. onResult dipanggil sekali per hasil unik; caller memutuskan
- * apakah menutup (mode sekali) atau lanjut (mode kontinu di kasir).
+ * umum POS + QR. Sekali barcode terbaca, onResult dipanggil lalu layar langsung
+ * menutup sendiri lewat onClose — tidak perlu konfirmasi manual.
  */
 @Composable
 fun ScannerScreen(
-    continuous: Boolean,
     onResult: (String) -> Unit,
     onClose: () -> Unit,
 ) {
@@ -74,7 +75,7 @@ fun ScannerScreen(
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (hasCamera) {
-            CameraPreview(onResult = onResult)
+            CameraPreview(onResult = onResult, onClose = onClose)
         }
         // Overlay kontrol
         Column(
@@ -89,34 +90,64 @@ fun ScannerScreen(
                 modifier = Modifier.padding(top = 8.dp),
             )
             Button(onClick = onClose, modifier = Modifier.fillMaxWidth()) {
-                Text(if (continuous) "Selesai Scan" else "Batal")
+                Text("Kembali")
             }
         }
     }
 }
 
 /**
- * Debounce hasil scan. Sengaja bukan Compose state: nilainya ditulis dari thread
- * analisis, dan state Compose di sini cuma memicu recomposition sia-sia.
+ * Pegangan ke use case CameraX supaya bisa dilepas saat composable hilang.
+ *
+ * Penting: bindToLifecycle() terikat pada lifecycle Activity, bukan pada
+ * composable ini. Tanpa release() eksplisit, kamera tetap mengirim frame ke
+ * analyzer setelah layar scanner ditutup — sementara scanner-nya sudah di-close
+ * dan executor-nya sudah shutdown, yang berujung crash.
  */
-private class ScanDebounce(private val windowMs: Long = 2_000) {
-    @Volatile private var lastValue: String? = null
-    @Volatile private var lastAt: Long = 0L
+private class CameraBindings {
+    @Volatile var provider: ProcessCameraProvider? = null
+    @Volatile var analysis: ImageAnalysis? = null
 
-    fun accept(code: String): Boolean {
-        val now = System.currentTimeMillis()
-        if (code == lastValue && now - lastAt <= windowMs) return false
-        lastValue = code
-        lastAt = now
+    fun release() {
+        analysis?.clearAnalyzer()
+        provider?.unbindAll()
+        analysis = null
+        provider = null
+    }
+}
+
+/**
+ * Kunci sekali-pakai untuk hasil scan. Sengaja bukan Compose state: ditulis dari
+ * thread analisis, dan state Compose di sini cuma memicu recomposition sia-sia.
+ */
+private class ScanLatch {
+    @Volatile private var claimed = false
+
+    /** Hanya hasil pertama yang diteruskan; frame lain yang masih di jalan diabaikan. */
+    fun claim(): Boolean {
+        if (claimed) return false
+        claimed = true
         return true
     }
 }
 
 @SuppressLint("ClickableViewAccessibility")
 @Composable
-private fun CameraPreview(onResult: (String) -> Unit) {
+private fun CameraPreview(onResult: (String) -> Unit, onClose: () -> Unit) {
     val lifecycleOwner = LocalLifecycleOwner.current
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+    // Callback ML Kit bisa datang tepat setelah executor di-shutdown; tanpa
+    // penjaga ini RejectedExecutionException dilempar ke thread ML Kit dan
+    // aplikasi force close.
+    val callbackExecutor = remember {
+        Executor { command ->
+            try {
+                analysisExecutor.execute(command)
+            } catch (_: RejectedExecutionException) {
+                // Scanner sudah ditutup, hasilnya memang tidak dipakai lagi.
+            }
+        }
+    }
 
     val scanner = remember {
         BarcodeScanning.getClient(
@@ -128,12 +159,20 @@ private fun CameraPreview(onResult: (String) -> Unit) {
             ).build(),
         )
     }
-    val debounce = remember { ScanDebounce() }
+    val latch = remember { ScanLatch() }
+    val bindings = remember { CameraBindings() }
 
     DisposableEffect(Unit) {
         onDispose {
+            // Urutan penting: lepas kamera dulu supaya tidak ada frame baru,
+            // baru tutup scanner sebagai tugas terakhir di antrean executor.
+            bindings.release()
+            try {
+                analysisExecutor.execute { scanner.close() }
+            } catch (_: RejectedExecutionException) {
+                scanner.close()
+            }
             analysisExecutor.shutdown()
-            scanner.close()
         }
     }
 
@@ -171,14 +210,21 @@ private fun CameraPreview(onResult: (String) -> Unit) {
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
                 analysis.setAnalyzer(analysisExecutor) { proxy ->
-                    processFrame(scanner, proxy, analysisExecutor) { code ->
-                        if (debounce.accept(code)) previewView.post { onResult(code) }
+                    processFrame(scanner, proxy, callbackExecutor) { code ->
+                        if (latch.claim()) {
+                            previewView.post {
+                                onResult(code)
+                                onClose()
+                            }
+                        }
                     }
                 }
                 provider.unbindAll()
                 val camera = provider.bindToLifecycle(
                     lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis,
                 )
+                bindings.provider = provider
+                bindings.analysis = analysis
                 // Tap-to-focus: autofokus kontinu sering "berburu" pada barcode
                 // jarak dekat, tap memaksa kunci fokus di titik yang dituju.
                 previewView.setOnTouchListener { view, event ->

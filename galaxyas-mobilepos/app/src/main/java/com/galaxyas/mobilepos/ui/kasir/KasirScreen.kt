@@ -69,7 +69,6 @@ fun KasirScreen(vm: KasirViewModel, api: ApiClient) {
 
     if (scanning) {
         ScannerScreen(
-            continuous = true,
             onResult = { vm.scanBarcode(it) },
             onClose = { scanning = false },
         )

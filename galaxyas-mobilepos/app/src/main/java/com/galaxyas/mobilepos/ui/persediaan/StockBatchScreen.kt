@@ -241,7 +241,6 @@ private fun StockBatchEntryScreen(
 
     if (scanning) {
         ScannerScreen(
-            continuous = true,
             onResult = { code ->
                 scope.launch {
                     val p = runCatching { api.findByBarcode(code) }.getOrNull()

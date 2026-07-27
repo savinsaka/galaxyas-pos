@@ -55,7 +55,6 @@ fun DataSheetScreen(api: ApiClient) {
 
     if (scanning) {
         ScannerScreen(
-            continuous = false,
             onResult = { query = it; scanning = false },
             onClose = { scanning = false },
         )
