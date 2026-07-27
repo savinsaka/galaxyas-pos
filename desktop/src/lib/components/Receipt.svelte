@@ -41,7 +41,7 @@
     printer: null,
     show: {
       storeName: true, address: true, phone: true, taxId: true, social: true, header: true,
-      invoiceNo: true, date: true, items: true, subtotal: true, discount: true,
+      invoiceNo: true, date: true, items: true, totalItem: true, subtotal: true, discount: true,
       total: true, paymentMethod: true, change: true, footer: true,
     },
   });
@@ -59,6 +59,8 @@
   });
 
   const widthMm = $derived(paperWidthMm(cfg.paper));
+  /** Total item = jumlah semua pcs yang dibeli (bukan jumlah jenis barang). */
+  const totalItemQty = $derived(detail.items.reduce((s, it) => s + it.qty, 0));
   const headerLines = $derived(cfg.header.split("\n").map((x) => x.trim()).filter(Boolean));
   const socialLine = $derived(
     [
@@ -116,8 +118,9 @@
             </div>
           {/each}
         {/if}
-        {#if cfg.show.subtotal || cfg.show.discount || cfg.show.total || cfg.show.paymentMethod || cfg.show.change}
+        {#if cfg.show.totalItem || cfg.show.subtotal || cfg.show.discount || cfg.show.total || cfg.show.paymentMethod || cfg.show.change}
           <div class="r-sep"></div>
+          {#if cfg.show.totalItem}<div class="r-line"><span>Total Item</span><span>{formatQty(totalItemQty)}</span></div>{/if}
           {#if cfg.show.subtotal}<div class="r-line"><span>Subtotal</span><span>{formatIDR(detail.subtotal)}</span></div>{/if}
           {#if cfg.show.discount}<div class="r-line"><span>Diskon</span><span>−{formatIDR(detail.discount)}</span></div>{/if}
           {#if cfg.show.total}<div class="r-line r-bold"><span>TOTAL</span><span>{formatIDR(detail.total)}</span></div>{/if}

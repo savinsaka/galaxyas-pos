@@ -448,6 +448,7 @@ pub struct SalesItemDetailRow {
     pub cashier_id: String,
     pub product_id: String,
     pub name: String,
+    pub barcode: Option<String>,
     pub brand: Option<String>,
     pub qty: f64,
     pub price: f64,
@@ -463,6 +464,40 @@ pub struct DailySalesRow {
     pub gross: f64,
     pub discount: f64,
     pub net: f64,
+}
+
+// ---------- Alur Barang (buku besar stok) ----------
+
+/// Satu baris rekap alur stok per barang dalam satu rentang tanggal.
+/// `adjustment` = selisih yang tidak dijelaskan masuk/keluar/terjual — praktisnya
+/// hasil koreksi opname (opname menyetel stok absolut, bukan delta).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StockFlowRow {
+    pub product_id: String,
+    pub name: String,
+    pub barcode: Option<String>,
+    pub brand: Option<String>,
+    pub opening: f64,
+    pub masuk: f64,
+    pub keluar: f64,
+    pub terjual: f64,
+    pub adjustment: f64,
+    pub closing: f64,
+    pub current_stock: f64,
+}
+
+/// Buku besar stok satu barang: header barang + stok awal + semua mutasi
+/// (masuk / keluar / terjual / opname) urut kronologis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StockFlowDetail {
+    pub product_id: String,
+    pub name: String,
+    pub barcode: Option<String>,
+    pub brand: Option<String>,
+    pub unit: Option<String>,
+    pub current_stock: f64,
+    pub opening: f64,
+    pub rows: Vec<StockMovement>,
 }
 
 // ---------- Multi-database (toko) ----------

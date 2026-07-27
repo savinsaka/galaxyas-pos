@@ -680,6 +680,40 @@ pub async fn daily_sales_report(
     db::daily_sales_report(&conn, &from, &to, &brands)
 }
 
+// ---------- Alur Barang (buku besar stok) ----------
+
+#[tauri::command]
+pub async fn stock_flow_recap(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+    search: Option<String>,
+) -> AppResult<Vec<crate::models::StockFlowRow>> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "stock_flow_recap", serde_json::json!({
+            "from": from, "to": to, "search": search
+        })).await;
+    }
+    let conn = state.lock()?;
+    db::stock_flow_recap(&conn, &from, &to, search)
+}
+
+#[tauri::command]
+pub async fn stock_flow_detail(
+    state: State<'_, AppState>,
+    product_id: String,
+    from: String,
+    to: String,
+) -> AppResult<crate::models::StockFlowDetail> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "stock_flow_detail", serde_json::json!({
+            "product_id": product_id, "from": from, "to": to
+        })).await;
+    }
+    let conn = state.lock()?;
+    db::stock_flow_detail(&conn, &product_id, &from, &to)
+}
+
 // ---------- File & Printer (sistem) ----------
 
 /// Tulis file biner ke folder temp lalu set read-only (Excel buka mode read-only).

@@ -115,9 +115,14 @@ export function buildReceiptEscPos(detail: TransactionDetail, cfg: ReceiptConfig
     }
   }
 
-  const hasSummary = show.subtotal || show.discount || show.total || show.paymentMethod || show.change;
+  const hasSummary =
+    show.totalItem || show.subtotal || show.discount || show.total || show.paymentMethod || show.change;
   if (hasSummary) {
     b.align("left").line(line());
+    // Total item = jumlah semua pcs yang dibeli (bukan jumlah jenis barang).
+    if (show.totalItem) {
+      b.line(two("Total Item", formatQty(detail.items.reduce((s, it) => s + it.qty, 0))));
+    }
     if (show.subtotal) b.line(two("Subtotal", money(detail.subtotal)));
     if (show.discount) b.line(two("Diskon", "-" + money(detail.discount)));
     if (show.total) b.bold(true).line(two("TOTAL", money(detail.total))).bold(false);

@@ -112,12 +112,14 @@ export function extractReportForEscPos(
     const columns = Array.from(table.querySelectorAll("thead th")).map((th) => th.textContent?.trim() || "");
 
     const rows: ReportEscPosRow[] = [];
-    table.querySelectorAll("tbody tr").forEach((tr) => {
+    // `tfoot` ikut dibaca supaya baris total (mis. Total Pendapatan di Laporan
+    // Item Detail) juga ikut tercetak di struk thermal, bukan cuma di layar/A4.
+    table.querySelectorAll("tbody tr, tfoot tr").forEach((tr) => {
       const tds = Array.from(tr.querySelectorAll("td"));
       if (tds.length <= 1) return; // baris placeholder "Tidak ada data" (colspan)
       rows.push({
         cells: tds.map((td) => td.textContent?.trim() || ""),
-        bold: tds.some((td) => td.classList.contains("fw-bold")),
+        bold: !!tr.closest("tfoot") || tds.some((td) => td.classList.contains("fw-bold")),
       });
     });
     if (rows.length === 0) return;

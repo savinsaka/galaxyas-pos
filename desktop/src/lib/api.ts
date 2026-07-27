@@ -31,6 +31,8 @@ import type {
   StockMovementBatchInput,
   StockMovementBatchItemInput,
   StockMovementBatchPage,
+  StockFlowDetail,
+  StockFlowRow,
   StoreInfo,
   SyncResult,
   TransactionDetail,
@@ -177,6 +179,12 @@ export const api = {
     invoke<SalesItemDetailRow[]>("sales_item_detail_report", { from, to, brands }),
   dailySalesReport: (from: string, to: string, brands: string[] = []) =>
     invoke<DailySalesRow[]>("daily_sales_report", { from, to, brands }),
+
+  // Alur Barang (buku besar stok)
+  stockFlowRecap: (from: string, to: string, search: string | null = null) =>
+    invoke<StockFlowRow[]>("stock_flow_recap", { from, to, search }),
+  stockFlowDetail: (productId: string, from: string, to: string) =>
+    invoke<StockFlowDetail>("stock_flow_detail", { productId, from, to }),
 
   // Sistem: file & printer
   writeTempFile: (fileName: string, bytes: number[]) =>

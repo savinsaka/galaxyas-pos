@@ -373,6 +373,7 @@ export interface SalesItemDetailRow {
   cashier_id: string;
   product_id: string;
   name: string;
+  barcode: string | null;
   brand: string | null;
   qty: number;
   price: number;
@@ -386,4 +387,32 @@ export interface DailySalesRow {
   gross: number;
   discount: number;
   net: number;
+}
+
+/** Satu baris rekap Alur Barang (semua barang) untuk satu rentang tanggal. */
+export interface StockFlowRow {
+  product_id: string;
+  name: string;
+  barcode: string | null;
+  brand: string | null;
+  opening: number;
+  masuk: number;
+  keluar: number;
+  terjual: number;
+  /** Selisih yang tidak dijelaskan masuk/keluar/terjual — hasil koreksi opname. */
+  adjustment: number;
+  closing: number;
+  current_stock: number;
+}
+
+/** Buku besar stok satu barang: header + stok awal + mutasi kronologis. */
+export interface StockFlowDetail {
+  product_id: string;
+  name: string;
+  barcode: string | null;
+  brand: string | null;
+  unit: string | null;
+  current_stock: number;
+  opening: number;
+  rows: StockMovement[];
 }

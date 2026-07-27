@@ -8,6 +8,7 @@ export interface ReceiptShowFlags {
   invoiceNo: boolean;
   date: boolean;
   items: boolean;
+  totalItem: boolean;
   subtotal: boolean;
   discount: boolean;
   total: boolean;
@@ -45,6 +46,7 @@ export const RECEIPT_SHOW_KEYS: { key: keyof ReceiptShowFlags; setting: string; 
   { key: "invoiceNo", setting: "receipt_show_invoice_no", label: "No. Invoice" },
   { key: "date", setting: "receipt_show_date", label: "Tanggal" },
   { key: "items", setting: "receipt_show_items", label: "Daftar Item" },
+  { key: "totalItem", setting: "receipt_show_total_item", label: "Total Item (jml pcs)" },
   { key: "subtotal", setting: "receipt_show_subtotal", label: "Subtotal" },
   { key: "discount", setting: "receipt_show_discount", label: "Diskon" },
   { key: "total", setting: "receipt_show_total", label: "Total" },

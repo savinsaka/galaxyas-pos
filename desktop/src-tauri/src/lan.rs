@@ -639,6 +639,26 @@ fn dispatch(
             let a: A = args_of(args)?;
             ok_value(db::daily_sales_report(conn, &a.from, &a.to, &a.brands)?)
         }
+        "stock_flow_recap" => {
+            #[derive(serde::Deserialize)]
+            struct A {
+                from: String,
+                to: String,
+                search: Option<String>,
+            }
+            let a: A = args_of(args)?;
+            ok_value(db::stock_flow_recap(conn, &a.from, &a.to, a.search)?)
+        }
+        "stock_flow_detail" => {
+            #[derive(serde::Deserialize)]
+            struct A {
+                product_id: String,
+                from: String,
+                to: String,
+            }
+            let a: A = args_of(args)?;
+            ok_value(db::stock_flow_detail(conn, &a.product_id, &a.from, &a.to)?)
+        }
         _ => Err(AppError::Other("unknown command".to_string())),
     }
 }

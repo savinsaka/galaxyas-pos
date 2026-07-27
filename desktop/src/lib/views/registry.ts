@@ -17,6 +17,7 @@ import ItemKeluar from "./ItemKeluar.svelte";
 import DaftarItemMasuk from "./DaftarItemMasuk.svelte";
 import DaftarItemKeluar from "./DaftarItemKeluar.svelte";
 import EditStockBatch from "./EditStockBatch.svelte";
+import AlurBarang from "./AlurBarang.svelte";
 import LaporanPenjualan from "./LaporanPenjualan.svelte";
 import LaporanPersediaan from "./LaporanPersediaan.svelte";
 import LaporanUmum from "./LaporanUmum.svelte";
@@ -46,6 +47,7 @@ export const VIEW_REGISTRY: Record<string, Component<any>> = {
   "daftar-item-masuk": DaftarItemMasuk,
   "daftar-item-keluar": DaftarItemKeluar,
   "edit-stock-batch": EditStockBatch,
+  "alur-barang": AlurBarang,
   "laporan-penjualan": LaporanPenjualan,
   "laporan-persediaan": LaporanPersediaan,
   "laporan-umum": LaporanUmum,

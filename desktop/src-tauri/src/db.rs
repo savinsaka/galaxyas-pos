@@ -91,6 +91,9 @@ pub fn init_schema(conn: &Connection) -> AppResult<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_mov_kind ON stock_movements(kind);
         CREATE INDEX IF NOT EXISTS idx_mov_created ON stock_movements(created_at);
+        -- Dipakai Alur Barang (buku besar per barang): telusur mutasi satu barang
+        -- dan pencarian "stok terakhir sebelum tanggal X" per barang.
+        CREATE INDEX IF NOT EXISTS idx_mov_product ON stock_movements(product_id, created_at);
 
         -- Diskon periodik (master data; CRUD lokal).
         CREATE TABLE IF NOT EXISTS discount_periods (
@@ -2158,7 +2161,7 @@ pub fn sales_item_detail_report(
     brands: &[String],
 ) -> AppResult<Vec<SalesItemDetailRow>> {
     let mut sql = String::from(
-        "SELECT t.invoice_no, t.created_at, t.cashier_id, ti.product_id, ti.name, p.brand,
+        "SELECT t.invoice_no, t.created_at, t.cashier_id, ti.product_id, ti.name, p.barcode, p.brand,
                 ti.qty, ti.price, ti.discount, ti.line_total
          FROM transaction_items ti
          JOIN transactions t ON t.id = ti.transaction_id
@@ -2184,11 +2187,12 @@ pub fn sales_item_detail_report(
                 cashier_id: r.get(2)?,
                 product_id: r.get(3)?,
                 name: r.get(4)?,
-                brand: r.get(5)?,
-                qty: r.get(6)?,
-                price: r.get(7)?,
-                discount: r.get(8)?,
-                net: r.get(9)?,
+                barcode: r.get(5)?,
+                brand: r.get(6)?,
+                qty: r.get(7)?,
+                price: r.get(8)?,
+                discount: r.get(9)?,
+                net: r.get(10)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -2236,4 +2240,203 @@ pub fn daily_sales_report(
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
+}
+
+// ---------- Alur Barang (buku besar stok) ----------
+
+use crate::models::{StockFlowDetail, StockFlowRow};
+use std::collections::HashMap;
+
+/// Stok terakhir yang tercatat per barang pada batas tanggal tertentu, diambil
+/// dari kolom `stock_after` mutasi paling akhir yang memenuhi `date_clause`.
+/// Satu query untuk SEMUA barang (window function), bukan subquery per barang,
+/// supaya rekap "semua barang" tetap cepat di database dengan ribuan produk.
+fn stock_at_boundary(
+    conn: &Connection,
+    date_clause: &str,
+    bound: &str,
+) -> AppResult<HashMap<String, f64>> {
+    let sql = format!(
+        "SELECT product_id, stock_after FROM (
+             SELECT product_id, stock_after,
+                    ROW_NUMBER() OVER (PARTITION BY product_id
+                                       ORDER BY created_at DESC, id DESC) AS rn
+             FROM stock_movements
+             WHERE {date_clause}
+         ) WHERE rn = 1"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mut out = HashMap::new();
+    let rows = stmt.query_map(params![bound], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?))
+    })?;
+    for row in rows {
+        let (id, qty) = row?;
+        out.insert(id, qty);
+    }
+    Ok(out)
+}
+
+/// Rekap alur stok semua barang dalam satu rentang tanggal: stok awal, total
+/// masuk/keluar/terjual, penyesuaian opname, dan stok akhir. Barang yang sama
+/// sekali tidak bergerak DAN stoknya nol di seluruh rentang tidak ditampilkan.
+pub fn stock_flow_recap(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+    search: Option<String>,
+) -> AppResult<Vec<StockFlowRow>> {
+    // 1. Agregasi mutasi di dalam rentang, satu baris per barang.
+    let mut stmt = conn.prepare(
+        "SELECT product_id,
+                SUM(CASE WHEN kind = 'in'   THEN qty ELSE 0 END) AS masuk,
+                SUM(CASE WHEN kind = 'out'  THEN qty ELSE 0 END) AS keluar,
+                SUM(CASE WHEN kind = 'sale' THEN qty ELSE 0 END) AS terjual,
+                COUNT(*) AS n
+         FROM stock_movements
+         WHERE date(created_at) >= date(?1) AND date(created_at) <= date(?2)
+         GROUP BY product_id",
+    )?;
+    let mut agg: HashMap<String, (f64, f64, f64, i64)> = HashMap::new();
+    let rows = stmt.query_map(params![from, to], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, f64>(1)?,
+            r.get::<_, f64>(2)?,
+            r.get::<_, f64>(3)?,
+            r.get::<_, i64>(4)?,
+        ))
+    })?;
+    for row in rows {
+        let (id, masuk, keluar, terjual, n) = row?;
+        agg.insert(id, (masuk, keluar, terjual, n));
+    }
+
+    // 2. Stok awal (sebelum `from`) & stok akhir (sampai `to`) per barang.
+    let opening_map = stock_at_boundary(conn, "date(created_at) < date(?1)", from)?;
+    let closing_map = stock_at_boundary(conn, "date(created_at) <= date(?1)", to)?;
+
+    // 3. Gabung dengan master barang.
+    let mut sql = String::from(
+        "SELECT p.id, p.name, p.barcode, p.brand, COALESCE(s.qty, 0)
+         FROM products p LEFT JOIN stock s ON s.product_id = p.id
+         WHERE p.is_deleted = 0",
+    );
+    let term = search.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    if term.is_some() {
+        sql.push_str(" AND (p.name LIKE ?1 OR IFNULL(p.barcode,'') LIKE ?1)");
+    }
+    sql.push_str(" ORDER BY p.name ASC");
+
+    let mut stmt = conn.prepare(&sql)?;
+    let map_row = |r: &rusqlite::Row| -> rusqlite::Result<(String, String, Option<String>, Option<String>, f64)> {
+        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+    };
+    let products: Vec<(String, String, Option<String>, Option<String>, f64)> = match &term {
+        Some(t) => stmt
+            .query_map(params![format!("%{t}%")], map_row)?
+            .collect::<Result<Vec<_>, _>>()?,
+        None => stmt.query_map([], map_row)?.collect::<Result<Vec<_>, _>>()?,
+    };
+
+    let mut out = Vec::new();
+    for (id, name, barcode, brand, current_stock) in products {
+        let (masuk, keluar, terjual, n) = agg.get(&id).copied().unwrap_or((0.0, 0.0, 0.0, 0));
+        let opening = opening_map.get(&id).copied().unwrap_or(0.0);
+        // Tanpa mutasi apa pun sampai `to`, stok akhir = stok awal.
+        let closing = closing_map.get(&id).copied().unwrap_or(opening);
+        if n == 0 && opening == 0.0 && closing == 0.0 && current_stock == 0.0 {
+            continue;
+        }
+        out.push(StockFlowRow {
+            product_id: id,
+            name,
+            barcode,
+            brand,
+            opening,
+            masuk,
+            keluar,
+            terjual,
+            // Sisa selisih yang tidak dijelaskan masuk/keluar/terjual = koreksi opname.
+            adjustment: closing - (opening + masuk - keluar - terjual),
+            closing,
+            current_stock,
+        });
+    }
+    Ok(out)
+}
+
+/// Buku besar stok satu barang dalam rentang tanggal: header barang, stok awal,
+/// dan semua mutasi urut kronologis (paling lama di atas) supaya kolom
+/// "stok setelah" terbaca sebagai stok berjalan.
+pub fn stock_flow_detail(
+    conn: &Connection,
+    product_id: &str,
+    from: &str,
+    to: &str,
+) -> AppResult<StockFlowDetail> {
+    let (name, barcode, brand, unit, current_stock) = conn
+        .query_row(
+            "SELECT p.name, p.barcode, p.brand, p.unit, COALESCE(s.qty, 0)
+             FROM products p LEFT JOIN stock s ON s.product_id = p.id
+             WHERE p.id = ?1",
+            params![product_id],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, f64>(4)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or_else(|| AppError::Other("barang tidak ditemukan".into()))?;
+
+    let opening: f64 = conn
+        .query_row(
+            "SELECT stock_after FROM stock_movements
+             WHERE product_id = ?1 AND date(created_at) < date(?2)
+             ORDER BY created_at DESC, id DESC LIMIT 1",
+            params![product_id, from],
+            |r| r.get(0),
+        )
+        .optional()?
+        .unwrap_or(0.0);
+
+    let mut stmt = conn.prepare(
+        "SELECT m.id, m.product_id, COALESCE(p.name,'') AS product_name, m.kind, m.qty,
+                m.stock_after, m.note, m.user_id, m.created_at
+         FROM stock_movements m LEFT JOIN products p ON p.id = m.product_id
+         WHERE m.product_id = ?1
+           AND date(m.created_at) >= date(?2) AND date(m.created_at) <= date(?3)
+         ORDER BY m.created_at ASC, m.id ASC",
+    )?;
+    let rows = stmt
+        .query_map(params![product_id, from, to], |r| {
+            Ok(StockMovement {
+                id: r.get("id")?,
+                product_id: r.get("product_id")?,
+                product_name: r.get("product_name")?,
+                kind: r.get("kind")?,
+                qty: r.get("qty")?,
+                stock_after: r.get("stock_after")?,
+                note: r.get("note")?,
+                user_id: r.get("user_id")?,
+                created_at: r.get("created_at")?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(StockFlowDetail {
+        product_id: product_id.to_string(),
+        name,
+        barcode,
+        brand,
+        unit,
+        current_stock,
+        opening,
+        rows,
+    })
 }

@@ -181,6 +181,8 @@ pub fn run() {
             commands::brand_sales_report,
             commands::sales_item_detail_report,
             commands::daily_sales_report,
+            commands::stock_flow_recap,
+            commands::stock_flow_detail,
             commands::write_temp_file,
             commands::list_printers,
             commands::print_text_to,

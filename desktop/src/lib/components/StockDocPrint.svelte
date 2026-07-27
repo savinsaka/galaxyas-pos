@@ -39,7 +39,7 @@
     printer: null,
     show: {
       storeName: true, address: true, phone: true, taxId: true, social: true, header: true,
-      invoiceNo: true, date: true, items: true, subtotal: true, discount: true,
+      invoiceNo: true, date: true, items: true, totalItem: true, subtotal: true, discount: true,
       total: true, paymentMethod: true, change: true, footer: true,
     },
   });

@@ -102,6 +102,7 @@ export const RIBBON: RibbonCategory[] = [
         actions: [
           { key: "daftar-item-masuk", label: "Daftar Item Masuk", icon: "📥", viewKey: "daftar-item-masuk", title: "Daftar Item Masuk", singleton: true },
           { key: "daftar-item-keluar", label: "Daftar Item Keluar", icon: "📤", viewKey: "daftar-item-keluar", title: "Daftar Item Keluar", singleton: true },
+          { key: "alur-barang", label: "Alur Barang", icon: "🔀", viewKey: "alur-barang", title: "Alur Barang", singleton: true },
         ],
       },
     ],
