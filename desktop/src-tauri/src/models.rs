@@ -524,3 +524,25 @@ pub struct BrandInput {
     pub id: Option<String>,
     pub name: String,
 }
+
+// ---------- Perangkat mobile (HP kasir) ----------
+
+/// Satu HP yang sudah mendaftar ke Server Pusat ini. Token mentahnya hanya
+/// pernah ada sekali (saat `/pair`) dan tidak pernah disimpan — yang tersimpan
+/// hash-nya, jadi daftar ini aman ditampilkan di layar Pengaturan.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MobileDevice {
+    pub id: String,
+    pub name: String,
+    pub created_at: String,
+    pub last_seen_at: Option<String>,
+    pub revoked: bool,
+}
+
+/// Balasan `POST /pair` — satu-satunya saat token mentah dikirim ke HP.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PairResult {
+    pub device_id: String,
+    pub device_token: String,
+    pub store_name: String,
+}

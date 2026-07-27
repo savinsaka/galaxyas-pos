@@ -52,6 +52,7 @@ fun MenuScreen(
 ) {
     val user by session.user.collectAsState()
     val server by registry.activeServer.collectAsState()
+    val mode by registry.activeMode.collectAsState()
     val allSettings by settings.settings.collectAsState()
     val themeKey = allSettings["theme"].takeUnless { it.isNullOrBlank() } ?: DEFAULT_THEME_KEY
     val scope = rememberCoroutineScope()
@@ -69,9 +70,12 @@ fun MenuScreen(
                     Text(user?.role ?: "", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Row {
-                    Text("📶 ${server?.name ?: "-"}", modifier = Modifier.weight(1f))
                     Text(
-                        server?.let { "${it.host}:${it.port}" } ?: "",
+                        "📶 ${server?.name ?: "-"} · [${mode.label}]",
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        server?.addressOf(mode) ?: "",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall,
                     )

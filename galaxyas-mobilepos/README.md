@@ -2,10 +2,21 @@
 
 Aplikasi kasir Android (Kotlin + Jetpack Compose) yang menjadi **kasir tambahan**
 untuk GALAXYAS POS desktop. HP **tidak menyimpan database sendiri** — semua data
-(barang, stok, transaksi) ada di PC yang menjalankan **Server Pusat**, dan HP
-mengaksesnya lewat jaringan wifi yang sama.
+(barang, stok, transaksi) ada di PC yang menjalankan **Server Pusat**.
+
+Ada dua cara menjangkau PC itu, dipilih kasir sendiri saat membuka aplikasi:
+
+| | Kapan dipakai | Catatan |
+|---|---|---|
+| **[LOCAL]** | HP di wifi toko | Langsung ke IP PC. Paling cepat, tanpa kuota, tetap jalan walau internet toko mati. |
+| **[ONLINE]** | Dari mana saja | Lewat relay di VPS. Perlu PC kasir menyala + internet di kedua sisi. |
+
+Karena tidak ada antrian di jalur ONLINE, transaksi tidak pernah "nyangkut":
+kalau PC kasir mati, HP langsung diberi tahu dan tidak ada yang tersimpan
+diam-diam untuk dijalankan belakangan.
 
 Kontrak protokol dengan desktop: lihat [PROTOCOL.md](PROTOCOL.md).
+Pemasangan relay: lihat [../relay/DEPLOY.md](../relay/DEPLOY.md).
 
 ## Untuk pengguna (kasir)
 
@@ -18,12 +29,30 @@ Di GALAXYAS POS desktop: **Pengaturan → Server Pusat** → centang
 "Jadikan PC ini Server Pusat". Catat **IP**, **Port** (biasanya 8899), dan
 **Kode Pairing** yang tampil.
 
-### 3. Hubungkan HP
-Pastikan HP dan PC berada di **wifi yang sama**, buka aplikasi, isi Nama
-Server, IP, Port, dan Kode Pairing → **Hubungkan**. Lalu login memakai
-username + PIN yang sama seperti di desktop.
+Untuk pemakaian dari luar toko, nyalakan juga **Akses Online** di layar yang
+sama dan catat **URL Relay** + **Store ID**-nya.
 
-### 4. Printer struk (opsional)
+### 3. Hubungkan HP
+Lakukan **sekali saja**, sebaiknya saat HP masih di wifi toko.
+
+Cara cepat: di PC klik **Tampilkan QR**, lalu di HP tekan **📷 Scan QR dari PC**.
+Semua kolom terisi sendiri — termasuk Store ID relay yang 32 karakter dan tidak
+mungkin diketik benar. Tinggal **Hubungkan**.
+
+Cara manual (kalau kamera bermasalah): isi Nama Server, lalu jalur yang tersedia
+— IP + Port untuk LOCAL, URL Relay + Store ID untuk ONLINE (boleh keduanya
+sekaligus) — dan Kode Pairing → **Hubungkan**.
+
+Kode Pairing hanya dipakai saat pendaftaran ini. Sesudahnya HP memegang kunci
+sendiri, dan pemilik toko bisa mencabut akses per-HP dari **Pengaturan →
+Perangkat Terhubung** di PC tanpa mengganggu HP lain.
+
+### 4. Setiap membuka aplikasi
+Pilih **[LOCAL]** atau **[ONLINE]** sesuai posisi HP saat itu, lalu login
+memakai username + PIN yang sama seperti di desktop. Jalur bisa diganti kapan
+saja lewat **Menu → Ganti Server**.
+
+### 5. Printer struk (opsional)
 1. Pasangkan printer thermal Bluetooth lewat **Pengaturan Bluetooth HP** dulu
    (sekali saja).
 2. Di aplikasi: **Menu → Printer & Kertas** → pilih printer → atur lebar kertas
@@ -98,8 +127,13 @@ Aplikasi mengecek berkas itu saat tab **Menu** dibuka dan menampilkan tombol
 unduh bila ada versi lebih baru (tanpa auto-update — pemasangan tetap manual).
 
 ### Catatan teknis
-- **Cleartext HTTP wajib** (`network_security_config.xml`) karena Server Pusat
-  memakai HTTP polos di IP LAN privat. Jangan dipakai di wifi publik.
+- **Cleartext HTTP wajib** (`network_security_config.xml`) karena jalur LOCAL
+  memakai HTTP polos di IP LAN privat. Jangan dipakai di wifi publik. Jalur
+  ONLINE selalu lewat HTTPS ke relay.
+- **Kredensial**: token per-perangkat 64 karakter hex hasil `POST /pair`,
+  dikirim di header `X-Galaxyas-Token` untuk kedua jalur. Kode pairing 6
+  karakter masih diterima di jalur LOCAL (kompatibilitas HP lama) tapi **ditolak
+  di jalur ONLINE** — terlalu pendek untuk dijaga dari tebakan lewat internet.
 - **Paritas struk**: byte ESC/POS diuji terhadap fixture golden yang dihasilkan
   implementasi desktop (`app/src/test/resources/fixtures`). Kalau format struk
   di desktop berubah, perbarui fixture dan `EscPos.kt` bersamaan.

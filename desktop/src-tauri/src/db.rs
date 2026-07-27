@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::models::{
-    Product, ProductInput, ProductWithStock, SaleInput, SyncLogEntry, Transaction,
+    MobileDevice, Product, ProductInput, ProductWithStock, SaleInput, SyncLogEntry, Transaction,
     TransactionDetail, TransactionItem,
 };
 
@@ -172,6 +172,21 @@ pub fn init_schema(conn: &Connection) -> AppResult<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_batch_kind ON stock_movement_batches(kind);
         CREATE INDEX IF NOT EXISTS idx_batch_created ON stock_movement_batches(created_at);
+
+        -- HP kasir yang sudah didaftarkan (lihat lan.rs). Kode pairing 6
+        -- karakter cuma dipakai SEKALI untuk mendaftar; sesudah itu tiap HP
+        -- memegang token panjang sendiri yang bisa dicabut satu per satu —
+        -- penting karena Server Pusat kini juga bisa dijangkau lewat relay
+        -- internet, bukan cuma LAN. Yang disimpan hash-nya, bukan tokennya.
+        CREATE TABLE IF NOT EXISTS mobile_devices (
+            id           TEXT PRIMARY KEY,
+            name         TEXT NOT NULL,
+            token_hash   TEXT NOT NULL UNIQUE,
+            created_at   TEXT NOT NULL,
+            last_seen_at TEXT,
+            revoked      INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_mobile_devices_hash ON mobile_devices(token_hash);
         "#,
     )?;
 
@@ -322,6 +337,105 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> AppResult<()> {
         params![key, value],
     )?;
     Ok(())
+}
+
+// ---------- Perangkat mobile (HP kasir) ----------
+
+/// Hash token perangkat. Token mentah tidak pernah masuk database, jadi bocornya
+/// file DB tidak otomatis memberi akses ke Server Pusat lewat relay internet.
+pub fn hash_device_token(token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(token.as_bytes());
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn map_mobile_device(row: &rusqlite::Row) -> rusqlite::Result<MobileDevice> {
+    Ok(MobileDevice {
+        id: row.get("id")?,
+        name: row.get("name")?,
+        created_at: row.get("created_at")?,
+        last_seen_at: row.get("last_seen_at")?,
+        revoked: row.get::<_, i64>("revoked")? != 0,
+    })
+}
+
+/// Daftarkan HP baru dan kembalikan token mentahnya SEKALI (pemanggil wajib
+/// langsung mengirimkannya ke HP; tidak ada cara mengambilnya lagi nanti).
+/// 2x UUID v4 = 64 karakter hex, jauh di atas kode pairing 6 karakter yang
+/// tidak layak dipakai di jalur publik.
+pub fn create_mobile_device(conn: &Connection, name: &str) -> AppResult<(MobileDevice, String)> {
+    let token = format!(
+        "{}{}",
+        Uuid::new_v4().simple(),
+        Uuid::new_v4().simple()
+    );
+    let device = MobileDevice {
+        id: Uuid::new_v4().to_string(),
+        name: if name.trim().is_empty() { "HP Kasir".to_string() } else { name.trim().to_string() },
+        created_at: Utc::now().to_rfc3339(),
+        last_seen_at: None,
+        revoked: false,
+    };
+    conn.execute(
+        "INSERT INTO mobile_devices (id, name, token_hash, created_at, last_seen_at, revoked)
+         VALUES (?1, ?2, ?3, ?4, NULL, 0)",
+        params![device.id, device.name, hash_device_token(&token), device.created_at],
+    )?;
+    Ok((device, token))
+}
+
+/// Cari perangkat berdasarkan token mentah yang dikirim HP; sekaligus menandai
+/// `last_seen_at` supaya daftar di Pengaturan menunjukkan HP mana yang aktif.
+/// Perangkat yang sudah dicabut sengaja dianggap tidak ada.
+pub fn find_mobile_device_by_token(
+    conn: &Connection,
+    token: &str,
+) -> AppResult<Option<MobileDevice>> {
+    let hash = hash_device_token(token);
+    let found = conn
+        .query_row(
+            "SELECT id, name, created_at, last_seen_at, revoked FROM mobile_devices
+             WHERE token_hash = ?1 AND revoked = 0",
+            params![hash],
+            map_mobile_device,
+        )
+        .optional()?;
+    if let Some(ref d) = found {
+        conn.execute(
+            "UPDATE mobile_devices SET last_seen_at = ?1 WHERE id = ?2",
+            params![Utc::now().to_rfc3339(), d.id],
+        )?;
+    }
+    Ok(found)
+}
+
+pub fn list_mobile_devices(conn: &Connection) -> AppResult<Vec<MobileDevice>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, created_at, last_seen_at, revoked FROM mobile_devices
+         WHERE revoked = 0 ORDER BY created_at DESC",
+    )?;
+    let rows = stmt
+        .query_map([], map_mobile_device)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Cabut akses satu HP. Barisnya dihapus (bukan sekadar ditandai) supaya
+/// token-nya benar-benar hilang dari tabel dan tidak bisa dipulihkan.
+pub fn revoke_mobile_device(conn: &Connection, id: &str) -> AppResult<()> {
+    conn.execute("DELETE FROM mobile_devices WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+/// Semua hash token yang masih sah — dikirim agent relay ke VPS supaya relay
+/// bisa menolak token asing tanpa perlu membangunkan PC kasir.
+pub fn mobile_device_token_hashes(conn: &Connection) -> AppResult<Vec<String>> {
+    let mut stmt =
+        conn.prepare("SELECT token_hash FROM mobile_devices WHERE revoked = 0")?;
+    let rows = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
 }
 
 pub fn all_settings(conn: &Connection) -> AppResult<Vec<(String, String)>> {

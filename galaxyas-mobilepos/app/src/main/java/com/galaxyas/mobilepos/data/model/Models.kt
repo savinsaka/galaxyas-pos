@@ -429,3 +429,31 @@ data class DailySalesRow(
     val discount: Double,
     val net: Double,
 )
+
+// ---------- Pairing perangkat ----------
+
+/**
+ * Balasan `POST /pair` (desktop `models.rs::PairResult`). Satu-satunya saat
+ * token perangkat dikirim ke HP — sesudah itu hanya ada hash-nya di PC kasir.
+ */
+@Serializable
+data class PairResult(
+    val device_id: String,
+    val device_token: String,
+    val store_name: String,
+)
+
+/**
+ * Isi QR pairing (desktop `lan.rs::PairingPayload`). Semua bawaan diberi nilai
+ * default supaya QR dari desktop versi lain tidak bikin app gagal parse.
+ */
+@Serializable
+data class PairingPayload(
+    val v: Int = 1,
+    val name: String = "",
+    val host: String = "",
+    val port: Int = 8899,
+    val relay: String = "",
+    val store_id: String = "",
+    val code: String = "",
+)

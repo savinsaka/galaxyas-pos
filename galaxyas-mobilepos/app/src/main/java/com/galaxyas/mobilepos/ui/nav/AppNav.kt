@@ -43,6 +43,7 @@ import com.galaxyas.mobilepos.ui.menu.MenuScreen
 import com.galaxyas.mobilepos.ui.menu.SettingsPrinterScreen
 import com.galaxyas.mobilepos.ui.menu.SettingsStoreScreen
 import com.galaxyas.mobilepos.ui.menu.UsersScreen
+import com.galaxyas.mobilepos.ui.onboarding.ConnectionChooserScreen
 import com.galaxyas.mobilepos.ui.onboarding.PairingScreen
 import com.galaxyas.mobilepos.ui.persediaan.ExpensesScreen
 import com.galaxyas.mobilepos.ui.persediaan.OpnameScreen
@@ -71,32 +72,51 @@ private val TABS = listOf(
     Tab("menu", "Menu", Icons.Default.Menu, null),
 )
 
-/** Gate boot: belum pairing → Pairing; belum login → Login; else shell tab. */
+/**
+ * Gate boot: belum ada server → Pairing; sudah ada → pilih LOCAL/ONLINE dulu;
+ * belum login → Login; else shell tab.
+ *
+ * `chosen` sengaja tidak dipersistenkan: pemilik toko minta pilihan jalur muncul
+ * SETIAP app dibuka, karena kasir yang tahu HP-nya sedang di toko atau di luar.
+ */
 @Composable
 fun AppRoot(container: AppContainer) {
+    val servers by container.serverRegistry.servers.collectAsState()
     val activeServer by container.serverRegistry.activeServer.collectAsState()
     val user by container.session.user.collectAsState()
     var forcePairing by remember { mutableStateOf(false) }
+    var chosen by remember { mutableStateOf(false) }
 
     when {
-        activeServer == null || forcePairing -> PairingScreen(
+        servers.isEmpty() || forcePairing -> PairingScreen(
             registry = container.serverRegistry,
             rpc = container.rpc,
             onPaired = {
                 forcePairing = false
+                chosen = true
                 container.session.logout()
                 container.connectionWatcher.checkAsync()
             },
+            onCancel = if (servers.isEmpty()) null else ({ forcePairing = false }),
+        )
+        !chosen || activeServer == null -> ConnectionChooserScreen(
+            registry = container.serverRegistry,
+            rpc = container.rpc,
+            onChosen = {
+                chosen = true
+                container.connectionWatcher.checkAsync()
+            },
+            onAddServer = { forcePairing = true },
         )
         user == null -> LoginScreen(
             api = container.api,
             session = container.session,
             registry = container.serverRegistry,
-            onChangeServer = { forcePairing = true },
+            onChangeServer = { chosen = false },
         )
         else -> MainShell(container, onChangeServer = {
             container.session.logout()
-            forcePairing = true
+            chosen = false
         })
     }
 }

@@ -5,7 +5,9 @@
   import { parseReceiptConfig, RECEIPT_SHOW_KEYS, maxFontSizeForPaper } from "$lib/receipt";
   import { buildReceiptEscPos } from "$lib/escpos";
   import { THEMES, saveTheme } from "$lib/theme";
-  import type { LanServerStatus, TransactionDetail } from "$lib/types";
+  import type {
+    LanServerStatus, MobileDevice, PairingQr, RelayStatus, TransactionDetail,
+  } from "$lib/types";
   import { currentServer, isRemoteClient } from "$lib/stores/activeServer";
   import Receipt from "$lib/components/Receipt.svelte";
 
@@ -25,6 +27,15 @@
 
   let lanStatus = $state<LanServerStatus | null>(null);
   let lanBusy = $state(false);
+
+  // Akses Online (relay) — supaya HP kasir bisa dipakai dari luar wifi toko.
+  let relay = $state<RelayStatus | null>(null);
+  let relayBusy = $state(false);
+  let relayForm = $state({ url: "", store_id: "", agent_key: "" });
+  let devices = $state<MobileDevice[]>([]);
+  let relayTimer: ReturnType<typeof setInterval> | null = null;
+  let qr = $state<PairingQr | null>(null);
+  let qrBusy = $state(false);
 
   let settings = $state<Record<string, string>>({});
   let printers = $state<string[]>([]);
@@ -103,12 +114,85 @@
     lanBusy = true;
     try {
       lanStatus = await api.regenerateLanToken();
+      qr = null; // QR lama memuat kode yang sudah mati
       showToast("Kode pairing baru dibuat.", "success");
     } catch (e) {
       toastError(e);
     } finally {
       lanBusy = false;
     }
+  }
+
+  /// QR memuat kode pairing, jadi hanya dibuat saat diminta — bukan dipajang
+  /// terus-menerus di layar kasir yang dilihat banyak orang.
+  async function showQr() {
+    qrBusy = true;
+    try {
+      qr = await api.pairingQr();
+    } catch (e) {
+      toastError(e);
+    } finally {
+      qrBusy = false;
+    }
+  }
+
+  async function loadRelay() {
+    if ($isRemoteClient) return;
+    try {
+      relay = await api.relayStatus();
+      relayForm.url = relay.url;
+      relayForm.store_id = relay.store_id;
+      devices = await api.listMobileDevices();
+    } catch (e) {
+      toastError(e);
+    }
+  }
+
+  async function saveRelay() {
+    relayBusy = true;
+    try {
+      relay = await api.saveRelaySettings({ ...relayForm });
+      relayForm.agent_key = ""; // tidak ditampilkan lagi setelah tersimpan
+      showToast("Pengaturan Akses Online disimpan.", "success");
+    } catch (e) {
+      toastError(e);
+    } finally {
+      relayBusy = false;
+    }
+  }
+
+  async function toggleRelay() {
+    relayBusy = true;
+    try {
+      relay = await api.setRelayEnabled(!relay?.enabled);
+      qr = null; // isi QR ikut berubah (alamat relay masuk/hilang)
+      showToast(
+        relay.enabled ? "Akses Online dinyalakan." : "Akses Online dimatikan.",
+        "success",
+      );
+    } catch (e) {
+      toastError(e);
+      relay = await api.relayStatus();
+    } finally {
+      relayBusy = false;
+    }
+  }
+
+  async function revokeDevice(d: MobileDevice) {
+    if (!confirm(`Cabut akses "${d.name}"? HP itu harus pairing ulang untuk bisa dipakai lagi.`))
+      return;
+    try {
+      await api.revokeMobileDevice(d.id);
+      devices = await api.listMobileDevices();
+      showToast("Akses perangkat dicabut.", "success");
+    } catch (e) {
+      toastError(e);
+    }
+  }
+
+  function fmtWaktu(iso: string | null): string {
+    if (!iso) return "belum pernah";
+    return new Date(iso).toLocaleString("id-ID");
   }
 
   async function disconnectServer() {
@@ -128,6 +212,7 @@
       settings = await api.getSettings();
       printers = await api.listPrinters();
       await loadLanStatus();
+      await loadRelay();
       settings.receipt_paper ??= "80";
       settings.receipt_font_size ??= "12";
       clampFontSize();
@@ -153,7 +238,19 @@
       for (const { setting } of RECEIPT_SHOW_KEYS) settings[setting] ??= "1";
     } catch (e) { toastError(e); }
   }
-  onMount(load);
+  onMount(() => {
+    load();
+    // Status agent hidup di background thread; polling ringan supaya indikator
+    // "Terhubung" ikut berubah saat internet toko putus/nyambung lagi.
+    relayTimer = setInterval(() => {
+      if (section === "lan" && !$isRemoteClient && !relayBusy) {
+        api.relayStatus().then((s) => (relay = s)).catch(() => {});
+      }
+    }, 5000);
+    return () => {
+      if (relayTimer) clearInterval(relayTimer);
+    };
+  });
 
   let savingScanMode = $state(false);
   async function pickScanMode(mode: "scan_first" | "jumlah_first") {
@@ -378,9 +475,115 @@
           </div>
           <button disabled={lanBusy} onclick={regenerateToken}>🔄 Buat Kode Baru</button>
         </div>
+
+        <!-- QR pairing: Store ID relay 32 karakter hex tidak mungkin diketik
+             benar di HP, jadi semua isian dijadikan satu QR. -->
+        <div class="card" style="margin-top:0.8rem;">
+          <div style="font-weight:600; margin-bottom:0.3rem;">Pairing Cepat (QR)</div>
+          <p class="text-dim" style="margin:0 0 0.6rem; font-size:0.8rem;">
+            Di HP: <em>+ Tambah Server</em> → <em>Scan QR</em>. Alamat LAN, alamat
+            relay, dan kode pairing terisi sendiri.
+          </p>
+          {#if qr}
+            <div style="background:#fff; padding:10px; display:inline-block; border-radius:6px;">
+              <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+              {@html qr.svg}
+            </div>
+            <div class="text-dim" style="font-size:0.78rem; margin-top:0.5rem;">
+              {qr.payload.name} ·
+              {qr.payload.host ? `${qr.payload.host}:${qr.payload.port}` : "IP LAN tidak terdeteksi"}
+              {#if qr.payload.relay}· online: {qr.payload.relay}{:else}· online: belum aktif{/if}
+            </div>
+            <button style="margin-top:0.5rem;" onclick={() => (qr = null)}>Sembunyikan</button>
+          {:else}
+            <button disabled={qrBusy} onclick={showQr}>
+              {qrBusy ? "Membuat…" : "📱 Tampilkan QR"}
+            </button>
+          {/if}
+        </div>
       {/if}
     {/if}
   </div>
+
+  {#if !$isRemoteClient}
+    <!-- Akses Online: HP kasir dari luar wifi toko, lewat relay di VPS. -->
+    <div class="card" style="max-width:560px; margin-top:1rem;">
+      <h2>Akses Online (HP dari luar toko)</h2>
+      <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
+        Supaya app HP bisa dipakai dari mana saja, bukan cuma di wifi toko. PC ini
+        menyambung keluar ke relay, jadi tidak perlu setting router. <strong>PC ini harus
+        tetap menyala</strong> — kalau mati, HP langsung diberi tahu dan tidak ada
+        transaksi yang tertahan.
+      </p>
+
+      <label>URL Relay</label>
+      <input bind:value={relayForm.url} placeholder="relay.jjapps.net" disabled={relayBusy} />
+      <label>Store ID</label>
+      <input bind:value={relayForm.store_id} placeholder="dari skrip add_store.py" disabled={relayBusy} />
+      <label>Agent Key</label>
+      <input
+        type="password"
+        bind:value={relayForm.agent_key}
+        placeholder={relay?.enabled || relay?.store_id ? "(tersimpan — isi hanya bila ingin ganti)" : "dari skrip add_store.py"}
+        disabled={relayBusy}
+      />
+      <div class="row" style="margin-top:0.7rem;">
+        <button disabled={relayBusy} onclick={saveRelay}>Simpan</button>
+        <button disabled={relayBusy} onclick={toggleRelay}>
+          {relay?.enabled ? "Matikan Akses Online" : "Nyalakan Akses Online"}
+        </button>
+      </div>
+
+      {#if relay?.enabled}
+        <div class="card" style="background:var(--baby-blue-bg); margin-top:0.8rem;">
+          <div class="row" style="gap:0.5rem;">
+            <span style="font-size:1.1rem;">{relay.connected ? "🟢" : "🔴"}</span>
+            <strong>{relay.connected ? "Terhubung ke relay" : "Tidak terhubung"}</strong>
+          </div>
+          {#if relay.connected && relay.connected_since}
+            <div class="text-dim" style="font-size:0.78rem; margin-top:0.3rem;">
+              Sejak {fmtWaktu(relay.connected_since)}
+            </div>
+          {/if}
+          {#if !relay.connected && relay.last_error}
+            <div class="text-dim" style="font-size:0.78rem; margin-top:0.3rem;">
+              {relay.last_error} — mencoba menyambung ulang otomatis.
+            </div>
+          {/if}
+        </div>
+      {/if}
+    </div>
+
+    <div class="card" style="max-width:560px; margin-top:1rem;">
+      <h2>Perangkat Terhubung</h2>
+      <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
+        HP yang sudah pairing dengan Server Pusat ini. Tiap HP punya kunci sendiri —
+        mencabut satu HP tidak mengganggu yang lain. Ganti Kode Pairing di atas hanya
+        mencegah HP <em>baru</em> mendaftar, tidak memutus yang sudah terdaftar.
+      </p>
+      {#if devices.length === 0}
+        <p class="text-dim" style="font-size:0.83rem;">Belum ada HP yang terdaftar.</p>
+      {:else}
+        <table>
+          <thead>
+            <tr><th>Nama</th><th>Terakhir dipakai</th><th></th></tr>
+          </thead>
+          <tbody>
+            {#each devices as d (d.id)}
+              <tr>
+                <td>{d.name}</td>
+                <td class="text-dim">{fmtWaktu(d.last_seen_at)}</td>
+                <td style="text-align:right;">
+                  <button class="btn-danger" onclick={() => revokeDevice(d)}>Cabut</button>
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      {/if}
+      <button style="margin-top:0.6rem;" onclick={loadRelay}>↻ Muat Ulang</button>
+    </div>
+  {/if}
 {/if}
 
 <!-- ── Tab: Struk & Printer ── -->

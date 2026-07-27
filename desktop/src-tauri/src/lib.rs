@@ -4,6 +4,7 @@ mod error;
 mod lan;
 mod models;
 mod pull;
+mod relay;
 mod servers;
 mod stores;
 mod sync;
@@ -83,6 +84,8 @@ pub fn run() {
                 data_dir: data_dir.clone(),
                 remote: Mutex::new(None),
                 lan: Mutex::new(None),
+                relay: Mutex::new(None),
+                relay_status: Arc::new(Mutex::new(relay::RelayStatus::default())),
             });
             app.manage(PrintPayloadState::default());
 
@@ -111,7 +114,7 @@ pub fn run() {
             // PC ini. Kegagalan (mis. port dipakai) tidak boleh menggagalkan
             // startup aplikasi — cukup dicatat ke stderr.
             if lan_enabled {
-                match lan::start(conn.clone(), 8899, lan_token) {
+                match lan::start(conn.clone(), 8899) {
                     Ok(handle) => {
                         let state = app.state::<AppState>();
                         let lock_result = state.lan.lock();
@@ -121,6 +124,34 @@ pub fn run() {
                     }
                     Err(e) => {
                         eprintln!("gagal memulai Server Pusat otomatis: {e}");
+                    }
+                }
+            }
+
+            // Auto-start agent relay (Akses Online) bila sebelumnya diaktifkan.
+            // Sama seperti Server Pusat: kegagalan tidak boleh menggagalkan
+            // startup — agent menyambung ulang sendiri kalau internet baru
+            // tersedia belakangan.
+            {
+                let state = app.state::<AppState>();
+                let config = state
+                    .conn
+                    .lock()
+                    .ok()
+                    .and_then(|guard| {
+                        let enabled =
+                            db::get_setting(&guard, "relay_enabled").ok().flatten().as_deref()
+                                == Some("1");
+                        if !enabled {
+                            return None;
+                        }
+                        relay::RelayConfig::load(&guard).ok().flatten()
+                    });
+                if let Some(config) = config {
+                    let handle =
+                        relay::start(conn.clone(), config, state.relay_status.clone());
+                    if let Ok(mut guard) = state.relay.lock() {
+                        *guard = Some(handle);
                     }
                 }
             }
@@ -204,6 +235,12 @@ pub fn run() {
             commands::lan_server_status,
             commands::set_lan_server_enabled,
             commands::regenerate_lan_token,
+            commands::pairing_qr,
+            commands::list_mobile_devices,
+            commands::revoke_mobile_device,
+            commands::relay_status,
+            commands::save_relay_settings,
+            commands::set_relay_enabled,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

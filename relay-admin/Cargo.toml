@@ -1,0 +1,31 @@
+[package]
+name = "galaxyas-relay-admin"
+version = "1.0.0"
+edition = "2021"
+description = "Alat pemilik untuk mengelola toko di relay GALAXYAS POS"
+
+# SENGAJA di luar workspace desktop/: alat ini TIDAK ikut installer POS.
+# Dipakai pemilik di satu PC saja untuk mendaftarkan toko ke relay.
+[workspace]
+
+[dependencies]
+# eframe = satu exe portabel tanpa webview/installer, cocok untuk alat internal
+# yang dipakai sesekali. Sengaja bukan Tauri: tidak perlu npm, tidak perlu
+# bundling, dan hasilnya bisa disalin begitu saja.
+eframe = { version = "0.29", default-features = false, features = ["glow", "default_fonts"] }
+egui = "0.29"
+ureq = { version = "2", features = ["json", "tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "5"
+arboard = "3"
+# Ikon jendela/taskbar saat app jalan (ikon exe di Explorer diurus build.rs).
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true

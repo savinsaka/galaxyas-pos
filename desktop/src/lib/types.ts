@@ -143,6 +143,42 @@ export interface LanServerStatus {
   local_ip: string | null;
 }
 
+/// Status agent relay (Akses Online) — PC ini menyambung keluar ke VPS supaya
+/// HP kasir bisa dipakai dari luar wifi toko.
+export interface RelayStatus {
+  enabled: boolean;
+  connected: boolean;
+  url: string;
+  store_id: string;
+  last_error: string | null;
+  connected_since: string | null;
+}
+
+/// Isi QR pairing — semua yang perlu diisi di HP, jadi satu.
+export interface PairingPayload {
+  v: number;
+  name: string;
+  host: string;
+  port: number;
+  relay: string;
+  store_id: string;
+  code: string;
+}
+
+export interface PairingQr {
+  svg: string;
+  payload: PairingPayload;
+}
+
+/// HP kasir yang sudah terdaftar di Server Pusat ini.
+export interface MobileDevice {
+  id: string;
+  name: string;
+  created_at: string;
+  last_seen_at: string | null;
+  revoked: boolean;
+}
+
 export interface DedupeDetail {
   barcode: string;
   kept_name: string;

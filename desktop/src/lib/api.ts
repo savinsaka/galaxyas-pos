@@ -13,13 +13,16 @@ import type {
   Expense,
   ExpenseInput,
   LanServerStatus,
+  MobileDevice,
   OpenShiftInput,
+  PairingQr,
   Product,
   ProductInput,
   PullItem,
   ProductPage,
   ProductSalesRow,
   ProductWithStock,
+  RelayStatus,
   SaleInput,
   SalesItemDetailRow,
   ServerInfo,
@@ -222,4 +225,13 @@ export const api = {
   setLanServerEnabled: (enabled: boolean) =>
     invoke<LanServerStatus>("set_lan_server_enabled", { enabled }),
   regenerateLanToken: () => invoke<LanServerStatus>("regenerate_lan_token"),
+
+  // Akses Online (relay) + HP yang terdaftar.
+  pairingQr: () => invoke<PairingQr>("pairing_qr"),
+  listMobileDevices: () => invoke<MobileDevice[]>("list_mobile_devices"),
+  revokeMobileDevice: (id: string) => invoke<void>("revoke_mobile_device", { id }),
+  relayStatus: () => invoke<RelayStatus>("relay_status"),
+  saveRelaySettings: (input: { url: string; store_id: string; agent_key: string }) =>
+    invoke<RelayStatus>("save_relay_settings", { input }),
+  setRelayEnabled: (enabled: boolean) => invoke<RelayStatus>("set_relay_enabled", { enabled }),
 };

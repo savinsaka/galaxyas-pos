@@ -5,6 +5,7 @@ import com.galaxyas.mobilepos.data.model.SaleInput
 import com.galaxyas.mobilepos.data.model.SaleItemInput
 import com.galaxyas.mobilepos.data.model.TransactionDetail
 import com.galaxyas.mobilepos.data.network.ApiClient
+import com.galaxyas.mobilepos.data.network.ConnMode
 import com.galaxyas.mobilepos.data.network.RemoteConfig
 import com.galaxyas.mobilepos.data.network.RpcClient
 import kotlinx.coroutines.test.runTest
@@ -35,7 +36,7 @@ class ApiClientSerializationTest {
     fun setUp() {
         server = MockWebServer()
         server.start()
-        val remote = RemoteConfig(server.hostName, server.port, "T")
+        val remote = RemoteConfig("http://${server.hostName}:${server.port}", "T", ConnMode.LOCAL)
         api = ApiClient(RpcClient { remote })
     }
 

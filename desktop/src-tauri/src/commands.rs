@@ -29,6 +29,11 @@ pub struct AppState {
     pub remote: Mutex<Option<crate::lan::RemoteConfig>>,
     /// Handle thread server Server Pusat, bila PC ini bertindak sebagai host.
     pub lan: Mutex<Option<crate::lan::LanServerHandle>>,
+    /// Handle agent relay (akses HP dari luar wifi toko), bila diaktifkan.
+    pub relay: Mutex<Option<crate::relay::RelayHandle>>,
+    /// Status agent relay yang dibaca layar Pengaturan; ikut ditulis oleh loop
+    /// agent di background, jadi sengaja dibagi lewat Arc.
+    pub relay_status: Arc<Mutex<crate::relay::RelayStatus>>,
 }
 
 impl AppState {
@@ -1272,29 +1277,168 @@ pub fn set_lan_server_enabled(state: State<'_, AppState>, enabled: bool) -> AppR
     }
     drop(conn);
     if enabled {
-        let handle = crate::lan::start(state.conn.clone(), LAN_SERVER_PORT, token)?;
+        let handle = crate::lan::start(state.conn.clone(), LAN_SERVER_PORT)?;
         let mut lan = state.lan.lock().map_err(|_| AppError::Other("gagal mengunci state".into()))?;
         *lan = Some(handle);
     }
     lan_status_snapshot(&state)
 }
 
-/// Buat token pairing baru (mis. dicurigai bocor) dan restart server bila
-/// sedang aktif, supaya token lama langsung tidak berlaku lagi.
+/// Buat kode pairing baru (mis. dicurigai bocor). Tidak perlu restart server:
+/// `lan::authenticate` membaca kode dari settings setiap permintaan, jadi kode
+/// lama langsung mati. HP yang sudah terdaftar TIDAK ikut terputus — mereka
+/// memakai token perangkat masing-masing; untuk memutus HP tertentu pakai
+/// `revoke_mobile_device`.
 #[tauri::command]
 pub fn regenerate_lan_token(state: State<'_, AppState>) -> AppResult<LanServerStatus> {
     let new_token = crate::lan::generate_token();
     let conn = state.lock()?;
     db::set_setting(&conn, "lan_server_token", &new_token)?;
-    let was_enabled = db::get_setting(&conn, "lan_server_enabled")?.as_deref() == Some("1");
     drop(conn);
-    if was_enabled {
-        let mut lan = state.lan.lock().map_err(|_| AppError::Other("gagal mengunci state".into()))?;
-        if let Some(handle) = lan.take() {
+    lan_status_snapshot(&state)
+}
+
+// ---------- Akses Online (relay) ----------
+
+/// Pengaturan relay yang dikirim frontend. `agent_key` kosong = jangan diubah,
+/// supaya layar Pengaturan tidak perlu menampilkan kunci yang sudah tersimpan.
+#[derive(Debug, serde::Deserialize)]
+pub struct RelaySettingsInput {
+    pub url: String,
+    pub store_id: String,
+    pub agent_key: String,
+}
+
+fn relay_status_snapshot(state: &State<'_, AppState>) -> AppResult<crate::relay::RelayStatus> {
+    let mut status = state
+        .relay_status
+        .lock()
+        .map_err(|_| AppError::Other("gagal mengunci state".into()))?
+        .clone();
+    // URL & store id ditampilkan apa adanya dari settings supaya isian form
+    // tetap terisi walau agent sedang mati.
+    let conn = state.lock()?;
+    status.url = db::get_setting(&conn, "relay_url")?.unwrap_or_default();
+    status.store_id = db::get_setting(&conn, "relay_store_id")?.unwrap_or_default();
+    Ok(status)
+}
+
+#[tauri::command]
+pub fn relay_status(state: State<'_, AppState>) -> AppResult<crate::relay::RelayStatus> {
+    relay_status_snapshot(&state)
+}
+
+/// Simpan pengaturan relay tanpa mengubah nyala/matinya agent.
+#[tauri::command]
+pub fn save_relay_settings(
+    state: State<'_, AppState>,
+    input: RelaySettingsInput,
+) -> AppResult<crate::relay::RelayStatus> {
+    {
+        let conn = state.lock()?;
+        db::set_setting(&conn, "relay_url", input.url.trim())?;
+        db::set_setting(&conn, "relay_store_id", input.store_id.trim())?;
+        if !input.agent_key.trim().is_empty() {
+            db::set_setting(&conn, "relay_agent_key", input.agent_key.trim())?;
+        }
+    }
+    // Sedang aktif? sambung ulang supaya pengaturan baru langsung dipakai.
+    let enabled = {
+        let conn = state.lock()?;
+        db::get_setting(&conn, "relay_enabled")?.as_deref() == Some("1")
+    };
+    if enabled {
+        set_relay_enabled(state, true)
+    } else {
+        relay_status_snapshot(&state)
+    }
+}
+
+/// Nyalakan/matikan agent relay pada PC ini.
+#[tauri::command]
+pub fn set_relay_enabled(
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> AppResult<crate::relay::RelayStatus> {
+    {
+        let mut guard = state
+            .relay
+            .lock()
+            .map_err(|_| AppError::Other("gagal mengunci state".into()))?;
+        if let Some(handle) = guard.take() {
             handle.stop();
         }
-        let handle = crate::lan::start(state.conn.clone(), LAN_SERVER_PORT, new_token)?;
-        *lan = Some(handle);
     }
-    lan_status_snapshot(&state)
+    {
+        let conn = state.lock()?;
+        db::set_setting(&conn, "relay_enabled", if enabled { "1" } else { "0" })?;
+    }
+
+    if !enabled {
+        if let Ok(mut s) = state.relay_status.lock() {
+            s.enabled = false;
+            s.connected = false;
+            s.connected_since = None;
+            s.last_error = None;
+        }
+        return relay_status_snapshot(&state);
+    }
+
+    let config = {
+        let conn = state.lock()?;
+        crate::relay::RelayConfig::load(&conn)?
+    }
+    .ok_or_else(|| {
+        AppError::Config("URL relay, Store ID, dan Agent Key wajib diisi dulu.".into())
+    })?;
+
+    let handle = crate::relay::start(state.conn.clone(), config, state.relay_status.clone());
+    let mut guard = state
+        .relay
+        .lock()
+        .map_err(|_| AppError::Other("gagal mengunci state".into()))?;
+    *guard = Some(handle);
+    drop(guard);
+    relay_status_snapshot(&state)
+}
+
+/// QR pairing siap tampil: SVG + isinya (isinya ikut dikirim supaya layar
+/// Pengaturan bisa menampilkan nilainya sebagai cadangan kalau kamera HP rewel).
+#[derive(Debug, serde::Serialize)]
+pub struct PairingQr {
+    pub svg: String,
+    pub payload: crate::lan::PairingPayload,
+}
+
+#[tauri::command]
+pub fn pairing_qr(state: State<'_, AppState>) -> AppResult<PairingQr> {
+    let local_ip = local_ip_address::local_ip().ok().map(|ip| ip.to_string());
+    let conn = state.lock()?;
+    let payload = crate::lan::pairing_payload(&conn, local_ip, LAN_SERVER_PORT)?;
+    drop(conn);
+
+    let json = serde_json::to_string(&payload)
+        .map_err(|e| AppError::Other(format!("gagal menyusun isi QR: {e}")))?;
+    let code = qrcode::QrCode::new(json.as_bytes())
+        .map_err(|e| AppError::Other(format!("gagal membuat QR: {e}")))?;
+    let svg = code
+        .render::<qrcode::render::svg::Color>()
+        .min_dimensions(220, 220)
+        .quiet_zone(true)
+        .build();
+    Ok(PairingQr { svg, payload })
+}
+
+/// Daftar HP yang sudah didaftarkan ke Server Pusat ini (layar Pengaturan).
+#[tauri::command]
+pub fn list_mobile_devices(state: State<'_, AppState>) -> AppResult<Vec<crate::models::MobileDevice>> {
+    let conn = state.lock()?;
+    db::list_mobile_devices(&conn)
+}
+
+/// Cabut akses satu HP. Berlaku seketika untuk jalur LAN maupun relay.
+#[tauri::command]
+pub fn revoke_mobile_device(state: State<'_, AppState>, id: String) -> AppResult<()> {
+    let conn = state.lock()?;
+    db::revoke_mobile_device(&conn, &id)
 }

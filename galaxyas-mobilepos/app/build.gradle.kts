@@ -21,8 +21,8 @@ android {
         applicationId = "com.galaxyas.mobilepos"
         minSdk = 24
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.1.4"
+        versionCode = 7
+        versionName = "1.0.0"
     }
 
     signingConfigs {
