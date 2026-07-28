@@ -7,7 +7,8 @@
   import { generateKasirDetailPdf } from "$lib/pdfTemplates";
   import { openPath } from "@tauri-apps/plugin-opener";
   import SummaryTable from "$lib/components/SummaryTable.svelte";
-  import type { Transaction, PaymentMethod } from "$lib/types";
+  import { totalsByMethod } from "$lib/payment";
+  import type { Transaction } from "$lib/types";
 
   let from = $state(todayIso());
   let to = $state(todayIso());
@@ -36,10 +37,20 @@
 
   const totalTx = $derived(txs.length);
   const totalNet = $derived(txs.reduce((s, t) => s + t.total, 0));
-  const methods: PaymentMethod[] = ["Tunai", "QRIS", "Kombinasi", "Kartu"];
-  const byMethod = $derived(
-    new Map(methods.map((m) => [m, txs.filter((t) => t.payment_method === m).reduce((s, t) => s + t.total, 0)])),
-  );
+  // Pembayaran kombinasi tidak jadi baris sendiri di laporan — nilainya sudah
+  // dipecah ke Tunai & QRIS oleh `totalsByMethod`. Metode di luar daftar baku
+  // (mis. transaksi kombinasi lama tanpa rincian) tetap ditampilkan di bawah.
+  const METHOD_ORDER = ["Tunai", "QRIS", "Kartu"];
+  const byMethod = $derived(totalsByMethod(txs));
+  const methods = $derived([
+    ...METHOD_ORDER,
+    ...[...byMethod.keys()].filter((m) => !METHOD_ORDER.includes(m)),
+  ]);
+  const ringkasanRows = $derived([
+    { label: "Total Transaksi", value: String(totalTx) },
+    { label: "Total", value: formatIDR(totalNet), bold: true },
+    ...methods.map((m) => ({ label: `Pembayaran ${m}`, value: formatIDR(byMethod.get(m)?.total ?? 0) })),
+  ]);
 
   /** Generate PDF dokumen (layout tetap) untuk laporan ini. */
   async function cetakPdf() {
@@ -51,11 +62,7 @@
         store_name: s.store_name || "GALAXYAS POS",
         periode: formatPeriodLabel(from, to),
         dicetak: `Dicetak: ${new Date().toLocaleString("id-ID")}`,
-        ringkasan: JSON.stringify([
-          ["Total Transaksi", String(totalTx)],
-          ["Total", formatIDR(totalNet)],
-          ...methods.map((m) => [`Pembayaran ${m}`, formatIDR(byMethod.get(m) ?? 0)]),
-        ]),
+        ringkasan: JSON.stringify(ringkasanRows.map((r) => [r.label, r.value])),
       });
       await openPath(path);
     } catch (e) {
@@ -79,10 +86,4 @@
 
 <div class="text-dim" style="margin-bottom:0.6rem;">{formatPeriodLabel(from, to)}</div>
 
-<SummaryTable
-  rows={[
-    { label: "Total Transaksi", value: String(totalTx) },
-    { label: "Total", value: formatIDR(totalNet), bold: true },
-    ...methods.map((m) => ({ label: `Pembayaran ${m}`, value: formatIDR(byMethod.get(m) ?? 0) })),
-  ]}
-/>
+<SummaryTable rows={ringkasanRows} />

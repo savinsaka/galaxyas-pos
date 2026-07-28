@@ -5,6 +5,7 @@
   import { onMount } from "svelte";
   import BrandMultiSelect from "$lib/components/BrandMultiSelect.svelte";
   import SummaryTable from "$lib/components/SummaryTable.svelte";
+  import { totalsByMethod } from "$lib/payment";
   import { REPORT_TYPES, defaultConfig, loadReportDesign, blockOrder, blockHidden, type ReportDesignConfig } from "$lib/reportDesign";
   import type { Brand, BrandSalesRow, Expense, ProductSalesRow, StockMovement, Transaction } from "$lib/types";
 
@@ -77,16 +78,9 @@
     return [...map.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
   });
 
-  const byMethod = $derived.by(() => {
-    const map = new Map<string, { count: number; total: number }>();
-    for (const t of txs) {
-      const b = map.get(t.payment_method) ?? { count: 0, total: 0 };
-      b.count += 1;
-      b.total += t.total;
-      map.set(t.payment_method, b);
-    }
-    return [...map.entries()].sort((a, b) => b[1].total - a[1].total);
-  });
+  // Pembayaran "Kombinasi" dipecah ke Tunai & QRIS sesuai rincian bayarnya —
+  // di laporan yang dihitung uangnya, bukan status pembayarannya.
+  const byMethod = $derived([...totalsByMethod(txs).entries()].sort((a, b) => b[1].total - a[1].total));
 
   const byCashier = $derived.by(() => {
     const map = new Map<string, { count: number; total: number }>();
@@ -225,6 +219,9 @@
           {:else}<tr><td colspan="3" class="text-dim">Tidak ada data.</td></tr>{/each}
         </tbody>
       </table>
+      <div class="text-dim" style="padding:0.5rem 0.9rem; font-size:0.78rem;">
+        Pembayaran kombinasi dipecah ke Tunai &amp; QRIS, jadi 1 transaksi kombinasi terhitung di kedua baris.
+      </div>
     </div>
   {/if}
 
