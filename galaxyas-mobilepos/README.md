@@ -110,18 +110,40 @@ Kalau keystore hilang, update aplikasi tidak bisa dipasang di atas versi lama.
 Tanpa `keystore.properties`, `assembleRelease` tetap jalan tapi menghasilkan
 APK **unsigned** (tidak bisa dipasang di HP).
 
+### Penyebaran otomatis APK (sejak 1.1.0)
+
+`assembleRelease` diikuti task `sebarApkRilis` yang menyalin APK ke dua tempat
+dengan nama `galaxyas-mobilepos-<versionName>.apk` — tidak ada lagi salin manual:
+
+| Tujuan | Guna |
+|---|---|
+| `galaxyas-mobilepos/dist/` | arsip lokal semua versi (gitignored) |
+| `G:\My Drive\aplikasi pos` | Google Drive — Drive for Desktop mengunggah sendiri, APK langsung bisa diunduh dari HP |
+
+Lokasi Drive bisa dipindah tanpa mengubah kode, lewat `local.properties`
+(gitignored): `apkDriveDir=G:\\My Drive\\folder lain`. Kalau foldernya tidak
+ada (Drive belum jalan, atau build di mesin lain), langkah Drive **dilewati
+dengan peringatan** — build rilis sengaja tidak digagalkan karenanya.
+
 ### Menerbitkan rilis
 1. Naikkan `versionCode` (+1) dan `versionName` di `app/build.gradle.kts`.
-2. Build & tandatangani APK, ganti nama jadi `galaxyas-mobilepos-X.Y.Z.apk`.
-3. Buat rilis bertag `mobile-vX.Y.Z` di repo publik
-   `savinsaka/galaxyas-pos-releases`, lampirkan APK + `mobile-latest.json`:
+2. `./gradlew assembleRelease` — APK otomatis mendarat di `dist/` + Google Drive.
+3. Lampirkan APK ke rilis desktop publik yang sedang dibuat CI (tag `vX.Y.Z` di
+   `savinsaka/galaxyas-pos-releases`) dengan nama aset **stabil**
+   `galaxyas-mobilepos.apk`, plus `mobile-latest.json`:
    ```json
    {
      "version": "X.Y.Z",
-     "apk_url": "https://github.com/savinsaka/galaxyas-pos-releases/releases/download/mobile-vX.Y.Z/galaxyas-mobilepos-X.Y.Z.apk",
+     "apk_url": "https://github.com/savinsaka/galaxyas-pos-releases/releases/latest/download/galaxyas-mobilepos.apk",
      "notes": "Ringkasan perubahan."
    }
    ```
+   ```bash
+   gh release upload vX.Y.Z galaxyas-mobilepos.apk mobile-latest.json -R savinsaka/galaxyas-pos-releases
+   ```
+   **Setiap** rilis wajib membawa dua aset ini. Kalau satu rilis saja
+   melewatkannya, `releases/latest/download/mobile-latest.json` jadi 404 dan
+   notifikasi update di semua HP mati diam-diam (kejadian di v1.2.0–v1.3.1).
 
 Aplikasi mengecek berkas itu saat tab **Menu** dibuka dan menampilkan tombol
 unduh bila ada versi lebih baru (tanpa auto-update — pemasangan tetap manual).

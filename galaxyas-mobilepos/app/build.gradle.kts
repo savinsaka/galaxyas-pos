@@ -58,6 +58,56 @@ android {
     }
 }
 
+/**
+ * Sebar APK rilis otomatis sesudah `assembleRelease`, supaya tidak ada lagi
+ * langkah salin manual yang bisa kelupaan:
+ *   1. `galaxyas-mobilepos/dist/galaxyas-mobilepos-<versi>.apk` — arsip lokal per versi.
+ *   2. Folder Google Drive (default `G:\My Drive\aplikasi pos`) — Drive for
+ *      Desktop mengunggahnya sendiri, jadi APK langsung bisa diunduh dari HP.
+ *
+ * Folder Drive bisa dipindah lewat `local.properties` (gitignored):
+ *     apkDriveDir=G:\\My Drive\\folder lain
+ * Kalau foldernya tidak ada (Drive belum jalan / mesin lain), langkah Drive
+ * DILEWATI dengan peringatan — build rilis tidak boleh gagal gara-gara ini.
+ */
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
+val sebarApkRilis by tasks.registering {
+    description = "Salin APK rilis ke folder dist dan Google Drive."
+    group = "distribution"
+    // Selalu jalan: APK bisa saja sudah ada tapi folder tujuan sudah dibersihkan.
+    outputs.upToDateWhen { false }
+    doLast {
+        val apk = layout.buildDirectory.file("outputs/apk/release/app-release.apk").get().asFile
+        if (!apk.exists()) {
+            logger.warn("APK rilis tidak ditemukan di ${apk.path} — penyebaran dilewati.")
+            return@doLast
+        }
+        val namaFile = "galaxyas-mobilepos-${android.defaultConfig.versionName}.apk"
+
+        val dist = rootProject.file("dist")
+        dist.mkdirs()
+        apk.copyTo(File(dist, namaFile), overwrite = true)
+        logger.lifecycle("APK rilis -> ${File(dist, namaFile).path}")
+
+        val driveDir = File(localProps.getProperty("apkDriveDir") ?: "G:\\My Drive\\aplikasi pos")
+        if (driveDir.isDirectory) {
+            apk.copyTo(File(driveDir, namaFile), overwrite = true)
+            logger.lifecycle("APK rilis -> ${File(driveDir, namaFile).path} (Google Drive)")
+        } else {
+            logger.warn("Folder Drive '${driveDir.path}' tidak ada — salin ke Drive dilewati. " +
+                "Atur 'apkDriveDir' di local.properties kalau lokasinya pindah.")
+        }
+    }
+}
+
+tasks.matching { it.name == "assembleRelease" }.configureEach {
+    finalizedBy(sebarApkRilis)
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
