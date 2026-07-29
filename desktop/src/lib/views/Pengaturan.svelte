@@ -3,7 +3,7 @@
   import { api } from "$lib/api";
   import { showToast, toastError } from "$lib/toast";
   import { parseReceiptConfig, RECEIPT_SHOW_KEYS, maxFontSizeForPaper } from "$lib/receipt";
-  import { buildReceiptEscPos } from "$lib/escpos";
+  import { buildDrawerKick, buildReceiptEscPos } from "$lib/escpos";
   import { THEMES, saveTheme } from "$lib/theme";
   import type {
     LanServerStatus, MobileDevice, PairingQr, RelayStatus, TransactionDetail,
@@ -75,6 +75,7 @@
   const receiptKeys = [
     "receipt_paper", "receipt_printer", "receipt_font_size",
     "receipt_line_height", "receipt_margin", "receipt_header", "receipt_footer",
+    "receipt_cash_drawer",
     ...RECEIPT_SHOW_KEYS.map((k) => k.setting),
   ];
 
@@ -220,6 +221,7 @@
       settings.receipt_margin ??= "3";
       settings.receipt_header ??= "";
       settings.receipt_footer ??= "";
+      settings.receipt_cash_drawer ??= "pin2";
       settings.store_name ??= "";
       settings.store_address ??= "";
       settings.store_phone ??= "";
@@ -318,6 +320,16 @@
     try {
       await api.printEscposTo(settings.receipt_printer || null, buildReceiptEscPos(sampleDetail, parseReceiptConfig(settings)));
       showToast("Test print dikirim.", "success");
+    } catch (e) { toastError(e); }
+  }
+
+  async function testDrawer() {
+    await saveReceipt();
+    const cfg = parseReceiptConfig(settings);
+    if (cfg.cashDrawer === "off") return showToast("Laci kasir sedang dimatikan.", "info");
+    try {
+      await api.printEscposTo(settings.receipt_printer || null, buildDrawerKick(cfg.cashDrawer));
+      showToast("Perintah buka laci dikirim.", "success");
     } catch (e) { toastError(e); }
   }
 
@@ -621,6 +633,18 @@
         <label>Margin (mm)</label>
         <input type="number" min="0" max="10" bind:value={settings.receipt_margin} oninput={onSpacingInput} />
       </div>
+      <div>
+        <label>Laci Kasir (Cash Drawer)</label>
+        <select bind:value={settings.receipt_cash_drawer}>
+          <option value="pin2">Pin 2 (umum)</option>
+          <option value="pin5">Pin 5</option>
+          <option value="both">Pin 2 &amp; 5 (kalau ragu)</option>
+          <option value="off">Mati</option>
+        </select>
+        <div class="text-dim" style="font-size:0.76rem; margin-top:0.25rem;">
+          Laci membuka otomatis hanya untuk pembayaran Tunai &amp; Kombinasi. Manual: F8 di Kasir.
+        </div>
+      </div>
     </div>
     <label style="margin-top:0.9rem;">Header Tambahan</label>
     <textarea rows="3" bind:value={settings.receipt_header} placeholder={"Jl. Contoh No.1\nTelp 0812-xxxx"}></textarea>
@@ -652,6 +676,7 @@
     <div class="row" style="justify-content:flex-end; margin-top:1rem; flex-wrap:wrap; gap:0.4rem;">
       <button onclick={openPreview}>👁️ Preview</button>
       <button onclick={testPrint}>🖨️ Test Print</button>
+      <button onclick={testDrawer}>💰 Tes Buka Laci</button>
       <button class="btn-primary" class:btn-warning={spacingChanged} disabled={savingReceipt} onclick={saveReceipt}>
         {spacingChanged ? "⚠ Simpan Struk*" : "Simpan Struk"}
       </button>

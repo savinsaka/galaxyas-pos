@@ -597,6 +597,14 @@ pub fn dispatch(
             let a: A = args_of(args)?;
             ok_value(db::delete_stock_movement(conn, a.id)?)
         }
+        "create_opname_special" => {
+            #[derive(serde::Deserialize)]
+            struct A {
+                input: crate::models::OpnameSpecialInput,
+            }
+            let a: A = args_of(args)?;
+            ok_value(db::create_opname_special(conn, a.input)?)
+        }
         "create_stock_movement_batch" => {
             #[derive(serde::Deserialize)]
             struct A {

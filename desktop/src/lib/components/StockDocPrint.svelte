@@ -37,6 +37,8 @@
     lineHeight: 1.35,
     margin: 3,
     printer: null,
+    // Dokumen stok bukan transaksi kas — laci tidak perlu dibuka.
+    cashDrawer: "off",
     show: {
       storeName: true, address: true, phone: true, taxId: true, social: true, header: true,
       invoiceNo: true, date: true, items: true, totalItem: true, subtotal: true, discount: true,

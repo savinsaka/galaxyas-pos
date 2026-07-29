@@ -39,6 +39,8 @@
     lineHeight: 1.35,
     margin: 3,
     printer: null,
+    // Cetak ulang dari riwayat tidak membuka laci — tidak ada uang berpindah.
+    cashDrawer: "off",
     show: {
       storeName: true, address: true, phone: true, taxId: true, social: true, header: true,
       invoiceNo: true, date: true, items: true, totalItem: true, subtotal: true, discount: true,

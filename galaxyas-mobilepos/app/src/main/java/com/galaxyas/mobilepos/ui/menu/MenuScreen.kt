@@ -101,6 +101,7 @@ fun MenuScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 listOf(
                     "opname" to "📋 Stok Opname",
+                    "opname-spesial" to "⚡ Opname Spesial",
                     "batch" to "📦 Item Masuk / Keluar",
                     "pengeluaran" to "💸 Pengeluaran",
                 ).forEach { (route, label) ->

@@ -1,5 +1,5 @@
 import type { StockMovementBatchDetail, TransactionDetail } from "./types";
-import { paperCols, type ReceiptConfig } from "./receipt";
+import { paperCols, type CashDrawerPin, type ReceiptConfig } from "./receipt";
 
 const formatQty = (n: number) => (Number.isInteger(n) ? n.toString() : n.toFixed(2));
 
@@ -58,6 +58,42 @@ class EscPosBuilder {
   build(): Uint8Array {
     return new Uint8Array(this.bytes);
   }
+}
+
+/**
+ * Byte pembuka laci kasir (ESC p m t1 t2 — "drawer kick"). Laci tidak
+ * tersambung ke PC, tapi ke port RJ11 di belakang printer, jadi perintahnya
+ * dikirim lewat jalur cetak yang sama.
+ *
+ * `m` menentukan pin konektor: 0 = pin 2 (paling umum), 1 = pin 5. t1/t2 =
+ * lama pulsa on/off dalam kelipatan 2 ms (25 → 50 ms, 250 → 500 ms) — nilai
+ * aman yang dipakai kebanyakan laci; terlalu pendek bisa bikin solenoid tidak
+ * kuat menarik. Sengaja BUKAN bagian dari buildReceiptEscPos supaya bisa
+ * dipakai sendiri untuk tombol "Buka Laci" manual.
+ */
+export function buildDrawerKick(drawer: CashDrawerPin): Uint8Array {
+  const pulse = (m: number) => [ESC, 0x70, m, 0x19, 0xfa];
+  switch (drawer) {
+    case "pin2": return new Uint8Array(pulse(0));
+    case "pin5": return new Uint8Array(pulse(1));
+    case "both": return new Uint8Array([...pulse(0), ...pulse(1)]);
+    default: return new Uint8Array();
+  }
+}
+
+/**
+ * Sisipkan perintah buka laci di AKHIR job cetak (sesudah feed + potong), jadi
+ * satu kali kirim ke printer. Sengaja di akhir, bukan di awal: struk diawali
+ * `ESC @` (reset printer), dan menaruh perintah laci sebelum reset itu
+ * mengandalkan perilaku printer yang tidak seragam antar merek.
+ */
+export function withDrawerKick(bytes: Uint8Array, drawer: CashDrawerPin): Uint8Array {
+  const kick = buildDrawerKick(drawer);
+  if (kick.length === 0) return bytes;
+  const out = new Uint8Array(bytes.length + kick.length);
+  out.set(bytes, 0);
+  out.set(kick, bytes.length);
+  return out;
 }
 
 /** Bangun urutan byte ESC/POS untuk struk transaksi, diakhiri feed + autocut. */

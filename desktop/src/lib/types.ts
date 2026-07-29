@@ -233,6 +233,27 @@ export interface StockMovementInput {
   created_at?: string | null;
 }
 
+/** Opname Spesial: barang yang benar-benar dihitung (qty = stok fisik absolut). */
+export interface OpnameSpecialItemInput {
+  product_id: string;
+  qty: number;
+}
+
+export interface OpnameSpecialInput {
+  brand: string;
+  note?: string | null;
+  user_id?: string | null;
+  items: OpnameSpecialItemInput[];
+  created_at?: string | null;
+}
+
+export interface OpnameSpecialResult {
+  brand: string;
+  counted: number;
+  zeroed: number;
+  created_at: string;
+}
+
 export interface StockMovementBatchItemInput {
   product_id: string;
   qty: number;

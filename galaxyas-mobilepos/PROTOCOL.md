@@ -94,7 +94,7 @@ PC → relay : {"id":"<uuid>","status":200,"body":…}
 PC → relay : {"type":"tokens","hashes":[…]}   // penyaring token di relay
 ```
 
-## 44 command (lan.rs::dispatch @ desktop v1.1.4)
+## 49 command (lan.rs::dispatch @ desktop v1.3.2)
 
 | Command | Args (wire) | Hasil |
 |---|---|---|
@@ -119,6 +119,7 @@ PC → relay : {"type":"tokens","hashes":[…]}   // penyaring token di relay
 | create_stock_movement | input: StockMovementInput | StockMovement |
 | list_stock_movements | kind?, from?, to?, limit | StockMovement[] |
 | delete_stock_movement | id (i64) | void |
+| create_opname_special | input: OpnameSpecialInput | OpnameSpecialResult |
 | create_stock_movement_batch | input: StockMovementBatchInput | StockMovementBatchDetail |
 | list_stock_movement_batches | kind?, from?, to?, limit, offset | StockMovementBatchPage |
 | get_stock_movement_batch | id | StockMovementBatchDetail? |
@@ -144,6 +145,8 @@ PC → relay : {"type":"tokens","hashes":[…]}   // penyaring token di relay
 | brand_sales_report | from, to, brands[] | BrandSalesRow[] |
 | sales_item_detail_report | from, to, brands[] | SalesItemDetailRow[] |
 | daily_sales_report | from, to, brands[] | DailySalesRow[] |
+| stock_flow_recap | from, to, search? | StockFlowRow[] |
+| stock_flow_detail | product_id, from, to | StockFlowDetailRow[] |
 
 Tabel `dispatch` yang sama ini dipakai kedua transport — `relay.rs` memanggil
 `lan::dispatch` langsung, jadi menambah command cukup di satu tempat.

@@ -47,6 +47,7 @@ import com.galaxyas.mobilepos.ui.onboarding.ConnectionChooserScreen
 import com.galaxyas.mobilepos.ui.onboarding.PairingScreen
 import com.galaxyas.mobilepos.ui.persediaan.ExpensesScreen
 import com.galaxyas.mobilepos.ui.persediaan.OpnameScreen
+import com.galaxyas.mobilepos.ui.persediaan.OpnameSpecialScreen
 import com.galaxyas.mobilepos.ui.persediaan.StockBatchScreen
 import com.galaxyas.mobilepos.ui.produk.BrandsScreen
 import com.galaxyas.mobilepos.ui.produk.CustomersScreen
@@ -231,6 +232,7 @@ private fun MainShell(container: AppContainer, onChangeServer: () -> Unit) {
                 composable("pelanggan") { CustomersScreen(container.api) }
                 composable("datasheet") { DataSheetScreen(container.api) }
                 composable("opname") { OpnameScreen(container.api, container.session) }
+                composable("opname-spesial") { OpnameSpecialScreen(container.api, container.session) }
                 composable("batch") {
                     StockBatchScreen(container.api, container.session, container.settings)
                 }

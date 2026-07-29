@@ -378,6 +378,21 @@ pub async fn delete_stock_movement(state: State<'_, AppState>, id: i64) -> AppRe
     db::delete_stock_movement(&mut conn, id)
 }
 
+/// Opname Spesial: hitung sebagian barang satu merek, sisanya dinolkan.
+/// Sengaja satu perintah (bukan loop create_stock_movement dari UI) supaya
+/// atomik dan tetap cepat lewat LAN/relay walau mereknya ratusan barang.
+#[tauri::command]
+pub async fn create_opname_special(
+    state: State<'_, AppState>,
+    input: crate::models::OpnameSpecialInput,
+) -> AppResult<crate::models::OpnameSpecialResult> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "create_opname_special", serde_json::json!({ "input": input })).await;
+    }
+    let mut conn = state.lock()?;
+    db::create_opname_special(&mut conn, input)
+}
+
 // ---------- Batch Item Masuk / Keluar ----------
 
 #[tauri::command]

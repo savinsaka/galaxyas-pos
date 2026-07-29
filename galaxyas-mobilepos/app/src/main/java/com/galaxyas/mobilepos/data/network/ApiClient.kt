@@ -164,6 +164,12 @@ class ApiClient(private val rpc: RpcClient) {
     suspend fun deleteStockMovement(id: Long) =
         callVoid("delete_stock_movement") { put("id", id) }
 
+    // ---------- Opname Spesial ----------
+
+    /** Satu merek disisir habis: yang dihitung diset, sisanya dinolkan di server. */
+    suspend fun createOpnameSpecial(input: OpnameSpecialInput): OpnameSpecialResult =
+        call("create_opname_special", buildJsonObject { put("input", json.encodeToJsonElement(input)) })
+
     // ---------- Batch Item Masuk / Keluar ----------
 
     suspend fun createStockMovementBatch(input: StockMovementBatchInput): StockMovementBatchDetail =

@@ -15,6 +15,8 @@ import type {
   LanServerStatus,
   MobileDevice,
   OpenShiftInput,
+  OpnameSpecialInput,
+  OpnameSpecialResult,
   PairingQr,
   Product,
   ProductInput,
@@ -126,6 +128,10 @@ export const api = {
   ) => invoke<StockMovement[]>("list_stock_movements", { kind, from, to, limit }),
   deleteStockMovement: (id: number) =>
     invoke<void>("delete_stock_movement", { id }),
+
+  // Opname Spesial (satu merek: yang dihitung diset, sisanya dinolkan)
+  createOpnameSpecial: (input: OpnameSpecialInput) =>
+    invoke<OpnameSpecialResult>("create_opname_special", { input }),
 
   // Batch Item Masuk / Keluar (satu transaksi = banyak barang)
   createStockMovementBatch: (input: StockMovementBatchInput) =>

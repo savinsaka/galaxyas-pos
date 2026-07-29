@@ -1300,6 +1300,84 @@ pub fn create_stock_movement_batch(
     })
 }
 
+/// Opname Spesial: satu merek disisir habis dalam sekali jalan.
+///
+/// Barang yang dihitung (di-scan, ada di `items`) stoknya diset sesuai hasil
+/// hitung fisik. SEMUA barang lain di merek itu — aktif maupun non-aktif —
+/// dianggap habis dan stoknya dinolkan. Barang yang stoknya memang sudah 0
+/// dilewati supaya riwayat opname tidak penuh baris tanpa perubahan.
+///
+/// Semuanya satu transaksi DB: kalau ada satu yang gagal, tidak ada satu pun
+/// stok yang berubah (opname tidak bisa di-undo, jadi jangan sampai separuh).
+pub fn create_opname_special(
+    conn: &mut Connection,
+    input: crate::models::OpnameSpecialInput,
+) -> AppResult<crate::models::OpnameSpecialResult> {
+    if input.brand.trim().is_empty() {
+        return Err(AppError::Other("merek wajib dipilih untuk opname spesial".into()));
+    }
+    let now = resolve_created_at(&input.created_at);
+    let counted_note = input
+        .note
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| format!("Opname spesial merek \"{}\"", input.brand));
+    let zero_note = format!(
+        "Opname spesial merek \"{}\" — tidak dihitung, stok dinolkan",
+        input.brand
+    );
+
+    let db_tx = conn.transaction()?;
+
+    let mut counted_ids: Vec<String> = Vec::with_capacity(input.items.len());
+    for it in &input.items {
+        let qty = it.qty.abs();
+        let stock_after = set_stock(&db_tx, &it.product_id, qty)?;
+        db_tx.execute(
+            "INSERT INTO stock_movements
+                (product_id, kind, qty, stock_after, note, user_id, created_at)
+             VALUES (?1,'opname',?2,?3,?4,?5,?6)",
+            params![it.product_id, qty, stock_after, counted_note, input.user_id, now],
+        )?;
+        counted_ids.push(it.product_id.clone());
+    }
+
+    // Sisa barang merek ini yang stoknya masih ada (bukan 0) → dinolkan.
+    let leftovers: Vec<String> = {
+        let mut stmt = db_tx.prepare(
+            "SELECT p.id FROM products p JOIN stock s ON s.product_id = p.id
+             WHERE p.is_deleted = 0 AND p.brand = ?1 AND s.qty <> 0",
+        )?;
+        let ids = stmt
+            .query_map(params![input.brand], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        ids
+    };
+
+    let mut zeroed = 0i64;
+    for pid in leftovers {
+        if counted_ids.iter().any(|c| c == &pid) {
+            continue;
+        }
+        set_stock(&db_tx, &pid, 0.0)?;
+        db_tx.execute(
+            "INSERT INTO stock_movements
+                (product_id, kind, qty, stock_after, note, user_id, created_at)
+             VALUES (?1,'opname',0,0,?2,?3,?4)",
+            params![pid, zero_note, input.user_id, now],
+        )?;
+        zeroed += 1;
+    }
+    db_tx.commit()?;
+
+    Ok(crate::models::OpnameSpecialResult {
+        brand: input.brand,
+        counted: counted_ids.len() as i64,
+        zeroed,
+        created_at: now,
+    })
+}
+
 fn stock_movement_batch_where(
     kind: &Option<String>,
     from: &Option<String>,
@@ -2553,4 +2631,106 @@ pub fn stock_flow_detail(
         opening,
         rows,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{OpnameSpecialInput, OpnameSpecialItemInput};
+
+    fn test_db() -> Connection {
+        let conn = Connection::open_in_memory().expect("buka db memori");
+        init_schema(&conn).expect("skema");
+        conn
+    }
+
+    fn produk(conn: &Connection, name: &str, brand: &str, stok: f64, aktif: bool) -> String {
+        let p = upsert_product(
+            conn,
+            ProductInput {
+                id: None,
+                name: name.into(),
+                barcode: None,
+                category: None,
+                brand: Some(brand.into()),
+                unit: None,
+                sell_price: 0.0,
+                cost_price: 0.0,
+                default_discount: 0.0,
+                is_active: aktif,
+            },
+        )
+        .expect("simpan produk");
+        set_stock(conn, &p.id, stok).expect("set stok awal");
+        p.id
+    }
+
+    fn stok(conn: &Connection, id: &str) -> f64 {
+        conn.query_row("SELECT COALESCE(qty,0) FROM stock WHERE product_id = ?1", params![id], |r| {
+            r.get(0)
+        })
+        .unwrap_or(0.0)
+    }
+
+    fn jumlah_riwayat(conn: &Connection, id: &str) -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM stock_movements WHERE product_id = ?1 AND kind = 'opname'",
+            params![id],
+            |r| r.get(0),
+        )
+        .expect("hitung riwayat")
+    }
+
+    #[test]
+    fn opname_spesial_menolkan_yang_tidak_dihitung_dan_tidak_menyentuh_merek_lain() {
+        let mut conn = test_db();
+        let dihitung = produk(&conn, "Kopi A", "MEREK-X", 10.0, true);
+        let tidak_dihitung = produk(&conn, "Kopi B", "MEREK-X", 7.0, true);
+        let nonaktif = produk(&conn, "Kopi C (nonaktif)", "MEREK-X", 3.0, false);
+        let sudah_nol = produk(&conn, "Kopi D", "MEREK-X", 0.0, true);
+        let merek_lain = produk(&conn, "Teh A", "MEREK-Y", 5.0, true);
+
+        let res = create_opname_special(
+            &mut conn,
+            OpnameSpecialInput {
+                brand: "MEREK-X".into(),
+                note: None,
+                user_id: Some("kasir1".into()),
+                items: vec![OpnameSpecialItemInput { product_id: dihitung.clone(), qty: 4.0 }],
+                created_at: None,
+            },
+        )
+        .expect("opname spesial");
+
+        assert_eq!(res.counted, 1);
+        // Barang non-aktif ikut dinolkan; yang stoknya sudah 0 tidak dihitung ulang.
+        assert_eq!(res.zeroed, 2);
+
+        assert_eq!(stok(&conn, &dihitung), 4.0, "yang dihitung ikut hasil fisik");
+        assert_eq!(stok(&conn, &tidak_dihitung), 0.0);
+        assert_eq!(stok(&conn, &nonaktif), 0.0, "barang non-aktif ikut dinolkan");
+        assert_eq!(stok(&conn, &sudah_nol), 0.0);
+        assert_eq!(stok(&conn, &merek_lain), 5.0, "merek lain tidak boleh tersentuh");
+
+        assert_eq!(jumlah_riwayat(&conn, &dihitung), 1);
+        assert_eq!(jumlah_riwayat(&conn, &tidak_dihitung), 1);
+        assert_eq!(jumlah_riwayat(&conn, &sudah_nol), 0, "stok sudah 0 tidak bikin baris riwayat");
+        assert_eq!(jumlah_riwayat(&conn, &merek_lain), 0);
+    }
+
+    #[test]
+    fn opname_spesial_tanpa_merek_ditolak() {
+        let mut conn = test_db();
+        let hasil = create_opname_special(
+            &mut conn,
+            OpnameSpecialInput {
+                brand: "  ".into(),
+                note: None,
+                user_id: None,
+                items: vec![],
+                created_at: None,
+            },
+        );
+        assert!(hasil.is_err(), "merek kosong harus ditolak, bukan menolkan seluruh toko");
+    }
 }

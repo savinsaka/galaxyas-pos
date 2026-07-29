@@ -12,8 +12,8 @@
   import { activeTabId } from "$lib/stores/tabs";
   import { setTabDirty, clearTabDirty } from "$lib/stores/tabGuard";
   import { activeShiftStore } from "$lib/stores/shift";
-  import { parseReceiptConfig, type ReceiptConfig } from "$lib/receipt";
-  import { buildReceiptEscPos } from "$lib/escpos";
+  import { parseReceiptConfig, saleNeedsDrawer, type ReceiptConfig } from "$lib/receipt";
+  import { buildDrawerKick, buildReceiptEscPos, withDrawerKick } from "$lib/escpos";
   import { formatMoneyInput, onMoneyInput } from "$lib/moneyInput";
   import ShortcutBar from "$lib/components/ShortcutBar.svelte";
   import type { Customer, DiscountPeriod, PaymentMethod, ProductWithStock, SaleInput, Shift, TransactionDetail } from "$lib/types";
@@ -557,12 +557,32 @@
   async function doPrintReceipt() {
     if (!lastReceipt || !receiptCfg) return;
     try {
-      await api.printEscposTo(receiptCfg.printer, buildReceiptEscPos(lastReceipt, receiptCfg));
+      // Perintah buka laci disatukan ke job cetak yang sama (bukan kirim
+      // terpisah) supaya laci membuka begitu struk selesai keluar.
+      const bytes = buildReceiptEscPos(lastReceipt, receiptCfg);
+      await api.printEscposTo(
+        receiptCfg.printer,
+        saleNeedsDrawer(lastReceipt) ? withDrawerKick(bytes, receiptCfg.cashDrawer) : bytes,
+      );
       showToast("Struk dikirim ke printer.", "success");
     } catch (e) {
       toastError(e);
     } finally {
       showPrintConfirm = false;
+    }
+  }
+
+  /** Buka laci tanpa transaksi (tukar uang, ambil kembalian) — F8. */
+  async function openDrawer() {
+    if (!receiptCfg) return;
+    if (receiptCfg.cashDrawer === "off") {
+      return showToast("Laci kasir dimatikan di Pengaturan → Struk & Printer.", "info");
+    }
+    try {
+      await api.printEscposTo(receiptCfg.printer, buildDrawerKick(receiptCfg.cashDrawer));
+      showToast("Laci kasir dibuka.", "success");
+    } catch (e) {
+      toastError(e);
     }
   }
 
@@ -595,6 +615,9 @@
     } else if (e.key === "F7") {
       e.preventDefault();
       if (cart.length > 0) clearCart();
+    } else if (e.key === "F8") {
+      e.preventDefault();
+      openDrawer();
     } else if (e.key === "F9") {
       e.preventDefault();
       if (!busy) doCheckout();
@@ -823,6 +846,7 @@
   { key: "F5", label: "Cari Barang", action: () => openSearchPopup(search.trim()) },
   { key: "F6", label: "Pending", action: holdCurrentCart, disabled: cart.length === 0 },
   { key: "F7", label: "Kosongkan", action: clearCart, disabled: cart.length === 0 },
+  { key: "F8", label: "Buka Laci", action: openDrawer, disabled: receiptCfg?.cashDrawer === "off" },
   { key: "F9", label: "Bayar & Simpan", action: doCheckout, disabled: busy || cart.length === 0 },
   { key: "F10", label: "Uang Pas", action: () => (paid = total) },
   { key: "F11", label: "50rb", action: () => (paid = 50000) },

@@ -276,6 +276,37 @@ pub struct StockMovementBatchDetail {
     pub items: Vec<StockMovementBatchItem>,
 }
 
+// ---------- Opname Spesial (satu merek disisir habis) ----------
+
+/// Satu barang yang benar-benar dihitung fisiknya saat Opname Spesial.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpnameSpecialItemInput {
+    pub product_id: String,
+    /// Hasil hitung fisik (stok absolut, bukan selisih).
+    pub qty: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpnameSpecialInput {
+    pub brand: String,
+    pub note: Option<String>,
+    pub user_id: Option<String>,
+    pub items: Vec<OpnameSpecialItemInput>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+}
+
+/// Ringkasan hasil Opname Spesial untuk ditampilkan ke kasir.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpnameSpecialResult {
+    pub brand: String,
+    /// Jumlah barang yang dihitung (ada di tabel opname).
+    pub counted: i64,
+    /// Jumlah barang merek ini yang stoknya dinolkan karena tidak dihitung.
+    pub zeroed: i64,
+    pub created_at: String,
+}
+
 // ---------- Diskon periodik ----------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

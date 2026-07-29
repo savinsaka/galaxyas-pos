@@ -17,6 +17,9 @@ export interface ReceiptShowFlags {
   footer: boolean;
 }
 
+/** Pin konektor laci kasir di printer: "off" = fitur laci dimatikan. */
+export type CashDrawerPin = "off" | "pin2" | "pin5" | "both";
+
 export interface ReceiptConfig {
   storeName: string;
   address: string;
@@ -32,6 +35,7 @@ export interface ReceiptConfig {
   lineHeight: number;
   margin: number;
   printer: string | null;
+  cashDrawer: CashDrawerPin;
   show: ReceiptShowFlags;
 }
 
@@ -61,6 +65,25 @@ function boolSetting(s: Record<string, string>, key: string, def = true): boolea
   return v !== "0";
 }
 
+function parseCashDrawer(v: string | undefined): CashDrawerPin {
+  return v === "off" || v === "pin5" || v === "both" ? v : "pin2";
+}
+
+/**
+ * Laci kasir hanya dibuka kalau transaksinya melibatkan uang tunai — QRIS/Kartu
+ * murni tidak perlu buka laci (tidak ada uang masuk maupun kembalian).
+ * Kombinasi dihitung tunai bila porsi tunainya di atas 0.
+ */
+export function saleNeedsDrawer(t: {
+  payment_method: string;
+  paid_cash?: number | null;
+}): boolean {
+  const m = (t.payment_method || "").toLowerCase();
+  if (m === "tunai") return true;
+  if (m === "kombinasi") return (t.paid_cash ?? 0) > 0;
+  return false;
+}
+
 export function parseReceiptConfig(s: Record<string, string>): ReceiptConfig {
   const show = {} as ReceiptShowFlags;
   for (const { key, setting } of RECEIPT_SHOW_KEYS) show[key] = boolSetting(s, setting, true);
@@ -83,6 +106,9 @@ export function parseReceiptConfig(s: Record<string, string>): ReceiptConfig {
     lineHeight: Number(s.receipt_line_height) || 1.35,
     margin: Number(s.receipt_margin) || 3,
     printer: s.receipt_printer || null,
+    // Default pin 2: wiring paling umum di laci kasir. Kalau printernya tidak
+    // punya laci, pulsa ini tidak berefek apa-apa.
+    cashDrawer: parseCashDrawer(s.receipt_cash_drawer),
     show,
   };
 }

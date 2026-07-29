@@ -222,6 +222,30 @@ data class StockMovementInput(
     val created_at: String? = null,
 )
 
+/** Opname Spesial: barang yang benar-benar dihitung (qty = stok fisik absolut). */
+@Serializable
+data class OpnameSpecialItemInput(
+    val product_id: String,
+    val qty: Double,
+)
+
+@Serializable
+data class OpnameSpecialInput(
+    val brand: String,
+    val note: String? = null,
+    val user_id: String? = null,
+    val items: List<OpnameSpecialItemInput>,
+    val created_at: String? = null,
+)
+
+@Serializable
+data class OpnameSpecialResult(
+    val brand: String,
+    val counted: Long,
+    val zeroed: Long,
+    val created_at: String,
+)
+
 @Serializable
 data class StockMovementBatchItemInput(
     val product_id: String,
