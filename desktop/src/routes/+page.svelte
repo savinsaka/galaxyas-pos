@@ -4,7 +4,7 @@
   import { api } from "$lib/api";
   import { currentUser } from "$lib/stores/auth";
   import { currentStore, allStores } from "$lib/stores/activeStore";
-  import { currentServer, allServers } from "$lib/stores/activeServer";
+  import { currentServer, currentPath, allServers } from "$lib/stores/activeServer";
   import { logout } from "$lib/stores/auth";
   import { closeAllTabs, closeTab, activeTabId } from "$lib/stores/tabs";
   import { loadAndApplyTheme } from "$lib/theme";
@@ -36,8 +36,9 @@
     try {
       const [servers, active] = await Promise.all([api.listServers(), api.currentServer()]);
       allServers.set(servers);
-      currentServer.set(active);
-      if (active.kind === "remote") {
+      currentServer.set(active.server);
+      currentPath.set(active.path);
+      if (active.server.kind === "remote") {
         // Server Pusat: lewati pemilihan toko lokal, langsung ke Login yang
         // login ke Server Pusat lewat proxy command.
         currentStore.set(null);
@@ -70,11 +71,11 @@
   onMount(() => window.addEventListener("keydown", onEscapeCloseTab));
   onDestroy(() => window.removeEventListener("keydown", onEscapeCloseTab));
 
-  function onServerChosen(info: import("$lib/types").ServerInfo) {
+  function onServerChosen(active: import("$lib/types").ActiveServer) {
     closeAllTabs();
     logout();
     showServerPicker = false;
-    if (info.kind === "local") {
+    if (active.server.kind === "local") {
       showPicker = false;
       loadLocalStores();
     } else {

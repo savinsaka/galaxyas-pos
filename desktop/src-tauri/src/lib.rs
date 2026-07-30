@@ -91,17 +91,10 @@ pub fn run() {
 
             // Bila server aktif tersimpan di registry adalah "remote", set
             // AppState.remote supaya command yang di-proxy langsung memanggil
-            // host tsb. Registry yang belum ada/rusak dianggap mode lokal.
-            if let Ok(active_server) = servers::current_server(&data_dir) {
-                if active_server.is_remote() {
-                    let remote_cfg = lan::RemoteConfig {
-                        base_url: format!(
-                            "http://{}:{}",
-                            active_server.host.clone().unwrap_or_default(),
-                            active_server.port.unwrap_or(8899)
-                        ),
-                        token: active_server.token.clone().unwrap_or_default(),
-                    };
+            // host tsb — lewat jalur (wifi/internet) yang tersimpan juga.
+            // Registry yang belum ada/rusak dianggap mode lokal.
+            if let Ok(active) = servers::current_active(&data_dir) {
+                if let Some(remote_cfg) = active.server.remote_config(active.path) {
                     let state = app.state::<AppState>();
                     let lock_result = state.remote.lock();
                     if let Ok(mut remote) = lock_result {
@@ -237,6 +230,8 @@ pub fn run() {
             commands::set_lan_server_enabled,
             commands::regenerate_lan_token,
             commands::pairing_qr,
+            commands::client_setup_code,
+            commands::decode_setup_code,
             commands::list_mobile_devices,
             commands::revoke_mobile_device,
             commands::relay_status,

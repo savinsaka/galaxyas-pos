@@ -3,7 +3,7 @@
   import { setUser } from "$lib/stores/auth";
   import { showToast, toastError } from "$lib/toast";
   import { currentStore } from "$lib/stores/activeStore";
-  import { currentServer } from "$lib/stores/activeServer";
+  import { currentServer, currentPath, pathIcon, pathLabel } from "$lib/stores/activeServer";
 
   let { onChangeStore, onChangeServer }: { onChangeStore?: () => void; onChangeServer?: () => void } = $props();
 
@@ -36,7 +36,11 @@
     <div class="login-sub">
       Masuk untuk melanjutkan
       {#if $currentServer?.kind === "remote"}
-        <span class="text-dim"> · 🖧 {$currentServer.name}</span>
+        <!-- Jalur ikut ditulis: kasir harus tahu sedang lewat internet (kuota,
+             lebih lambat) atau wifi toko, tiap kali masuk. -->
+        <span class="text-dim">
+          · {pathIcon($currentPath)} {$currentServer.name} · {pathLabel($currentPath)}
+        </span>
       {:else if $currentStore}
         <span class="text-dim"> · {$currentStore.name}</span>
       {/if}

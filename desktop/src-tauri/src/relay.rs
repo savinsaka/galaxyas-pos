@@ -476,10 +476,12 @@ mod tests {
     }
 
     /// Rangkaian penuh MELALUI relay sungguhan: agent di file ini menyambung ke
-    /// relay yang benar-benar berjalan, lalu klien HTTP berperan sebagai HP.
+    /// relay yang benar-benar berjalan, lalu **kode klien PC kasir yang
+    /// sesungguhnya** (`lan::health_check`, `lan::pair_client`, `lan::call`
+    /// dengan jalur online) berperan sebagai kasir dari luar toko.
     /// Ini yang membuktikan hal-hal yang tidak bisa diuji per bagian: handshake
-    /// WebSocket, header auth agent, envelope bolak-balik, dan janji "tanpa
-    /// antrian" saat agent dimatikan.
+    /// WebSocket, header auth agent, envelope bolak-balik, penyusunan base URL
+    /// `/s/<store_id>`, dan janji "tanpa antrian" saat agent dimatikan.
     ///
     /// Butuh relay hidup, jadi `#[ignore]` — jalankan lewat
     /// `relay/scripts/e2e_desktop.py` yang menyalakan relay lalu memanggil:
@@ -547,71 +549,107 @@ mod tests {
             }
             assert!(connected, "agent tidak tersambung: {:?}", status.lock().unwrap().last_error);
 
-            let client = reqwest::Client::builder()
-                .timeout(Duration::from_secs(30))
-                .build()
-                .expect("http client");
-            let url = |path: &str| format!("{http_base}/s/{store_id}{path}");
+            // Base URL disusun oleh registry, sama seperti di app sungguhan —
+            // jadi salah bentuk `/s/<store_id>` ketahuan di sini.
+            let entry = crate::servers::ServerInfo::new_remote(
+                "Kasir Pusat".into(),
+                None,
+                None,
+                Some(http_base.clone()),
+                Some(store_id.clone()),
+                String::new(),
+            );
+            let base = entry
+                .base_url(crate::servers::ServerPath::Online)
+                .expect("base url online");
+            assert_eq!(base, format!("{http_base}/s/{store_id}"));
 
             // 1. Relay tahu PC kasir online.
-            let resp = client.get(url("/health")).send().await.expect("health");
-            assert_eq!(resp.status().as_u16(), 200, "relay harus melihat agent online");
+            crate::lan::health_check(&base, "", true)
+                .await
+                .expect("relay harus melihat agent online");
 
             // 2. Pairing lewat relay menghasilkan token panjang.
-            let body: serde_json::Value = client
-                .post(url("/pair"))
-                .json(&serde_json::json!({"code":"TEST01","device_name":"HP Uji"}))
-                .send()
+            let paired = crate::lan::pair_client(&base, "TEST01", "PC Uji", true)
                 .await
-                .expect("pair")
-                .json()
-                .await
-                .expect("pair json");
-            let token = body["device_token"].as_str().expect("device_token").to_string();
-            assert_eq!(token.len(), 64);
+                .expect("pair");
+            assert_eq!(paired.device_token.len(), 64);
+
+            let remote = crate::lan::RemoteConfig {
+                base_url: base.clone(),
+                token: paired.device_token.clone(),
+                online: true,
+            };
 
             // 3. RPC baca menembus sampai SQLite.
-            let body: serde_json::Value = client
-                .post(url("/rpc/list_products"))
-                .header("X-Galaxyas-Token", &token)
-                .json(&serde_json::json!({}))
-                .send()
-                .await
-                .expect("list_products")
-                .json()
-                .await
-                .expect("json");
-            assert_eq!(body[0]["name"], "Aqua 600ml");
-            assert_eq!(body[0]["stock_qty"], 10.0);
+            let products: Vec<crate::models::ProductWithStock> =
+                crate::lan::call(&remote, "list_products", serde_json::json!({}))
+                    .await
+                    .expect("list_products");
+            assert_eq!(products[0].product.name, "Aqua 600ml");
+            assert_eq!(products[0].stock_qty, 10.0);
 
             // 4. RPC tulis benar-benar mengubah database, bukan cuma membalas OK.
-            let resp = client
-                .post(url("/rpc/adjust_stock"))
-                .header("X-Galaxyas-Token", &token)
-                .json(&serde_json::json!({"product_id": product.id, "delta": -3.0}))
-                .send()
-                .await
-                .expect("adjust_stock");
-            assert_eq!(resp.status().as_u16(), 200);
-            assert_eq!(resp.json::<serde_json::Value>().await.unwrap(), 7.0);
+            let sisa: f64 = crate::lan::call(
+                &remote,
+                "adjust_stock",
+                serde_json::json!({"product_id": product.id, "delta": -3.0}),
+            )
+            .await
+            .expect("adjust_stock");
+            assert_eq!(sisa, 7.0);
             assert_eq!(stok_sekarang(), 7.0, "perubahan harus benar-benar tersimpan");
 
-            // 5. Token asing ditolak.
-            let resp = client
-                .post(url("/rpc/list_products"))
-                .header("X-Galaxyas-Token", "x".repeat(64))
-                .json(&serde_json::json!({}))
-                .send()
+            // 5. Checkout yang dikirim DUA KALI dengan kunci idempoten yang sama
+            //    (skenario: jawaban pertama hilang di jaringan lalu kasir menekan
+            //    Bayar lagi) hanya boleh tercatat sekali.
+            let sale = serde_json::json!({"sale": {
+                "cashier_id": "admin",
+                "payment_method": "Tunai",
+                "paid": 4000.0,
+                "items": [{
+                    "product_id": product.id,
+                    "name": "Aqua 600ml",
+                    "price": 4000.0,
+                    "qty": 1.0,
+                    "discount": 0.0
+                }],
+                "client_ref": "e2e-ref-1"
+            }});
+            let pertama: serde_json::Value = crate::lan::call(&remote, "checkout", sale.clone())
                 .await
-                .expect("token palsu");
-            assert_eq!(resp.status().as_u16(), 401);
+                .expect("checkout pertama");
+            assert_eq!(stok_sekarang(), 6.0, "penjualan pertama harus mengurangi stok");
 
-            // 6. Agent dimatikan (= PC kasir mati): 503 SEKETIKA, tanpa antrian.
+            let ulang: serde_json::Value = crate::lan::call(&remote, "checkout", sale)
+                .await
+                .expect("checkout ulang");
+            assert_eq!(
+                ulang["invoice_no"], pertama["invoice_no"],
+                "percobaan ulang harus mengembalikan transaksi yang sama"
+            );
+            assert_eq!(stok_sekarang(), 6.0, "stok TIDAK boleh berkurang dua kali");
+
+            // 6. Token asing ditolak.
+            let palsu = crate::lan::RemoteConfig {
+                base_url: base.clone(),
+                token: "x".repeat(64),
+                online: true,
+            };
+            let err = crate::lan::call::<_, serde_json::Value>(
+                &palsu,
+                "list_products",
+                serde_json::json!({}),
+            )
+            .await
+            .expect_err("token palsu harus ditolak");
+            assert!(err.to_string().contains("unauthorized"), "dapat: {err}");
+
+            // 7. Agent dimatikan (= PC kasir mati): gagal SEKETIKA, tanpa antrian.
             handle.stop();
             let mut offline = false;
             for _ in 0..100 {
-                let resp = client.get(url("/health")).send().await.expect("health");
-                if resp.status().as_u16() == 503 {
+                if crate::lan::health_check(&base, "", true).await.is_err() {
                     offline = true;
                     break;
                 }
@@ -620,21 +658,23 @@ mod tests {
             assert!(offline, "relay harus tahu agent sudah putus");
 
             let mulai = std::time::Instant::now();
-            let resp = client
-                .post(url("/rpc/checkout"))
-                .header("X-Galaxyas-Token", &token)
-                .json(&serde_json::json!({"sale": {}}))
-                .send()
-                .await
-                .expect("checkout saat mati");
+            let err = crate::lan::call::<_, serde_json::Value>(
+                &remote,
+                "checkout",
+                serde_json::json!({"sale": {}}),
+            )
+            .await
+            .expect_err("checkout saat PC pusat mati harus gagal");
             let lama = mulai.elapsed();
-            assert_eq!(resp.status().as_u16(), 503);
             assert!(lama < Duration::from_secs(2), "harus gagal cepat, bukan menggantung: {lama:?}");
+            // Alasan dari relay harus sampai ke kasir apa adanya, bukan tertutup
+            // pesan generik "tidak dapat terhubung".
+            assert!(err.to_string().contains("PC kasir"), "pesan relay hilang: {err}");
 
-            // 7. Stok TIDAK berubah lagi — tidak ada permintaan tertahan yang
+            // 8. Stok TIDAK berubah lagi — tidak ada permintaan tertahan yang
             //    menyusul dieksekusi. Inilah janji "tanpa antrian".
             tokio::time::sleep(Duration::from_secs(2)).await;
-            assert_eq!(stok_sekarang(), 7.0, "tidak boleh ada permintaan yang menyusul jalan");
+            assert_eq!(stok_sekarang(), 6.0, "tidak boleh ada permintaan yang menyusul jalan");
         });
     }
 }

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  ActiveServer,
   Brand,
   BrandInput,
   BrandSalesRow,
@@ -17,6 +18,7 @@ import type {
   OpenShiftInput,
   OpnameSpecialInput,
   OpnameSpecialResult,
+  PairingPayload,
   PairingQr,
   Product,
   ProductInput,
@@ -28,6 +30,9 @@ import type {
   SaleInput,
   SalesItemDetailRow,
   ServerInfo,
+  ServerInput,
+  ServerPath,
+  SetupCode,
   Shift,
   StockMovement,
   StockMovementInput,
@@ -218,22 +223,23 @@ export const api = {
     invoke<StockMovementBatchDetail>("bridge_confirm_pull", { items, userId }),
   bridgeRejectPull: (rowId: string) => invoke<void>("bridge_reject_pull", { rowId }),
 
-  // Server Pusat (multi-kasir LAN)
+  // Server Pusat (multi-kasir lewat wifi ATAU internet)
   listServers: () => invoke<ServerInfo[]>("list_servers"),
-  currentServer: () => invoke<ServerInfo>("current_server"),
-  pingServer: (host: string, port: number, token: string) =>
-    invoke<string>("ping_server", { host, port, token }),
-  addServer: (name: string, host: string, port: number, token: string) =>
-    invoke<ServerInfo>("add_server", { name, host, port, token }),
-  selectServer: (id: string) => invoke<ServerInfo>("select_server", { id }),
+  currentServer: () => invoke<ActiveServer>("current_server"),
+  pingServer: (input: ServerInput) => invoke<string>("ping_server", { input }),
+  addServer: (input: ServerInput) => invoke<ServerInfo>("add_server", { input }),
+  selectServer: (id: string, path?: ServerPath) =>
+    invoke<ActiveServer>("select_server", { id, path: path ?? null }),
   removeServer: (id: string) => invoke<void>("remove_server", { id }),
   lanServerStatus: () => invoke<LanServerStatus>("lan_server_status"),
   setLanServerEnabled: (enabled: boolean) =>
     invoke<LanServerStatus>("set_lan_server_enabled", { enabled }),
   regenerateLanToken: () => invoke<LanServerStatus>("regenerate_lan_token"),
 
-  // Akses Online (relay) + HP yang terdaftar.
+  // Akses Online (relay) + perangkat yang terdaftar.
   pairingQr: () => invoke<PairingQr>("pairing_qr"),
+  clientSetupCode: () => invoke<SetupCode>("client_setup_code"),
+  decodeSetupCode: (code: string) => invoke<PairingPayload>("decode_setup_code", { code }),
   listMobileDevices: () => invoke<MobileDevice[]>("list_mobile_devices"),
   revokeMobileDevice: (id: string) => invoke<void>("revoke_mobile_device", { id }),
   relayStatus: () => invoke<RelayStatus>("relay_status"),

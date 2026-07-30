@@ -6,9 +6,11 @@
   import { buildDrawerKick, buildReceiptEscPos } from "$lib/escpos";
   import { THEMES, saveTheme } from "$lib/theme";
   import type {
-    LanServerStatus, MobileDevice, PairingQr, RelayStatus, TransactionDetail,
+    LanServerStatus, MobileDevice, PairingQr, RelayStatus, SetupCode, TransactionDetail,
   } from "$lib/types";
-  import { currentServer, isRemoteClient } from "$lib/stores/activeServer";
+  import {
+    currentServer, currentPath, isRemoteClient, pathIcon, pathLabel,
+  } from "$lib/stores/activeServer";
   import Receipt from "$lib/components/Receipt.svelte";
 
   type PTab = "toko" | "server" | "lan" | "struk" | "tema" | "kasir" | "lanjutan";
@@ -36,6 +38,9 @@
   let relayTimer: ReturnType<typeof setInterval> | null = null;
   let qr = $state<PairingQr | null>(null);
   let qrBusy = $state(false);
+  // Kode Setup untuk PC kasir klien (PC tidak punya kamera untuk scan QR).
+  let setup = $state<SetupCode | null>(null);
+  let setupBusy = $state(false);
 
   let settings = $state<Record<string, string>>({});
   let printers = $state<string[]>([]);
@@ -115,7 +120,9 @@
     lanBusy = true;
     try {
       lanStatus = await api.regenerateLanToken();
-      qr = null; // QR lama memuat kode yang sudah mati
+      // QR & Kode Setup lama memuat kode yang sudah mati.
+      qr = null;
+      setup = null;
       showToast("Kode pairing baru dibuat.", "success");
     } catch (e) {
       toastError(e);
@@ -137,6 +144,29 @@
     }
   }
 
+  /// Kode Setup memuat kode pairing, jadi hanya dibuat saat diminta — sama
+  /// alasannya dengan QR: layar kasir dilihat banyak orang.
+  async function showSetupCode() {
+    setupBusy = true;
+    try {
+      setup = await api.clientSetupCode();
+    } catch (e) {
+      toastError(e);
+    } finally {
+      setupBusy = false;
+    }
+  }
+
+  async function copySetupCode() {
+    if (!setup) return;
+    try {
+      await navigator.clipboard.writeText(setup.code);
+      showToast("Kode Setup disalin — tempel di PC kasir klien.", "success");
+    } catch {
+      showToast("Gagal menyalin otomatis — pilih teksnya lalu Ctrl+C.", "error");
+    }
+  }
+
   async function loadRelay() {
     if ($isRemoteClient) return;
     try {
@@ -154,6 +184,8 @@
     try {
       relay = await api.saveRelaySettings({ ...relayForm });
       relayForm.agent_key = ""; // tidak ditampilkan lagi setelah tersimpan
+      qr = null; // alamat relay berubah = QR & Kode Setup lama menyesatkan
+      setup = null;
       showToast("Pengaturan Akses Online disimpan.", "success");
     } catch (e) {
       toastError(e);
@@ -166,7 +198,9 @@
     relayBusy = true;
     try {
       relay = await api.setRelayEnabled(!relay?.enabled);
-      qr = null; // isi QR ikut berubah (alamat relay masuk/hilang)
+      // Isi QR & Kode Setup ikut berubah (alamat relay masuk/hilang).
+      qr = null;
+      setup = null;
       showToast(
         relay.enabled ? "Akses Online dinyalakan." : "Akses Online dimatikan.",
         "success",
@@ -180,7 +214,11 @@
   }
 
   async function revokeDevice(d: MobileDevice) {
-    if (!confirm(`Cabut akses "${d.name}"? HP itu harus pairing ulang untuk bisa dipakai lagi.`))
+    if (
+      !confirm(
+        `Cabut akses "${d.name}"? Perangkat itu harus pairing ulang untuk bisa dipakai lagi.`,
+      )
+    )
       return;
     try {
       await api.revokeMobileDevice(d.id);
@@ -447,10 +485,27 @@
       <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
         PC ini terhubung sebagai kasir client ke Server Pusat berikut. Semua data
         (barang, stok, transaksi, akun) dibagikan langsung dari PC tersebut.
+        {#if $currentPath === "online"}
+          Jalur internet menembus relay — sedikit lebih lambat dari wifi dan memakai
+          kuota. Ganti jalur lewat "Ganti Server" di layar masuk.
+        {/if}
       </p>
       <div class="row" style="gap:1.5rem; margin:0.8rem 0;">
         <div><div class="text-dim">Nama</div><strong>{$currentServer?.name}</strong></div>
-        <div><div class="text-dim">Alamat</div><strong class="mono">{$currentServer?.host}:{$currentServer?.port}</strong></div>
+        <div>
+          <div class="text-dim">Jalur</div>
+          <strong>{pathIcon($currentPath)} {pathLabel($currentPath)}</strong>
+        </div>
+        <div>
+          <div class="text-dim">Alamat</div>
+          <strong class="mono">
+            {#if $currentPath === "online"}
+              {$currentServer?.relay_url}
+            {:else}
+              {$currentServer?.lan_host}:{$currentServer?.lan_port ?? 8899}
+            {/if}
+          </strong>
+        </div>
       </div>
       <button class="btn-danger" disabled={lanBusy} onclick={disconnectServer}>
         Putuskan Koneksi
@@ -458,10 +513,11 @@
     {:else}
       <h2>Server Pusat</h2>
       <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
-        Jadikan PC ini "Server Pusat" supaya kasir lain di jaringan wifi yang sama bisa
-        konek dan berbagi data barang, stok, transaksi, dan akun secara langsung — tanpa
-        cloud. PC kasir lain memilih "+ Tambah Server" di layar awal, lalu masukkan IP dan
-        Kode Pairing di bawah ini.
+        Jadikan PC ini "Server Pusat" supaya kasir lain bisa konek dan berbagi data
+        barang, stok, transaksi, dan akun secara langsung — tanpa cloud. PC kasir lain
+        memilih "+ Tambah Server" di layar awal, lalu menempel Kode Setup di bawah.
+        Lewat <b>wifi</b> selalu bisa; lewat <b>internet</b> (dari luar toko) perlu
+        Akses Online di bawah dinyalakan juga.
       </p>
       <label class="row" style="gap:0.6rem; margin:0.9rem 0;">
         <input
@@ -513,6 +569,39 @@
             </button>
           {/if}
         </div>
+
+        <!-- Kode Setup: versi salin-tempel dari QR di atas, untuk PC kasir
+             klien (PC tidak punya kamera). Isinya identik. -->
+        <div class="card" style="margin-top:0.8rem;">
+          <div style="font-weight:600; margin-bottom:0.3rem;">Kode Setup PC Kasir</div>
+          <p class="text-dim" style="margin:0 0 0.6rem; font-size:0.8rem;">
+            Untuk PC kasir lain (bukan HP). Salin kode ini, kirim ke PC tersebut
+            (WhatsApp/flashdisk), lalu di sana: <em>+ Tambah Server</em> → tempel di
+            kolom <em>Kode Setup</em> → <em>Isi Otomatis</em>. Alamat wifi, alamat
+            internet, dan kode pairing terisi sendiri.
+          </p>
+          {#if setup}
+            <div class="mono setup-code">{setup.code}</div>
+            <div class="row" style="margin-top:0.5rem;">
+              <button class="btn-primary" onclick={copySetupCode}>📋 Salin</button>
+              <button onclick={() => (setup = null)}>Sembunyikan</button>
+            </div>
+            <div class="text-dim" style="font-size:0.78rem; margin-top:0.5rem;">
+              {#if setup.payload.relay}
+                Berisi jalur wifi ({setup.payload.host
+                  ? `${setup.payload.host}:${setup.payload.port}`
+                  : "IP tidak terdeteksi"}) dan internet ({setup.payload.relay}).
+              {:else}
+                Berisi jalur wifi saja — nyalakan Akses Online di bawah kalau PC kasir
+                itu mau dipakai dari luar toko, lalu buat ulang kode ini.
+              {/if}
+            </div>
+          {:else}
+            <button disabled={setupBusy} onclick={showSetupCode}>
+              {setupBusy ? "Membuat…" : "💻 Buat Kode Setup"}
+            </button>
+          {/if}
+        </div>
       {/if}
     {/if}
   </div>
@@ -520,12 +609,12 @@
   {#if !$isRemoteClient}
     <!-- Akses Online: HP kasir dari luar wifi toko, lewat relay di VPS. -->
     <div class="card" style="max-width:560px; margin-top:1rem;">
-      <h2>Akses Online (HP dari luar toko)</h2>
+      <h2>Akses Online (HP &amp; PC kasir dari luar toko)</h2>
       <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
-        Supaya app HP bisa dipakai dari mana saja, bukan cuma di wifi toko. PC ini
-        menyambung keluar ke relay, jadi tidak perlu setting router. <strong>PC ini harus
-        tetap menyala</strong> — kalau mati, HP langsung diberi tahu dan tidak ada
-        transaksi yang tertahan.
+        Supaya app HP <em>dan PC kasir klien</em> bisa dipakai dari mana saja, bukan cuma
+        di wifi toko. PC ini menyambung keluar ke relay, jadi tidak perlu setting router.
+        <strong>PC ini harus tetap menyala</strong> — kalau mati, kasir langsung diberi
+        tahu dan tidak ada transaksi yang tertahan.
       </p>
 
       <label>URL Relay</label>
@@ -569,12 +658,13 @@
     <div class="card" style="max-width:560px; margin-top:1rem;">
       <h2>Perangkat Terhubung</h2>
       <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
-        HP yang sudah pairing dengan Server Pusat ini. Tiap HP punya kunci sendiri —
-        mencabut satu HP tidak mengganggu yang lain. Ganti Kode Pairing di atas hanya
-        mencegah HP <em>baru</em> mendaftar, tidak memutus yang sudah terdaftar.
+        HP <em>dan PC kasir</em> yang sudah pairing dengan Server Pusat ini (PC muncul
+        dengan nama komputernya). Tiap perangkat punya kunci sendiri — mencabut satu
+        tidak mengganggu yang lain. Ganti Kode Pairing di atas hanya mencegah perangkat
+        <em>baru</em> mendaftar, tidak memutus yang sudah terdaftar.
       </p>
       {#if devices.length === 0}
-        <p class="text-dim" style="font-size:0.83rem;">Belum ada HP yang terdaftar.</p>
+        <p class="text-dim" style="font-size:0.83rem;">Belum ada perangkat yang terdaftar.</p>
       {:else}
         <table>
           <thead>
@@ -806,4 +896,17 @@
   }
   .scanmode-card.active { border-color: var(--primary); }
   .scanmode-name { font-size: 0.92rem; font-weight: 700; }
+
+  /* Kode Setup panjang: dibungkus supaya seluruhnya terlihat & bisa diseleksi
+     manual kalau tombol Salin gagal (clipboard diblokir). */
+  .setup-code {
+    background: var(--baby-blue-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.5rem 0.6rem;
+    font-size: 0.78rem;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+    user-select: all;
+  }
 </style>

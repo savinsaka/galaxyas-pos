@@ -66,6 +66,14 @@ pub struct SaleInput {
     pub paid_cash: Option<f64>,
     #[serde(default)]
     pub paid_qris: Option<f64>,
+    /// Kunci idempoten dari klien: **satu percobaan checkout = satu nilai**, dan
+    /// nilainya TETAP SAMA saat kasir mencoba ulang. Gunanya untuk jalur yang
+    /// jawabannya bisa hilang di tengah jalan (Server Pusat lewat wifi/internet):
+    /// kalau transaksi sudah tersimpan tapi jawaban tidak sampai ke kasir,
+    /// percobaan kedua mengembalikan transaksi yang SUDAH ada alih-alih membuat
+    /// yang kedua. Kosong (app HP / klien lama) = perilaku persis seperti dulu.
+    #[serde(default)]
+    pub client_ref: Option<String>,
 }
 
 /// Ringkasan transaksi tersimpan (untuk struk & history).

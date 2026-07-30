@@ -54,7 +54,11 @@ Ini disengaja supaya stok/opname selalu mencerminkan keadaan sekarang.
 Pesan error koneksi di `RpcClient.CONNECT_ERR_MSG` disalin VERBATIM dari lan.rs
 supaya UX konsisten dengan client desktop; mode ONLINE memakai varian
 `CONNECT_ERR_MSG_ONLINE` karena menyuruh user "periksa wifi" menyesatkan saat
-HP sedang di kuota seluler.
+HP sedang di kuota seluler. Varian ONLINE **sengaja tidak verbatim** antara HP
+dan desktop: keduanya menyebut perangkat yang sedang dipakai ("internet HP" vs
+"internet PC ini" + ingatkan Akses Online). Jalur ONLINE kini juga dipakai
+**PC kasir klien** (desktop mode Server Pusat lewat internet), dengan rute dan
+kredensial yang sama persis seperti HP.
 
 ### QR pairing
 
@@ -94,7 +98,22 @@ PC → relay : {"id":"<uuid>","status":200,"body":…}
 PC → relay : {"type":"tokens","hashes":[…]}   // penyaring token di relay
 ```
 
-## 49 command (lan.rs::dispatch @ desktop v1.3.2)
+### `SaleInput.client_ref` — kunci idempoten checkout (desktop ≥ v1.3.3)
+
+`SaleInput` punya field opsional `client_ref` (string, `#[serde(default)]`):
+**satu percobaan checkout = satu nilai, dan nilainya tetap sama saat kasir
+mencoba ulang.** Kalau `checkout` sebenarnya sudah tersimpan di PC kasir tapi
+jawabannya hilang di jaringan (paling mungkin di jalur ONLINE), percobaan kedua
+dengan `client_ref` yang sama mengembalikan **TransactionDetail yang sudah ada**
+— bukan mencatat transaksi kedua dan bukan mengurangi stok dua kali. Dijamin
+juga oleh index UNIQUE parsial `idx_tx_client_ref` di PC kasir.
+
+**App HP belum mengirimnya**, dan itu tetap sah: tanpa `client_ref` perilakunya
+persis seperti dulu (dua panggilan = dua transaksi). Kalau nanti diadopsi di
+HP, syaratnya cuma dua: bangkitkan UUID sekali per keranjang, dan **jangan**
+bangkitkan yang baru saat tombol Bayar ditekan ulang setelah gagal.
+
+## 49 command (lan.rs::dispatch @ desktop v1.3.3)
 
 | Command | Args (wire) | Hasil |
 |---|---|---|

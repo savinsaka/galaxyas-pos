@@ -19,5 +19,8 @@ export function showToast(message: string, kind: ToastKind = "info", timeout = 3
   }, timeout);
 }
 
-export const toastError = (e: unknown) =>
-  showToast(typeof e === "string" ? e : (e as Error)?.message ?? String(e), "error", 5000);
+/** Pesan yang bisa dibaca kasir dari error apa pun (string, Error, atau lainnya). */
+export const errorMessage = (e: unknown): string =>
+  typeof e === "string" ? e : (e as Error)?.message ?? String(e);
+
+export const toastError = (e: unknown) => showToast(errorMessage(e), "error", 5000);

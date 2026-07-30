@@ -2,7 +2,8 @@
   import { onMount, onDestroy, tick } from "svelte";
   import { api } from "$lib/api";
   import { formatIDR, formatQty, formatTime } from "$lib/format";
-  import { showToast, toastError } from "$lib/toast";
+  import { showToast, toastError, errorMessage } from "$lib/toast";
+  import { isRemoteClient } from "$lib/stores/activeServer";
   import { currentUser } from "$lib/stores/auth";
   import { debounce } from "$lib/debounce";
   import { createLiveClock } from "$lib/liveClock.svelte";
@@ -29,6 +30,8 @@
   interface CartLine {
     product_id: string;
     name: string;
+    /** Ditampilkan di samping nama supaya kasir bisa mencocokkan fisik barang. */
+    barcode: string | null;
     price: number;
     qty: number;
     discount: number;
@@ -36,10 +39,25 @@
     default_discount: number;
     periodic: boolean;
     manualOverride: boolean;
+    /**
+     * Persen yang diketik kasir untuk baris ini (null = diskonnya nominal).
+     * Disimpan supaya diskon persen tetap "10%" walau Jumlah/Harga diubah —
+     * `discount` sendiri selalu nominal, karena itu yang dikirim ke database.
+     */
+    manualPercent: number | null;
     stock_qty: number;
   }
 
   let discounts = $state<DiscountPeriod[]>([]);
+  /**
+   * Cara mengisi kolom Diskon: nominal rupiah atau persen dari harga baris.
+   * Satu switch untuk SELURUH keranjang (di header kolom Diskon) — pilihan
+   * pemilik toko. Yang berubah cuma cara mengetik; `discount` yang tersimpan
+   * selalu nominal, jadi database & struk tidak terpengaruh.
+   */
+  let discountMode = $state<"rp" | "percent">("rp");
+  /** Hanya admin yang boleh mengubah harga & diskon per baris. */
+  const isAdmin = $derived($currentUser?.role === "admin");
   let search = $state("");
   let scanQty = $state(1);
   // Preferensi Kasir (Pengaturan → Preferensi Kasir): "scan_first" (default,
@@ -50,6 +68,14 @@
   let searchBusy = $state(false);
   let stockAlert = $state<{ name: string; available: number } | null>(null);
   let warningModal = $state<string | null>(null);
+  /** Judul modal peringatan; null = judul default "Belum Bisa Checkout". */
+  let warningTitle = $state<string | null>(null);
+  /**
+   * Kunci idempoten untuk percobaan checkout yang sedang berjalan (lihat
+   * `SaleInput.client_ref`). Bukan `$state` karena tidak dipakai di tampilan;
+   * cukup bertahan selama keranjang ini belum selesai.
+   */
+  let checkoutRef: string | null = null;
   let showPendingList = $state(false);
 
   // Popup cari-nama: dipicu otomatis saat Enter tapi barcode tidak ditemukan.
@@ -263,6 +289,7 @@
       const line: CartLine = {
         product_id: p.id,
         name: p.name,
+        barcode: p.barcode,
         price: p.sell_price,
         qty: addQty,
         discount: 0,
@@ -270,6 +297,7 @@
         default_discount: p.default_discount,
         periodic: false,
         manualOverride: false,
+        manualPercent: null,
         stock_qty: p.stock_qty,
       };
       applyDiscount(line, addQty);
@@ -460,17 +488,63 @@
       line.qty = wanted;
     }
     if (!line.manualOverride) applyDiscount(line, line.qty);
+    // Diskon persen ikut jumlah: "10%" tetap 10% walau jumlahnya berubah.
+    else if (line.manualPercent !== null) line.discount = discountFromPercent(line, line.manualPercent);
     else line.discount = Math.min(line.discount, line.price * line.qty);
     cart = [...cart];
   }
   function setPrice(line: CartLine, price: number) {
     line.price = Math.max(0, price);
-    line.discount = Math.min(line.discount, line.price * line.qty);
+    line.discount =
+      line.manualPercent !== null
+        ? discountFromPercent(line, line.manualPercent)
+        : Math.min(line.discount, line.price * line.qty);
     line.manualOverride = true;
     cart = [...cart];
   }
-  function setDiscount(line: CartLine, discount: number) {
-    line.discount = Math.min(Math.max(0, discount), line.price * line.qty);
+
+  /**
+   * Ganti cara mengisi diskon untuk seluruh keranjang. Nominal yang sudah ada
+   * TIDAK diubah — di mode persen angkanya ditampilkan sebagai persen dari
+   * harga baris. Fokus dikembalikan ke kolom scan supaya alur keyboard tidak
+   * terputus setelah tombol ini diklik.
+   */
+  function toggleDiscountMode() {
+    discountMode = discountMode === "percent" ? "rp" : "percent";
+    scanInputEl?.focus();
+  }
+
+  const lineGross = (line: CartLine) => line.price * line.qty;
+
+  /** Nominal dari persen, dibulatkan ke rupiah terdekat (bukan pecahan sen). */
+  function discountFromPercent(line: CartLine, percent: number): number {
+    const pct = Math.min(Math.max(0, percent), 100);
+    return Math.round((lineGross(line) * pct) / 100);
+  }
+
+  /**
+   * Angka yang tampil di kolom Diskon saat mode persen: yang diketik kasir bila
+   * ada, kalau tidak diturunkan dari nominal (mis. diskon periodik/default),
+   * dibulatkan 2 desimal supaya tidak jadi 9.999999999.
+   */
+  function linePercent(line: CartLine): number {
+    if (line.manualPercent !== null) return line.manualPercent;
+    const gross = lineGross(line);
+    if (gross <= 0) return 0;
+    return Math.round((line.discount / gross) * 10000) / 100;
+  }
+
+  /** Kasir mengetik di kolom Diskon — artinya tergantung switch Rp/% di header. */
+  function setDiscount(line: CartLine, value: number) {
+    if (discountMode === "percent") {
+      const pct = Math.min(Math.max(0, value), 100);
+      line.manualPercent = pct;
+      line.discount = discountFromPercent(line, pct);
+    } else {
+      // Nominal yang diketik = angka tetap, tidak lagi mengikuti persen.
+      line.manualPercent = null;
+      line.discount = Math.min(Math.max(0, value), lineGross(line));
+    }
     line.manualOverride = true;
     line.periodic = false;
     cart = [...cart];
@@ -481,6 +555,7 @@
     paid = 0;
     paidCash = 0;
     paidQris = 0;
+    checkoutRef = null;
   }
 
   function holdCurrentCart() {
@@ -505,6 +580,7 @@
     if (!p) return;
     if (cart.length > 0 && !confirm("Keranjang saat ini belum kosong. Timpa dengan transaksi pending ini?")) return;
     cart = p.cart.map((l) => ({ ...l }));
+    checkoutRef = null; // keranjang baru = percobaan checkout baru
     selectedCustomer = p.customerId ? customers.find((c) => c.id === p.customerId) ?? null : null;
     customerSearch = "";
     paymentMethod = p.paymentMethod as PaymentMethod;
@@ -515,11 +591,27 @@
     showPendingList = false;
   }
 
+  /** Judul di-set eksplisit tiap kali, supaya judul modal sebelumnya tidak nyangkut. */
+  function showWarning(message: string, title: string | null = null) {
+    warningTitle = title;
+    warningModal = message;
+  }
+
+  function closeWarning() {
+    warningModal = null;
+    warningTitle = null;
+  }
+
   async function doCheckout() {
-    if (cart.length === 0) return (warningModal = "Keranjang kosong.");
-    if (paid < total) return (warningModal = "Pembayaran kurang dari total.");
-    if (!activeShift) return (warningModal = "Buka shift terlebih dahulu sebelum bertransaksi.");
+    if (cart.length === 0) return showWarning("Keranjang kosong.");
+    if (paid < total) return showWarning("Pembayaran kurang dari total.");
+    if (!activeShift) return showWarning("Buka shift terlebih dahulu sebelum bertransaksi.");
     busy = true;
+    // Kunci percobaan ini dibuat sekali dan dipakai lagi kalau kasir menekan
+    // Bayar ulang setelah gagal — itu yang membuat percobaan ulang aman: Server
+    // Pusat mengembalikan transaksi yang sudah tersimpan, bukan mencatat dobel.
+    // Dikosongkan lagi oleh clearCart() begitu transaksi ini benar-benar selesai.
+    checkoutRef ??= crypto.randomUUID();
     try {
       const sale: SaleInput = {
         cashier_id: $currentUser?.username ?? "admin",
@@ -535,8 +627,10 @@
         customer_id: selectedCustomer?.id ?? null,
         shift_id: activeShift.id,
         created_at: combineDateAndTime(tanggal, clock.now),
+        client_ref: checkoutRef,
         ...(paymentMethod === "Kombinasi" ? { paid_cash: paidCash, paid_qris: paidQris } : {}),
       };
+      const tersimpan = total;
       const tx = await api.checkout(sale);
       lastReceipt = tx;
       showPrintConfirm = true;
@@ -547,8 +641,31 @@
       customerSearch = "";
       tanggal = todayIso();
       paymentMethod = "Tunai";
+      // Totalnya beda = yang dibalas Server Pusat adalah transaksi dari
+      // percobaan SEBELUMNYA (ternyata sampai, cuma jawabannya hilang) yang
+      // isinya sudah tidak sama dengan keranjang tadi. Kasir harus tahu, jangan
+      // sampai dia mengira keranjang terakhir itu yang tercatat.
+      if (Math.abs(tx.total - tersimpan) > 0.5) {
+        showWarning(
+          `Percobaan sebelumnya ternyata SUDAH tersimpan sebagai ${tx.invoice_no} ` +
+            `(total ${formatIDR(tx.total)}). Supaya tidak tercatat dobel, keranjang tadi ` +
+            `tidak disimpan lagi — periksa struk ini dan sesuaikan lewat Riwayat kalau perlu.`,
+          "Transaksi Sudah Tersimpan",
+        );
+      }
     } catch (e) {
-      toastError(e);
+      // Kunci checkout SENGAJA tidak dikosongkan di sini: menekan Bayar lagi
+      // memakai kunci yang sama, jadi kalau transaksi tadi sebenarnya sudah
+      // tersimpan, percobaan kedua mengembalikannya alih-alih mencatat dobel.
+      if ($isRemoteClient) {
+        showWarning(
+          `${errorMessage(e)}\n\nTransaksi mungkin sudah tersimpan di PC pusat, mungkin juga belum. ` +
+            `Tekan "Bayar" lagi untuk memastikan — aman, tidak akan tercatat dobel.`,
+          "Jawaban Tidak Sampai",
+        );
+      } else {
+        toastError(e);
+      }
     } finally {
       busy = false;
     }
@@ -650,7 +767,7 @@
   </div>
   <div class="pos-meta">
     <span class="meta-label">Tanggal</span>
-    {#if $currentUser?.role === "admin"}
+    {#if isAdmin}
       <input class="mono tanggal-input" type="date" max={todayIso()} bind:value={tanggal} title="Admin bisa mundurkan tanggal untuk transaksi yang terlewat" />
     {:else}
       <span class="meta-val mono">{new Date(tanggal).toLocaleDateString("id-ID", { day:"2-digit", month:"short", year:"numeric" })}</span>
@@ -745,9 +862,30 @@
           <tr>
             <th style="width:2rem">No</th>
             <th>Nama Barang</th>
+            <th style="width:110px">Barcode</th>
             <th style="width:120px">Jumlah</th>
             <th style="width:90px" class="text-right">Harga</th>
-            <th style="width:90px" class="text-right">Diskon</th>
+            <th style={isAdmin ? "width:120px" : "width:90px"} class="text-right">
+              {#if isAdmin}
+                <!-- Switch berlaku untuk semua baris; yang berubah cuma cara
+                     mengetik, nominal yang sudah ada tidak ikut berubah. -->
+                <span class="disc-head">
+                  Diskon
+                  <button
+                    class="disc-toggle"
+                    class:disc-toggle-on={discountMode === "percent"}
+                    title={discountMode === "percent"
+                      ? "Sekarang isi diskon dalam persen — klik untuk ganti ke nominal Rp"
+                      : "Sekarang isi diskon dalam Rupiah — klik untuk ganti ke persen"}
+                    onclick={toggleDiscountMode}
+                  >
+                    {discountMode === "percent" ? "%" : "Rp"}
+                  </button>
+                </span>
+              {:else}
+                Diskon
+              {/if}
+            </th>
             <th style="width:90px" class="text-right">Total</th>
             <th style="width:2rem"></th>
           </tr>
@@ -766,6 +904,12 @@
                   {#if line.stock_qty < 3}<span class="stock-badge">tinggal {formatQty(line.stock_qty)}</span>{/if}
                 </div>
               </td>
+              <!-- Kolom sendiri supaya mudah dipindai mata saat mencocokkan
+                   fisik barang; barcode panjang dipotong dengan ellipsis dan
+                   nilai penuhnya tetap bisa dilihat lewat tooltip. -->
+              <td class="mono cl-barcode" title={line.barcode ?? ""}>
+                {line.barcode ?? "—"}
+              </td>
               <td>
                 <div class="cl-qty">
                   <button onclick={() => setQty(line, line.qty - 1)}>−</button>
@@ -773,7 +917,7 @@
                   <button onclick={() => setQty(line, line.qty + 1)}>+</button>
                 </div>
               </td>
-              {#if $currentUser?.role === "admin"}
+              {#if isAdmin}
                 <td>
                   <input
                     class="mono cell-num"
@@ -784,13 +928,33 @@
                   />
                 </td>
                 <td>
-                  <input
-                    class="mono cell-num"
-                    type="number"
-                    min="0"
-                    value={line.discount}
-                    oninput={(e) => setDiscount(line, +e.currentTarget.value)}
-                  />
+                  {#if discountMode === "percent"}
+                    <div class="cl-disc-pct">
+                      <input
+                        class="mono cell-num"
+                        type="number"
+                        min="0"
+                        max="100"
+                        value={linePercent(line)}
+                        oninput={(e) => setDiscount(line, +e.currentTarget.value)}
+                      />
+                      <span class="pct-sign text-dim">%</span>
+                    </div>
+                    <!-- Nominalnya tetap ditampilkan (itu yang masuk struk), tapi
+                         hanya kalau ada diskon — supaya baris tanpa diskon tidak
+                         ikut tinggi dan keranjang tetap banyak yang kelihatan. -->
+                    {#if line.discount > 0}
+                      <div class="cl-disc-hint mono text-dim">−{formatIDR(line.discount)}</div>
+                    {/if}
+                  {:else}
+                    <input
+                      class="mono cell-num"
+                      type="number"
+                      min="0"
+                      value={line.discount}
+                      oninput={(e) => setDiscount(line, +e.currentTarget.value)}
+                    />
+                  {/if}
                 </td>
               {:else}
                 <td class="text-right mono">{formatIDR(line.price)}</td>
@@ -800,7 +964,7 @@
               <td><button class="btn-ghost cl-del" onclick={() => removeLine(line.product_id)}>✕</button></td>
             </tr>
           {:else}
-            <tr><td colspan="7" class="text-dim" style="text-align:center; padding:1.5rem 0;">Belum ada item — scan barcode atau cari nama barang.</td></tr>
+            <tr><td colspan="8" class="text-dim" style="text-align:center; padding:1.5rem 0;">Belum ada item — scan barcode atau cari nama barang.</td></tr>
           {/each}
         </tbody>
       </table>
@@ -876,12 +1040,12 @@
 {/if}
 
 {#if warningModal}
-  <div class="modal-backdrop" onclick={() => (warningModal = null)} role="presentation">
+  <div class="modal-backdrop" onclick={closeWarning} role="presentation">
     <div class="modal stock-alert" onclick={(e) => e.stopPropagation()} role="presentation">
       <div class="stock-alert-icon">⚠️</div>
-      <h2>Belum Bisa Checkout</h2>
-      <p class="text-dim" style="margin:0.3rem 0 1rem;">{warningModal}</p>
-      <button class="btn-primary" style="width:100%;" onclick={() => (warningModal = null)}>Tutup</button>
+      <h2>{warningTitle ?? "Belum Bisa Checkout"}</h2>
+      <p class="text-dim" style="margin:0.3rem 0 1rem; white-space:pre-line;">{warningModal}</p>
+      <button class="btn-primary" style="width:100%;" onclick={closeWarning}>Tutup</button>
     </div>
   </div>
 {/if}
@@ -1112,6 +1276,28 @@
   .cart-table tbody tr:last-child td { border-bottom: none; }
   .cart-table tbody tr:hover { background: var(--baby-blue-soft); }
   .cl-name { display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap; font-weight:600; font-size:1.05rem; }
+  /* Kolom barcode: sengaja kecil & redup — untuk mencocokkan fisik barang,
+     bukan informasi utama. Tidak boleh membungkus supaya tinggi baris tetap. */
+  .cl-barcode {
+    font-size:0.78rem;
+    color:var(--text-dim);
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    max-width:110px;
+  }
+  .disc-head { display:inline-flex; align-items:center; gap:0.35rem; }
+  .disc-toggle {
+    padding:0.05rem 0.32rem;
+    font-size:0.7rem;
+    font-weight:700;
+    line-height:1.4;
+    min-width:1.9rem;
+  }
+  .disc-toggle-on { background:var(--primary); color:#fff; border-color:var(--primary); }
+  .cl-disc-pct { display:flex; align-items:center; gap:0.15rem; }
+  .pct-sign { font-size:0.78rem; }
+  .cl-disc-hint { font-size:0.7rem; text-align:right; margin-top:0.1rem; }
   .disc-badge { font-size:0.62rem; font-weight:700; text-transform:uppercase; letter-spacing:0.03em; padding:0.1rem 0.32rem; border-radius:999px; background:var(--primary); color:#fff; }
   .stock-badge { font-size:0.62rem; font-weight:700; text-transform:uppercase; letter-spacing:0.03em; padding:0.1rem 0.32rem; border-radius:999px; background:rgba(214, 69, 69, 0.55); color:#fff; opacity:0.85; }
   .cl-qty { display:flex; align-items:center; gap:0.2rem; }

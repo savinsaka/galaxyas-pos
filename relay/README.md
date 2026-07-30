@@ -1,12 +1,17 @@
 # GALAXYAS POS Relay
 
-Penerus permintaan dari app HP (`galaxyas-mobilepos`) ke PC kasir yang
-menjalankan GALAXYAS POS sebagai Server Pusat, supaya HP bisa dipakai dari luar
-wifi toko.
+Penerus permintaan dari **app HP** (`galaxyas-mobilepos`) **maupun PC kasir
+klien** (app desktop yang sama, mode "Server Pusat" jalur INTERNET) ke PC kasir
+yang menjalankan GALAXYAS POS sebagai Server Pusat — supaya keduanya bisa
+dipakai dari luar wifi toko.
 
 ```
-HP ──https──► relay (VPS) ──WebSocket──► PC kasir ──► SQLite
+HP / PC klien ──https──► relay (VPS) ──WebSocket──► PC pusat ──► SQLite
 ```
+
+Keduanya memakai rute, kredensial, dan bentuk error yang sama persis; dari sisi
+relay tidak ada bedanya (PC klien terdaftar sebagai satu "perangkat" seperti HP,
+dengan nama komputernya).
 
 PC kasir yang menyambung keluar ke relay, jadi tidak perlu port forwarding, IP
 publik, atau lolos CGNAT.
@@ -27,12 +32,12 @@ publik, atau lolos CGNAT.
 |---|---|---|
 | `GET /health` | monitoring | liveness relay + jumlah toko online |
 | `WS /agent/ws` | PC kasir | header `X-Store-Id` + `X-Agent-Key` |
-| `GET /s/{store_id}/health` | HP (tiap 30 dtk) | 200 = PC kasir online, 503 = mati. Dijawab relay, tidak diteruskan |
-| `POST /s/{store_id}/pair` | HP | tukar kode pairing 6 karakter jadi token perangkat |
-| `POST /s/{store_id}/rpc/{cmd}` | HP | header `X-Galaxyas-Token: <token perangkat>` |
+| `GET /s/{store_id}/health` | HP (tiap 30 dtk) / PC klien (saat pairing) | 200 = PC kasir online, 503 = mati. Dijawab relay, tidak diteruskan |
+| `POST /s/{store_id}/pair` | HP / PC klien | tukar kode pairing 6 karakter jadi token perangkat |
+| `POST /s/{store_id}/rpc/{cmd}` | HP / PC klien | header `X-Galaxyas-Token: <token perangkat>` |
 
 Balasan `4xx/5xx` selalu `{"error":"…"}` — bentuknya sama dengan Server Pusat
-LAN supaya app HP tidak perlu dua jalur penanganan error.
+LAN supaya klien (HP maupun PC) tidak perlu dua jalur penanganan error.
 
 ## Envelope WebSocket
 
@@ -67,8 +72,9 @@ relay di port sementara lalu menjalankan uji Rust `relay_e2e` di
 `desktop/src-tauri` — ini yang membuktikan handshake WebSocket, auth agent,
 envelope bolak-balik, perubahan stok benar-benar tersimpan, dan janji
 **tanpa antrian** (agent dimatikan → 503 seketika, dan tidak ada permintaan
-tertahan yang menyusul jalan). Database POS-nya di memori, tidak menyentuh data
-toko asli.
+tertahan yang menyusul jalan). Sisi kliennya dijalankan oleh kode PC kasir klien
+yang sesungguhnya (`lan::pair_client` / `lan::call` jalur online), bukan klien
+HTTP tiruan. Database POS-nya di memori, tidak menyentuh data toko asli.
 
 ## Jalankan lokal (untuk uji tanpa VPS)
 

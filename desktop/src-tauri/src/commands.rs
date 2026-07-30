@@ -1184,65 +1184,216 @@ pub async fn bridge_reject_pull(state: State<'_, AppState>, row_id: String) -> A
     Ok(())
 }
 
-// ---------- Server Pusat (LAN) ----------
+// ---------- Server Pusat (wifi & internet) ----------
+
+use crate::servers::{ServerInfo, ServerPath};
 
 /// Port tetap untuk Server Pusat (dipakai host maupun ditampilkan ke user
 /// saat pairing manual bila diperlukan).
-const LAN_SERVER_PORT: u16 = 8899;
+const LAN_SERVER_PORT: u16 = crate::servers::DEFAULT_LAN_PORT;
+
+/// Isian layar "+ Tambah Server" di PC klien. Satu entry bisa membawa kedua
+/// alamat sekaligus (wifi & internet) — mana yang dipakai ditentukan `path`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ServerInput {
+    pub name: String,
+    #[serde(default)]
+    pub lan_host: String,
+    #[serde(default)]
+    pub lan_port: Option<u16>,
+    #[serde(default)]
+    pub relay_url: String,
+    #[serde(default)]
+    pub store_id: String,
+    /// Kode pairing 6 karakter dari Pengaturan PC pusat.
+    #[serde(default)]
+    pub code: String,
+    /// "lan" | "online".
+    #[serde(default)]
+    pub path: String,
+}
+
+fn trimmed_opt(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+impl ServerInput {
+    fn path(&self) -> ServerPath {
+        ServerPath::parse(&self.path)
+    }
+
+    /// Entry calon (token menyusul dari pairing) — dipakai untuk menyusun base
+    /// URL lewat satu-satunya sumber kebenaran, `ServerInfo::base_url`.
+    fn draft(&self, device_token: String) -> ServerInfo {
+        ServerInfo::new_remote(
+            trimmed_opt(&self.name).unwrap_or_else(|| "Server Pusat".to_string()),
+            trimmed_opt(&self.lan_host),
+            Some(self.lan_port.unwrap_or(LAN_SERVER_PORT)),
+            trimmed_opt(&self.relay_url),
+            trimmed_opt(&self.store_id),
+            device_token,
+        )
+    }
+}
+
+fn path_label(path: ServerPath) -> &'static str {
+    if path.is_online() {
+        "internet"
+    } else {
+        "wifi"
+    }
+}
+
+fn missing_address_err(path: ServerPath) -> AppError {
+    AppError::Other(match path {
+        ServerPath::Lan => "IP Server Pusat wajib diisi untuk jalur wifi.".to_string(),
+        ServerPath::Online => {
+            "Alamat Relay dan Store ID wajib diisi untuk jalur internet.".to_string()
+        }
+    })
+}
+
+/// Nama PC ini, untuk daftar "Perangkat Terhubung" di PC pusat — supaya PC
+/// klien bisa dibedakan dari HP dan dicabut satu-satu.
+fn client_device_name() -> String {
+    let host = std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_default();
+    let host = host.trim().to_string();
+    if host.is_empty() {
+        "PC Kasir".to_string()
+    } else {
+        format!("PC {host}")
+    }
+}
 
 #[tauri::command]
-pub fn list_servers(state: State<'_, AppState>) -> AppResult<Vec<crate::servers::ServerInfo>> {
+pub fn list_servers(state: State<'_, AppState>) -> AppResult<Vec<ServerInfo>> {
     crate::servers::list_servers(&state.data_dir)
 }
 
 #[tauri::command]
-pub fn current_server(state: State<'_, AppState>) -> AppResult<crate::servers::ServerInfo> {
-    crate::servers::current_server(&state.data_dir)
+pub fn current_server(state: State<'_, AppState>) -> AppResult<crate::servers::ActiveServer> {
+    crate::servers::current_active(&state.data_dir)
 }
 
-/// Cek keterjangkauan + validitas kode pairing sebuah Server Pusat, dipakai
-/// layar "+ Tambah Server" sebelum menyimpan.
+/// Cek keterjangkauan Server Pusat lewat jalur terpilih, dipakai tombol
+/// "Uji Koneksi" di layar "+ Tambah Server" sebelum menyimpan apa pun.
 #[tauri::command]
-pub async fn ping_server(host: String, port: u16, token: String) -> AppResult<String> {
-    crate::lan::health_check(&host, port, &token).await
+pub async fn ping_server(input: ServerInput) -> AppResult<String> {
+    let path = input.path();
+    let base = input
+        .draft(String::new())
+        .base_url(path)
+        .ok_or_else(|| missing_address_err(path))?;
+    crate::lan::health_check(&base, input.code.trim(), path.is_online()).await
 }
 
+/// Daftarkan PC ini ke sebuah Server Pusat: tukar kode pairing 6 karakter
+/// dengan token perangkat 64-hex, lalu simpan entry berisi KEDUA alamat.
+/// Token panjang itu wajib untuk jalur internet (kode pendek ditolak di sana,
+/// lihat `lan::authenticate`) dan tetap sah di jalur wifi, jadi satu kali
+/// pendaftaran cukup untuk dua jalur.
 #[tauri::command]
 pub async fn add_server(
     state: State<'_, AppState>,
-    name: String,
-    host: String,
-    port: u16,
-    token: String,
-) -> AppResult<crate::servers::ServerInfo> {
-    // Validasi keterjangkauan + kode pairing sebelum disimpan ke registry.
-    crate::lan::health_check(&host, port, &token).await?;
-    crate::servers::add_server(&state.data_dir, name, host, port, token)
+    input: ServerInput,
+) -> AppResult<ServerInfo> {
+    let path = input.path();
+    let draft = input.draft(String::new());
+    if !draft.supports(path) {
+        return Err(missing_address_err(path));
+    }
+    if input.code.trim().is_empty() {
+        return Err(AppError::Other("Kode Pairing wajib diisi.".into()));
+    }
+
+    let device_name = client_device_name();
+    let base = draft.base_url(path).ok_or_else(|| missing_address_err(path))?;
+    let paired =
+        match crate::lan::pair_client(&base, &input.code, &device_name, path.is_online()).await {
+            Ok(result) => result,
+            Err(first) => {
+                // Alamat jalur lain ikut diisi? coba juga — kasir yang salah
+                // memilih jalur tidak perlu mengisi form dari awal.
+                let other = if path.is_online() { ServerPath::Lan } else { ServerPath::Online };
+                match draft.base_url(other) {
+                    Some(other_base) => crate::lan::pair_client(
+                        &other_base,
+                        &input.code,
+                        &device_name,
+                        other.is_online(),
+                    )
+                    .await
+                    .map_err(|second| {
+                        AppError::Other(format!(
+                            "Gagal mendaftar lewat {}: {first} Lewat {} juga gagal: {second}",
+                            path_label(path),
+                            path_label(other)
+                        ))
+                    })?,
+                    None => return Err(first),
+                }
+            }
+        };
+
+    // Nama kosong = pakai nama toko yang dikirim PC pusat saat pairing.
+    let mut info = input.draft(paired.device_token);
+    if trimmed_opt(&input.name).is_none() && !paired.store_name.trim().is_empty() {
+        info.name = paired.store_name.trim().to_string();
+    }
+    crate::servers::add_server(&state.data_dir, info)
 }
 
-/// Pindah server aktif (lokal <-> salah satu remote tersimpan). Men-set/
-/// meng-clear `AppState.remote` supaya command yang di-proxy langsung
-/// mengarah ke tempat yang benar setelahnya.
+/// Pindah server aktif (lokal <-> salah satu remote tersimpan) sekaligus jalur
+/// yang dipakai. Men-set/meng-clear `AppState.remote` supaya command yang
+/// di-proxy langsung mengarah ke tempat yang benar setelahnya.
+///
+/// `path = None` mempertahankan jalur tersimpan (dipakai tombol "Putuskan
+/// Koneksi" yang balik ke Server Lokal).
 #[tauri::command]
-pub fn select_server(state: State<'_, AppState>, id: String) -> AppResult<crate::servers::ServerInfo> {
-    let info = crate::servers::set_active(&state.data_dir, &id)?;
+pub fn select_server(
+    state: State<'_, AppState>,
+    id: String,
+    path: Option<String>,
+) -> AppResult<crate::servers::ActiveServer> {
+    let active =
+        crate::servers::set_active(&state.data_dir, &id, path.as_deref().map(ServerPath::parse))?;
     let mut remote = state
         .remote
         .lock()
         .map_err(|_| AppError::Other("gagal mengunci state".into()))?;
-    *remote = if info.is_remote() {
-        Some(crate::lan::RemoteConfig {
-            base_url: format!(
-                "http://{}:{}",
-                info.host.clone().unwrap_or_default(),
-                info.port.unwrap_or(LAN_SERVER_PORT)
-            ),
-            token: info.token.clone().unwrap_or_default(),
-        })
-    } else {
-        None
-    };
-    Ok(info)
+    *remote = active.server.remote_config(active.path);
+    Ok(active)
+}
+
+/// Kode Setup untuk PC klien (dijalankan di PC pusat): isi QR pairing yang sama
+/// dikemas jadi satu baris teks yang bisa disalin — PC tidak punya kamera.
+#[derive(Debug, serde::Serialize)]
+pub struct SetupCode {
+    pub code: String,
+    pub payload: crate::lan::PairingPayload,
+}
+
+#[tauri::command]
+pub fn client_setup_code(state: State<'_, AppState>) -> AppResult<SetupCode> {
+    let local_ip = local_ip_address::local_ip().ok().map(|ip| ip.to_string());
+    let conn = state.lock()?;
+    let payload = crate::lan::pairing_payload(&conn, local_ip, LAN_SERVER_PORT)?;
+    drop(conn);
+    let code = crate::lan::setup_code(&payload)?;
+    Ok(SetupCode { code, payload })
+}
+
+/// Baca Kode Setup yang ditempel di PC klien, untuk mengisi form otomatis.
+#[tauri::command]
+pub fn decode_setup_code(code: String) -> AppResult<crate::lan::PairingPayload> {
+    crate::lan::decode_setup_code(&code)
 }
 
 #[tauri::command]

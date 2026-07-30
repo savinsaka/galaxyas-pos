@@ -4,6 +4,7 @@ import { writable } from "svelte/store";
 export interface PendingCartLine {
   product_id: string;
   name: string;
+  barcode: string | null;
   price: number;
   qty: number;
   discount: number;
@@ -11,6 +12,7 @@ export interface PendingCartLine {
   default_discount: number;
   periodic: boolean;
   manualOverride: boolean;
+  manualPercent: number | null;
   stock_qty: number;
 }
 

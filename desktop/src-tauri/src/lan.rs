@@ -19,17 +19,52 @@ use crate::error::{AppError, AppResult};
 const TOKEN_HEADER: &str = "X-Galaxyas-Token";
 const CONNECT_ERR_MSG: &str =
     "Tidak dapat terhubung ke Server Pusat — periksa koneksi wifi atau apakah PC pusat masih menyala.";
+/// Jalur internet gagal karena hal yang berbeda dari jalur wifi, jadi pesannya
+/// harus mengarahkan ke tempat yang benar (internet + Akses Online, bukan wifi).
+const CONNECT_ERR_MSG_ONLINE: &str = "Tidak dapat terhubung lewat internet — periksa koneksi internet PC ini, dan pastikan PC pusat menyala dengan Akses Online aktif.";
+
+/// Timeout jalur wifi. Pendek: kalau PC pusat satu ruangan tidak menjawab
+/// secepat ini, menunggu lebih lama tidak menolong.
+const LAN_TIMEOUT: Duration = Duration::from_secs(15);
+/// Timeout jalur internet. **Harus lebih besar** dari `REQUEST_TIMEOUT_S = 25`
+/// di `relay/app.py`, supaya yang sampai ke kasir adalah pesan 504 relay yang
+/// jelas ("PC kasir tidak menjawab"), bukan timeout mentah dari sisi klien.
+const ONLINE_TIMEOUT: Duration = Duration::from_secs(35);
 
 #[derive(Clone, Debug)]
 pub struct RemoteConfig {
     pub base_url: String,
     pub token: String,
+    /// true = base_url menembus relay internet (`https://<relay>/s/<id>`),
+    /// false = LAN langsung (`http://<ip>:8899`). Menentukan timeout & pesan
+    /// error; bentuk rute di bawah base_url identik di kedua jalur.
+    pub online: bool,
 }
 
-fn client() -> AppResult<reqwest::Client> {
-    Ok(reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()?)
+impl RemoteConfig {
+    fn timeout(&self) -> Duration {
+        if self.online {
+            ONLINE_TIMEOUT
+        } else {
+            LAN_TIMEOUT
+        }
+    }
+
+    fn connect_err(&self) -> AppError {
+        AppError::Other(connect_err_msg(self.online).to_string())
+    }
+}
+
+fn connect_err_msg(online: bool) -> &'static str {
+    if online {
+        CONNECT_ERR_MSG_ONLINE
+    } else {
+        CONNECT_ERR_MSG
+    }
+}
+
+fn client(timeout: Duration) -> AppResult<reqwest::Client> {
+    Ok(reqwest::Client::builder().timeout(timeout).build()?)
 }
 
 /// Panggil satu "command" di Server Pusat lewat HTTP, meniru pemanggilan
@@ -41,13 +76,13 @@ pub async fn call<T: Serialize, R: DeserializeOwned>(
     args: T,
 ) -> AppResult<R> {
     let url = format!("{}/rpc/{}", remote.base_url.trim_end_matches('/'), name);
-    let resp = client()?
+    let resp = client(remote.timeout())?
         .post(&url)
         .header(TOKEN_HEADER, &remote.token)
         .json(&args)
         .send()
         .await
-        .map_err(|_| AppError::Other(CONNECT_ERR_MSG.into()))?;
+        .map_err(|_| remote.connect_err())?;
 
     if !resp.status().is_success() {
         let body = resp.text().await.unwrap_or_default();
@@ -58,7 +93,7 @@ pub async fn call<T: Serialize, R: DeserializeOwned>(
         return Err(AppError::Other(msg));
     }
 
-    let body = resp.text().await.map_err(|_| AppError::Other(CONNECT_ERR_MSG.into()))?;
+    let body = resp.text().await.map_err(|_| remote.connect_err())?;
     // Body kosong dianggap `null` (untuk command yang me-return `()`).
     let value: serde_json::Value = if body.trim().is_empty() {
         serde_json::Value::Null
@@ -70,20 +105,74 @@ pub async fn call<T: Serialize, R: DeserializeOwned>(
         .map_err(|e| AppError::Other(format!("respons Server Pusat tidak valid: {e}")))
 }
 
-/// Cek keterjangkauan host (dipakai layar pairing "+ Tambah Server" sebelum
-/// disimpan). Tidak butuh data toko apa pun, cuma liveness + validasi token.
-pub async fn health_check(host: &str, port: u16, token: &str) -> AppResult<String> {
-    let url = format!("http://{host}:{port}/health");
-    let resp = client()?
+/// Cek keterjangkauan Server Pusat lewat base URL apa pun (dipakai layar
+/// "+ Tambah Server" dan tombol "Uji Koneksi" sebelum disimpan).
+///
+/// Jalur wifi: dijawab PC pusat sendiri — dengan header token ikut divalidasi,
+/// jadi kode/token salah ketahuan SEBELUM disimpan. Jalur internet: dijawab
+/// relay sendiri (200 bila PC pusat online, 503 bila mati) dan token TIDAK
+/// diperiksa di sana, jadi ini murni cek "PC pusat hidup" — validasi kredensial
+/// jalur itu terjadi saat pairing.
+pub async fn health_check(base_url: &str, token: &str, online: bool) -> AppResult<String> {
+    let url = format!("{}/health", base_url.trim_end_matches('/'));
+    let timeout = if online { ONLINE_TIMEOUT } else { LAN_TIMEOUT };
+    let resp = client(timeout)?
         .get(&url)
         .header(TOKEN_HEADER, token)
         .send()
         .await
-        .map_err(|_| AppError::Other(CONNECT_ERR_MSG.into()))?;
+        .map_err(|_| AppError::Other(connect_err_msg(online).to_string()))?;
+    if resp.status().as_u16() == 401 {
+        return Err(AppError::Other("Kode pairing salah.".into()));
+    }
     if !resp.status().is_success() {
-        return Err(AppError::Other(CONNECT_ERR_MSG.into()));
+        // Relay menyertakan alasannya ("PC kasir sedang mati atau tidak
+        // terhubung internet") — jauh lebih berguna dari pesan generik.
+        let body = resp.text().await.unwrap_or_default();
+        let msg = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
+            .unwrap_or_else(|| connect_err_msg(online).to_string());
+        return Err(AppError::Other(msg));
     }
     Ok("ok".to_string())
+}
+
+/// Sisi **klien** dari `POST /pair`: tukar kode pairing 6 karakter dengan token
+/// perangkat 64-hex milik PC ini. Wajib untuk jalur internet (kode pendek
+/// ditolak di sana, lihat `authenticate`), dan dipakai juga di jalur wifi agar
+/// satu entry server bisa langsung memakai kedua jalur — plus PC klien jadi
+/// bisa dicabut satu-satu dari Pengaturan PC pusat.
+pub async fn pair_client(
+    base_url: &str,
+    code: &str,
+    device_name: &str,
+    online: bool,
+) -> AppResult<crate::models::PairResult> {
+    let url = format!("{}/pair", base_url.trim_end_matches('/'));
+    let timeout = if online { ONLINE_TIMEOUT } else { LAN_TIMEOUT };
+    let resp = client(timeout)?
+        .post(&url)
+        .json(&serde_json::json!({ "code": code.trim(), "device_name": device_name }))
+        .send()
+        .await
+        .map_err(|_| AppError::Other(connect_err_msg(online).to_string()))?;
+
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        let msg = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
+            .unwrap_or_else(|| "Server Pusat menolak pendaftaran.".to_string());
+        return Err(AppError::Other(msg));
+    }
+    let result: crate::models::PairResult = serde_json::from_str(&body)
+        .map_err(|e| AppError::Other(format!("respons pairing tidak valid: {e}")))?;
+    if result.device_token.trim().is_empty() {
+        return Err(AppError::Other("Server Pusat tidak mengirim token perangkat.".into()));
+    }
+    Ok(result)
 }
 
 /// Buat kode pairing pendek (6 karakter, uppercase hex-ish) untuk token Server Pusat.
@@ -202,6 +291,52 @@ pub fn pairing_payload(
         store_id: if relay_on { get("relay_store_id")? } else { String::new() },
         code,
     })
+}
+
+// ---------- Kode Setup PC klien ----------
+
+/// Awalan supaya kode yang ditempel bisa dikenali (dan salah-tempel bisa
+/// ditolak dengan pesan jelas alih-alih "base64 tidak valid").
+const SETUP_CODE_PREFIX: &str = "GXP1-";
+
+/// Isi QR pairing yang sama, dikemas jadi satu baris teks untuk PC klien —
+/// PC tidak punya kamera, jadi jalurnya salin-tempel (WhatsApp/USB) bukan scan.
+/// URL-safe base64 tanpa padding dipilih supaya kodenya tidak rusak saat
+/// dikirim lewat chat atau dijadikan bagian URL.
+pub fn setup_code(payload: &PairingPayload) -> AppResult<String> {
+    use base64::Engine as _;
+    let json = serde_json::to_vec(payload)
+        .map_err(|e| AppError::Other(format!("gagal menyusun Kode Setup: {e}")))?;
+    let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json);
+    Ok(format!("{SETUP_CODE_PREFIX}{encoded}"))
+}
+
+/// Kebalikan `setup_code`, dipakai PC klien untuk mengisi form otomatis.
+pub fn decode_setup_code(code: &str) -> AppResult<PairingPayload> {
+    use base64::Engine as _;
+    let trimmed = code.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Other("Kode Setup masih kosong.".into()));
+    }
+    // Awalan opsional: kode yang disalin lengkap maupun tanpa awalan tetap jalan.
+    let body = trimmed.strip_prefix(SETUP_CODE_PREFIX).unwrap_or(trimmed);
+    let invalid = || {
+        AppError::Other(
+            "Kode Setup tidak dikenali — salin ulang dari Pengaturan > Server Pusat di PC pusat."
+                .to_string(),
+        )
+    };
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(body.as_bytes())
+        .map_err(|_| invalid())?;
+    let payload: PairingPayload = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+    if payload.v > PAIRING_PAYLOAD_VERSION {
+        return Err(AppError::Other(
+            "Kode Setup ini dibuat aplikasi versi lebih baru — perbarui aplikasi di PC ini dulu."
+                .into(),
+        ));
+    }
+    Ok(payload)
 }
 
 // ---------- Host server ----------
@@ -952,6 +1087,86 @@ mod tests {
             serde_json::to_string(&payload).unwrap(),
             r#"{"v":1,"name":"GALAXYAS Toko 1","host":"192.168.18.11","port":8899,"relay":"relay.jjapps.net","store_id":"ed2a445ded3d12c68a8b9c7a3e58a18e","code":"A1B2C3"}"#
         );
+    }
+
+    fn payload_lengkap() -> PairingPayload {
+        PairingPayload {
+            v: PAIRING_PAYLOAD_VERSION,
+            name: "GALAXYAS Toko 1".into(),
+            host: "192.168.18.11".into(),
+            port: 8899,
+            relay: "relay.jjapps.net".into(),
+            store_id: "ed2a445ded3d12c68a8b9c7a3e58a18e".into(),
+            code: "A1B2C3".into(),
+        }
+    }
+
+    #[test]
+    fn kode_setup_bolak_balik_utuh() {
+        let code = setup_code(&payload_lengkap()).expect("kode");
+        assert!(code.starts_with(SETUP_CODE_PREFIX));
+        // Harus aman disalin lewat chat / URL: tanpa spasi, +, / atau =.
+        assert!(
+            !code.contains(['+', '/', '=', ' ', '\n']),
+            "kode tidak aman disalin: {code}"
+        );
+
+        let back = decode_setup_code(&code).expect("decode");
+        assert_eq!(back.host, "192.168.18.11");
+        assert_eq!(back.port, 8899);
+        assert_eq!(back.relay, "relay.jjapps.net");
+        assert_eq!(back.store_id, "ed2a445ded3d12c68a8b9c7a3e58a18e");
+        assert_eq!(back.code, "A1B2C3");
+        assert_eq!(back.name, "GALAXYAS Toko 1");
+    }
+
+    /// Pemilik toko akan menempel apa saja yang ada di clipboard — kegagalan
+    /// harus berupa pesan yang menyuruh menyalin ulang, bukan istilah teknis.
+    #[test]
+    fn kode_setup_rusak_ditolak_dengan_pesan_yang_bisa_dikerjakan() {
+        for bad in ["", "   ", "bukan kode", "GXP1-!!!!", "GXP1-YWJj"] {
+            let err = decode_setup_code(bad).expect_err("harus gagal").to_string();
+            assert!(
+                err.contains("Kode Setup"),
+                "pesan untuk {bad:?} kurang jelas: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn kode_setup_tanpa_awalan_tetap_diterima() {
+        let code = setup_code(&payload_lengkap()).expect("kode");
+        let tanpa_awalan = code.trim_start_matches(SETUP_CODE_PREFIX);
+        assert_eq!(decode_setup_code(tanpa_awalan).expect("decode").code, "A1B2C3");
+    }
+
+    #[test]
+    fn kode_setup_versi_lebih_baru_ditolak_bukan_disalahtafsirkan() {
+        let mut payload = payload_lengkap();
+        payload.v = PAIRING_PAYLOAD_VERSION + 1;
+        let err = decode_setup_code(&setup_code(&payload).unwrap()).unwrap_err().to_string();
+        assert!(err.contains("perbarui aplikasi"), "pesan kurang jelas: {err}");
+    }
+
+    /// Jalur internet menembus relay yang batas tunggunya 25 detik
+    /// (`relay/app.py`), jadi klien harus menunggu LEBIH lama supaya pesan 504
+    /// relay yang jelas sampai ke kasir.
+    #[test]
+    fn timeout_dan_pesan_error_dipilih_menurut_jalur() {
+        let lan = RemoteConfig {
+            base_url: "http://192.168.1.7:8899".into(),
+            token: "x".into(),
+            online: false,
+        };
+        let online = RemoteConfig {
+            base_url: "https://relay.jjapps.net/s/toko1".into(),
+            token: "x".into(),
+            online: true,
+        };
+        assert!(online.timeout() > lan.timeout());
+        assert!(online.timeout() > Duration::from_secs(25));
+        assert!(lan.connect_err().to_string().contains("wifi"));
+        assert!(online.connect_err().to_string().contains("internet"));
     }
 
     #[test]

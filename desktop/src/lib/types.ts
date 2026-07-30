@@ -56,6 +56,13 @@ export interface SaleInput {
   /** Hanya diisi kalau payment_method = "Kombinasi". */
   paid_cash?: number | null;
   paid_qris?: number | null;
+  /**
+   * Kunci idempoten satu percobaan checkout — TETAP SAMA saat dicoba ulang.
+   * Kalau transaksi sudah tersimpan di Server Pusat tapi jawabannya hilang di
+   * jaringan, percobaan kedua mengembalikan transaksi yang sudah ada, bukan
+   * mencatat yang kedua.
+   */
+  client_ref?: string | null;
 }
 
 export interface Transaction {
@@ -127,14 +134,43 @@ export interface StoreInfo {
   created_at: string;
 }
 
+/// Jalur ke Server Pusat. Kasir memilih sendiri tiap membuka app — tidak ada
+/// auto-fallback (lihat servers.rs).
+export type ServerPath = "lan" | "online";
+
+/// Satu Server Pusat tersimpan. Satu entry bisa menyimpan DUA alamat: wifi
+/// (lan_host:lan_port) dan internet (relay_url + store_id lewat relay).
 export interface ServerInfo {
   id: string;
   kind: "local" | "remote";
   name: string;
-  host: string | null;
-  port: number | null;
-  token: string | null;
+  lan_host: string | null;
+  lan_port: number | null;
+  relay_url: string | null;
+  store_id: string | null;
+  device_token: string | null;
 }
+
+export interface ActiveServer {
+  server: ServerInfo;
+  path: ServerPath;
+}
+
+/// Isian layar "+ Tambah Server" / "Uji Koneksi".
+export interface ServerInput {
+  name: string;
+  lan_host: string;
+  lan_port: number | null;
+  relay_url: string;
+  store_id: string;
+  code: string;
+  path: ServerPath;
+}
+
+export const hasLanPath = (s: ServerInfo | null | undefined): boolean =>
+  !!s?.lan_host?.trim();
+export const hasOnlinePath = (s: ServerInfo | null | undefined): boolean =>
+  !!s?.relay_url?.trim() && !!s?.store_id?.trim();
 
 export interface LanServerStatus {
   enabled: boolean;
@@ -167,6 +203,13 @@ export interface PairingPayload {
 
 export interface PairingQr {
   svg: string;
+  payload: PairingPayload;
+}
+
+/// Kode Setup untuk PC kasir klien: isi QR yang sama, dikemas jadi satu baris
+/// teks yang bisa disalin (PC tidak punya kamera untuk scan QR).
+export interface SetupCode {
+  code: string;
   payload: PairingPayload;
 }
 

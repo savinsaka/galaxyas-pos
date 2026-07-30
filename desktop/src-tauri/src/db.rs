@@ -273,6 +273,25 @@ pub fn init_schema(conn: &Connection) -> AppResult<()> {
         conn.execute("ALTER TABLE products ADD COLUMN ever_synced INTEGER NOT NULL DEFAULT 0", [])?;
     }
 
+    // Migrasi: kolom client_ref pada transactions — kunci idempoten checkout
+    // (lihat `SaleInput::client_ref`). Index UNIQUE **parsial**: baris lama yang
+    // client_ref-nya NULL tidak saling bentrok, tapi satu kunci mustahil
+    // tercatat dua kali walau permintaannya benar-benar masuk dua kali. Ini
+    // jaring terakhirnya — pengecekan di `create_sale` yang dipakai sehari-hari.
+    let has_tx_client_ref: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('transactions') WHERE name='client_ref'")?
+        .query_row([], |_| Ok(true))
+        .optional()?
+        .unwrap_or(false);
+    if !has_tx_client_ref {
+        conn.execute("ALTER TABLE transactions ADD COLUMN client_ref TEXT", [])?;
+    }
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_tx_client_ref
+             ON transactions(client_ref) WHERE client_ref IS NOT NULL",
+        [],
+    )?;
+
     Ok(())
 }
 
@@ -793,10 +812,45 @@ fn resolve_created_at(override_at: &Option<String>) -> String {
 }
 
 /// Simpan transaksi penjualan & kurangi stok dalam satu transaksi DB.
+/// Transaksi yang sudah tercatat untuk satu kunci idempoten, bila ada.
+fn find_sale_by_client_ref(
+    conn: &Connection,
+    client_ref: &str,
+) -> AppResult<Option<TransactionDetail>> {
+    let id: Option<String> = conn
+        .query_row(
+            "SELECT id FROM transactions WHERE client_ref = ?1",
+            params![client_ref],
+            |r| r.get(0),
+        )
+        .optional()?;
+    match id {
+        Some(id) => get_transaction(conn, &id),
+        None => Ok(None),
+    }
+}
+
 pub fn create_sale(conn: &mut Connection, input: SaleInput) -> AppResult<TransactionDetail> {
     if input.items.is_empty() {
         return Err(AppError::Other("transaksi tidak boleh kosong".into()));
     }
+
+    // Permintaan yang sama masuk dua kali (jawaban pertama hilang di jaringan,
+    // lalu kasir menekan Bayar lagi): balikkan transaksi yang SUDAH tersimpan,
+    // jangan buat yang kedua. Dicek sebelum apa pun dikerjakan, jadi stok pun
+    // tidak ikut berkurang dua kali.
+    let client_ref: Option<String> = input
+        .client_ref
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    if let Some(reference) = client_ref.as_deref() {
+        if let Some(existing) = find_sale_by_client_ref(conn, reference)? {
+            return Ok(existing);
+        }
+    }
+
     let now = resolve_created_at(&input.created_at);
     let tx_id = Uuid::new_v4().to_string();
 
@@ -845,17 +899,34 @@ pub fn create_sale(conn: &mut Connection, input: SaleInput) -> AppResult<Transac
     // (pembayaran kurang / stok tidak cukup) tidak "membakar" nomor urut.
     let db_tx = conn.transaction()?;
     let invoice_no = next_invoice_no(&db_tx)?;
-    db_tx.execute(
+    let insert = db_tx.execute(
         "INSERT INTO transactions
             (id, invoice_no, cashier_id, subtotal, discount, total, paid, change, payment_method,
-             created_at, customer_id, shift_id, paid_cash, paid_qris)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+             created_at, customer_id, shift_id, paid_cash, paid_qris, client_ref)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
         params![
             tx_id, invoice_no, input.cashier_id, subtotal, total_discount, total,
             input.paid, change, input.payment_method, now, input.customer_id, input.shift_id,
-            input.paid_cash, input.paid_qris
+            input.paid_cash, input.paid_qris, client_ref
         ],
-    )?;
+    );
+    if let Err(e) = insert {
+        // Index UNIQUE menolak = dua permintaan kembar masuk hampir bersamaan
+        // dan yang satu sudah menang. Yang kalah cukup membaca hasilnya.
+        let kembar = matches!(
+            &e,
+            rusqlite::Error::SqliteFailure(f, _) if f.code == rusqlite::ErrorCode::ConstraintViolation
+        );
+        drop(db_tx);
+        if kembar {
+            if let Some(reference) = client_ref.as_deref() {
+                if let Some(existing) = find_sale_by_client_ref(conn, reference)? {
+                    return Ok(existing);
+                }
+            }
+        }
+        return Err(e.into());
+    }
     for it in &items {
         db_tx.execute(
             "INSERT INTO transaction_items
@@ -2716,6 +2787,100 @@ mod tests {
         assert_eq!(jumlah_riwayat(&conn, &tidak_dihitung), 1);
         assert_eq!(jumlah_riwayat(&conn, &sudah_nol), 0, "stok sudah 0 tidak bikin baris riwayat");
         assert_eq!(jumlah_riwayat(&conn, &merek_lain), 0);
+    }
+
+    fn penjualan(product_id: &str, qty: f64, client_ref: Option<&str>) -> SaleInput {
+        SaleInput {
+            cashier_id: "admin".into(),
+            payment_method: "Tunai".into(),
+            paid: 10_000.0 * qty,
+            items: vec![crate::models::SaleItemInput {
+                product_id: product_id.into(),
+                name: "Kopi A".into(),
+                price: 10_000.0,
+                qty,
+                discount: 0.0,
+            }],
+            customer_id: None,
+            shift_id: None,
+            created_at: None,
+            paid_cash: None,
+            paid_qris: None,
+            client_ref: client_ref.map(str::to_string),
+        }
+    }
+
+    /// Inti perlindungan checkout dobel: kalau jawaban hilang di jaringan dan
+    /// kasir menekan Bayar lagi, permintaan yang SAMA (client_ref sama) tidak
+    /// boleh membuat transaksi kedua dan tidak boleh mengurangi stok dua kali.
+    #[test]
+    fn checkout_dengan_client_ref_sama_tidak_tercatat_dua_kali() {
+        let mut conn = test_db();
+        let id = produk(&conn, "Kopi A", "MEREK-X", 10.0, true);
+
+        let pertama = create_sale(&mut conn, penjualan(&id, 2.0, Some("ref-abc"))).expect("checkout");
+        assert_eq!(stok(&conn, &id), 8.0);
+
+        // Percobaan ulang: hasilnya transaksi yang sama, bukan yang baru.
+        let ulang = create_sale(&mut conn, penjualan(&id, 2.0, Some("ref-abc"))).expect("ulang");
+        assert_eq!(ulang.header.id, pertama.header.id);
+        assert_eq!(ulang.header.invoice_no, pertama.header.invoice_no, "nomor invoice tidak boleh maju");
+        assert_eq!(ulang.items.len(), 1);
+        assert_eq!(stok(&conn, &id), 8.0, "stok tidak boleh berkurang dua kali");
+
+        let jumlah_tx: i64 =
+            conn.query_row("SELECT COUNT(*) FROM transactions", [], |r| r.get(0)).unwrap();
+        assert_eq!(jumlah_tx, 1);
+        let jumlah_gerak: i64 = conn
+            .query_row("SELECT COUNT(*) FROM stock_movements WHERE kind='sale'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(jumlah_gerak, 1, "riwayat stok juga tidak boleh dobel");
+    }
+
+    /// Dua penjualan yang isinya kebetulan identik TETAP dua transaksi — yang
+    /// membedakan cuma client_ref, bukan isi keranjang.
+    #[test]
+    fn client_ref_berbeda_tetap_dua_transaksi() {
+        let mut conn = test_db();
+        let id = produk(&conn, "Kopi A", "MEREK-X", 10.0, true);
+
+        let a = create_sale(&mut conn, penjualan(&id, 1.0, Some("ref-1"))).expect("a");
+        let b = create_sale(&mut conn, penjualan(&id, 1.0, Some("ref-2"))).expect("b");
+        assert_ne!(a.header.id, b.header.id);
+        assert_ne!(a.header.invoice_no, b.header.invoice_no);
+        assert_eq!(stok(&conn, &id), 8.0);
+    }
+
+    /// App HP & klien lama tidak mengirim client_ref — perilakunya harus persis
+    /// seperti sebelum fitur ini ada (dua panggilan = dua transaksi).
+    #[test]
+    fn tanpa_client_ref_perilaku_lama_dipertahankan() {
+        let mut conn = test_db();
+        let id = produk(&conn, "Kopi A", "MEREK-X", 10.0, true);
+
+        create_sale(&mut conn, penjualan(&id, 1.0, None)).expect("a");
+        create_sale(&mut conn, penjualan(&id, 1.0, None)).expect("b");
+        // Kunci kosong/spasi juga dianggap "tidak ada", bukan kunci bernama "".
+        create_sale(&mut conn, penjualan(&id, 1.0, Some("   "))).expect("c");
+
+        let jumlah_tx: i64 =
+            conn.query_row("SELECT COUNT(*) FROM transactions", [], |r| r.get(0)).unwrap();
+        assert_eq!(jumlah_tx, 3);
+        assert_eq!(stok(&conn, &id), 7.0);
+    }
+
+    /// Percobaan pertama yang GAGAL (stok tidak cukup) tidak boleh "memakai"
+    /// kunci itu — kasir memperbaiki keranjang lalu mencoba lagi dengan kunci
+    /// yang sama, dan itu harus benar-benar tersimpan.
+    #[test]
+    fn kunci_tidak_terpakai_kalau_percobaan_pertama_gagal() {
+        let mut conn = test_db();
+        let id = produk(&conn, "Kopi A", "MEREK-X", 1.0, true);
+
+        assert!(create_sale(&mut conn, penjualan(&id, 5.0, Some("ref-x"))).is_err());
+        let ok = create_sale(&mut conn, penjualan(&id, 1.0, Some("ref-x"))).expect("percobaan kedua");
+        assert_eq!(ok.header.total, 10_000.0);
+        assert_eq!(stok(&conn, &id), 0.0);
     }
 
     #[test]
