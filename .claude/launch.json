@@ -6,12 +6,6 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "desktop", "run", "dev"],
       "port": 1420
-    },
-    {
-      "name": "mobilepos-vite",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "galaxyas-mobilepos", "run", "dev"],
-      "port": 1430
     }
   ]
 }

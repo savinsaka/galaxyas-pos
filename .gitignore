@@ -44,9 +44,9 @@ Thumbs.db
 # Personal/local Claude Code permissions (machine-specific, not shared)
 .claude/settings.local.json
 
-# Leftover scaffold from an initial `cargo tauri init`/`tauri icon` run at the
-# repo root before the real app was set up under desktop/ — not part of the app.
-/src-tauri/
+# Sisa `tauri icon` yang pernah dijalankan di root sebelum app asli dibuat di
+# desktop/ — bukan bagian aplikasi. (Scaffold /src/ + /src-tauri/ di root sudah
+# dihapus; app yang dipakai HANYA desktop/.)
 /icon/
 
 # Alat admin relay (proyek terpisah, bukan bagian installer POS)
