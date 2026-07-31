@@ -17,6 +17,13 @@
     price: number;
     qty: number;
     discount: number;
+    /**
+     * Persen yang diketik untuk baris ini (null = diskonnya nominal).
+     * Sama seperti di Kasir POS: `discount` yang disimpan selalu nominal,
+     * persennya cuma cara mengetik supaya "10%" tetap 10% walau Jumlah/Harga
+     * diubah.
+     */
+    manualPercent: number | null;
   }
 
   let detail = $state<TransactionDetail | null>(null);
@@ -29,6 +36,12 @@
   let busy = $state(false);
 
   let search = $state("");
+  let searchInputEl = $state<HTMLInputElement>();
+  /**
+   * Cara mengisi kolom Diskon (persis Kasir POS): nominal rupiah atau persen
+   * dari harga baris. Satu switch untuk semua baris; default persen.
+   */
+  let discountMode = $state<"rp" | "percent">("percent");
   let showSearchPopup = $state(false);
   let popupResults = $state<ProductWithStock[]>([]);
   let popupLoading = $state(false);
@@ -77,6 +90,7 @@
         price: it.price,
         qty: it.qty,
         discount: it.discount,
+        manualPercent: null,
       }));
       paymentMethod = (d.payment_method as PaymentMethod) ?? "Tunai";
       paid = d.paid;
@@ -101,7 +115,7 @@
       ex.qty += 1;
       lines = [...lines];
     } else {
-      lines = [...lines, { product_id: p.id, name: p.name, price: p.sell_price, qty: 1, discount: 0 }];
+      lines = [...lines, { product_id: p.id, name: p.name, price: p.sell_price, qty: 1, discount: 0, manualPercent: null }];
     }
   }
 
@@ -172,16 +186,62 @@
 
   function setQty(line: EditLine, qty: number) {
     line.qty = Math.max(0.01, qty);
-    line.discount = Math.min(line.discount, line.price * line.qty);
+    // Diskon persen ikut jumlah: "10%" tetap 10% walau jumlahnya berubah.
+    line.discount =
+      line.manualPercent !== null
+        ? discountFromPercent(line, line.manualPercent)
+        : Math.min(line.discount, line.price * line.qty);
     lines = [...lines];
   }
   function setPrice(line: EditLine, price: number) {
     line.price = Math.max(0, price);
-    line.discount = Math.min(line.discount, line.price * line.qty);
+    line.discount =
+      line.manualPercent !== null
+        ? discountFromPercent(line, line.manualPercent)
+        : Math.min(line.discount, line.price * line.qty);
     lines = [...lines];
   }
-  function setDiscount(line: EditLine, discount: number) {
-    line.discount = Math.min(Math.max(0, discount), line.price * line.qty);
+
+  /**
+   * Ganti cara mengisi diskon untuk semua baris. Nominal yang sudah ada TIDAK
+   * diubah — di mode persen angkanya ditampilkan sebagai persen dari harga baris.
+   */
+  function toggleDiscountMode() {
+    discountMode = discountMode === "percent" ? "rp" : "percent";
+    searchInputEl?.focus();
+  }
+
+  const lineGross = (line: EditLine) => line.price * line.qty;
+
+  /** Nominal dari persen, dibulatkan ke rupiah terdekat (bukan pecahan sen). */
+  function discountFromPercent(line: EditLine, percent: number): number {
+    const pct = Math.min(Math.max(0, percent), 100);
+    return Math.round((lineGross(line) * pct) / 100);
+  }
+
+  /**
+   * Angka yang tampil di kolom Diskon saat mode persen: yang diketik bila ada,
+   * kalau tidak diturunkan dari nominal (mis. diskon dari transaksi lama),
+   * dibulatkan 2 desimal supaya tidak jadi 9.999999999.
+   */
+  function linePercent(line: EditLine): number {
+    if (line.manualPercent !== null) return line.manualPercent;
+    const gross = lineGross(line);
+    if (gross <= 0) return 0;
+    return Math.round((line.discount / gross) * 10000) / 100;
+  }
+
+  /** Isi kolom Diskon — artinya tergantung switch Rp/% di header. */
+  function setDiscount(line: EditLine, value: number) {
+    if (discountMode === "percent") {
+      const pct = Math.min(Math.max(0, value), 100);
+      line.manualPercent = pct;
+      line.discount = discountFromPercent(line, pct);
+    } else {
+      // Nominal yang diketik = angka tetap, tidak lagi mengikuti persen.
+      line.manualPercent = null;
+      line.discount = Math.min(Math.max(0, value), lineGross(line));
+    }
     lines = [...lines];
   }
   function removeLine(id: string) {
@@ -237,6 +297,7 @@
   <div class="scan-row">
     <input
       placeholder="Scan barcode / cari nama lalu Enter…"
+      bind:this={searchInputEl}
       bind:value={search}
       onkeydown={onSearchKey}
     />
@@ -250,7 +311,23 @@
           <th>Barang</th>
           <th style="width:100px">Jumlah</th>
           <th style="width:130px" class="text-right">Harga</th>
-          <th style="width:130px" class="text-right">Diskon</th>
+          <th style="width:130px" class="text-right">
+            <!-- Switch berlaku untuk semua baris; yang berubah cuma cara
+                 mengetik, nominal yang sudah ada tidak ikut berubah. -->
+            <span class="disc-head">
+              Diskon
+              <button
+                class="disc-toggle"
+                class:disc-toggle-on={discountMode === "percent"}
+                title={discountMode === "percent"
+                  ? "Sekarang isi diskon dalam persen — klik untuk ganti ke nominal Rp"
+                  : "Sekarang isi diskon dalam Rupiah — klik untuk ganti ke persen"}
+                onclick={toggleDiscountMode}
+              >
+                {discountMode === "percent" ? "%" : "Rp"}
+              </button>
+            </span>
+          </th>
           <th style="width:120px" class="text-right">Total</th>
           <th style="width:2rem"></th>
         </tr>
@@ -279,13 +356,32 @@
               />
             </td>
             <td>
-              <input
-                class="mono cell-num"
-                type="number"
-                min="0"
-                value={line.discount}
-                oninput={(e) => setDiscount(line, +e.currentTarget.value)}
-              />
+              {#if discountMode === "percent"}
+                <div class="cl-disc-pct">
+                  <input
+                    class="mono cell-num"
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={linePercent(line)}
+                    oninput={(e) => setDiscount(line, +e.currentTarget.value)}
+                  />
+                  <span class="pct-sign text-dim">%</span>
+                </div>
+                <!-- Nominalnya tetap ditampilkan (itu yang tersimpan), hanya
+                     kalau ada diskon supaya baris tanpa diskon tidak ikut tinggi. -->
+                {#if line.discount > 0}
+                  <div class="cl-disc-hint mono text-dim">−{formatIDR(line.discount)}</div>
+                {/if}
+              {:else}
+                <input
+                  class="mono cell-num"
+                  type="number"
+                  min="0"
+                  value={line.discount}
+                  oninput={(e) => setDiscount(line, +e.currentTarget.value)}
+                />
+              {/if}
             </td>
             <td class="text-right mono fw-bold">{formatIDR(line.price * line.qty - line.discount)}</td>
             <td><button class="btn-ghost" style="color:var(--danger);" onclick={() => removeLine(line.product_id)}>✕</button></td>
@@ -381,6 +477,19 @@
 <style>
   .scan-row { display: flex; align-items: center; gap: 0.6rem; }
   .cell-num { width: 100%; text-align: right; padding: 0.25rem 0.4rem; }
+  /* Switch Rp/% di header kolom Diskon — sama persis dengan Kasir POS. */
+  .disc-head { display: inline-flex; align-items: center; gap: 0.35rem; }
+  .disc-toggle {
+    padding: 0.05rem 0.32rem;
+    font-size: 0.7rem;
+    font-weight: 700;
+    line-height: 1.4;
+    min-width: 1.9rem;
+  }
+  .disc-toggle-on { background: var(--primary); color: #fff; border-color: var(--primary); }
+  .cl-disc-pct { display: flex; align-items: center; gap: 0.15rem; }
+  .pct-sign { font-size: 0.78rem; }
+  .cl-disc-hint { font-size: 0.7rem; text-align: right; margin-top: 0.1rem; }
   .fw-bold { font-weight: 700; }
 
   .edit-bottom { display: grid; grid-template-columns: 1fr 300px; gap: 1rem; }

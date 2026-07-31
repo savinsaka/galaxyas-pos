@@ -54,8 +54,9 @@
    * Satu switch untuk SELURUH keranjang (di header kolom Diskon) — pilihan
    * pemilik toko. Yang berubah cuma cara mengetik; `discount` yang tersimpan
    * selalu nominal, jadi database & struk tidak terpengaruh.
+   * Default persen — itu yang paling sering dipakai di toko.
    */
-  let discountMode = $state<"rp" | "percent">("rp");
+  let discountMode = $state<"rp" | "percent">("percent");
   /** Hanya admin yang boleh mengubah harga & diskon per baris. */
   const isAdmin = $derived($currentUser?.role === "admin");
   let search = $state("");
