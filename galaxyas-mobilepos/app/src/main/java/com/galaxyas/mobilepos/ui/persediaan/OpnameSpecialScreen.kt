@@ -1,6 +1,5 @@
 package com.galaxyas.mobilepos.ui.persediaan
 
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -11,14 +10,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -42,6 +39,7 @@ import com.galaxyas.mobilepos.data.model.OpnameSpecialItemInput
 import com.galaxyas.mobilepos.data.model.ProductWithStock
 import com.galaxyas.mobilepos.data.network.ApiClient
 import com.galaxyas.mobilepos.scanner.ScannerScreen
+import com.galaxyas.mobilepos.ui.common.BrandPicker
 import com.galaxyas.mobilepos.ui.common.ConfirmDialog
 import com.galaxyas.mobilepos.ui.common.FormField
 import com.galaxyas.mobilepos.ui.common.MessageDialog
@@ -177,18 +175,12 @@ fun OpnameSpecialScreen(api: ApiClient, session: Session) {
 
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
         if (brands.isNotEmpty()) {
-            Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                brands.forEach { b ->
-                    FilterChip(
-                        selected = brand == b,
-                        onClick = { brand = if (brand == b) null else b },
-                        label = { Text(b) },
-                    )
-                }
-            }
+            BrandPicker(
+                brands = brands,
+                selected = brand,
+                onSelect = { brand = it },
+                modifier = Modifier.padding(top = 8.dp),
+            )
         }
 
         Card(
