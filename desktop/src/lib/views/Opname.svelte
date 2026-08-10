@@ -22,10 +22,13 @@
   onDestroy(() => clock.stop());
   onDestroy(() => { if (tabId) clearTabDirty(tabId); });
 
-  const IMPORT_HEADERS = ["kode_barcode", "nama", "fisik", "keterangan"];
+  // Template semua menu opname seragam: barcode · fisik · keterangan (opsional).
+  // Parser di bawah tetap menerima header lama (kode_barcode/kode/nama) supaya
+  // berkas yang sudah terlanjur dipakai toko tidak jadi rusak.
+  const IMPORT_HEADERS = ["barcode", "fisik", "keterangan"];
   const IMPORT_EXAMPLE = [
-    ["8992388101010", "Indomie Goreng", 48, "opsional"],
-    ["8993675001020", "Aqua 600ml", 20, ""],
+    ["8992388101010", 48, "opsional"],
+    ["8993675001020", 20, ""],
   ];
 
   interface ImportLogEntry {
@@ -351,25 +354,33 @@
       <MonthPager bind:from bind:to onchange={load} />
     </div>
     <div class="history-scroll">
-      <table>
+      <table class="history-table">
         <thead>
           <tr>
             <th>Waktu</th><th>Barang</th>
-            <th class="text-right">Fisik</th><th class="text-right">Stok Akhir</th>
-            <th>Catatan</th>
+            <th class="text-right">Buku</th><th class="text-right">Stok Akhir</th>
+            <th class="text-right">Selisih</th>
+            <th>Keterangan</th>
           </tr>
         </thead>
         <tbody>
           {#each historyPageItems as r (r.id)}
+            {@const d = r.stock_before === null ? null : r.stock_after - r.stock_before}
             <tr>
-              <td style="white-space:nowrap;">{formatDateTime(r.created_at)}</td>
-              <td>{r.product_name}</td>
-              <td class="text-right mono">{formatQty(r.qty)}</td>
+              <td class="col-time">{formatDateTime(r.created_at)}</td>
+              <td>
+                <div class="hist-name">{r.product_name}</div>
+                {#if r.barcode}<div class="hist-barcode mono">{r.barcode}</div>{/if}
+              </td>
+              <td class="text-right mono">{r.stock_before === null ? "—" : formatQty(r.stock_before)}</td>
               <td class="text-right mono">{formatQty(r.stock_after)}</td>
+              <td class="text-right mono selisih-cell {d === null ? '' : d > 0 ? 'plus' : d < 0 ? 'minus' : ''}">
+                {d === null ? "—" : `${d > 0 ? "+" : ""}${formatQty(d)}`}
+              </td>
               <td>{r.note ?? "—"}</td>
             </tr>
           {:else}
-            <tr><td colspan="5" class="text-dim">Belum ada riwayat opname.</td></tr>
+            <tr><td colspan="6" class="text-dim">Belum ada riwayat opname.</td></tr>
           {/each}
         </tbody>
       </table>
@@ -403,7 +414,25 @@
   .view-flex { height:100%; min-height:0; display:flex; flex-direction:column; }
   .op-grid { display: grid; grid-template-columns: 400px 1fr; gap: 1rem; flex:1; min-height:0; }
   .history-card { padding:0; overflow:hidden; display:flex; flex-direction:column; min-height:0; }
-  .history-scroll { flex:1; min-height:0; overflow-y:auto; }
+  .history-scroll { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; }
+
+  /* Enam kolom di kartu yang lebarnya sisa layar: fontnya dikecilkan &
+     paddingnya dirapatkan supaya semua muat tanpa scroll ke samping. */
+  .history-table { table-layout: fixed; font-size: 0.76rem; }
+  .history-table th,
+  .history-table td { padding: 0.4rem 0.45rem; vertical-align: top; overflow-wrap: anywhere; }
+  .history-table thead th { font-size: 0.64rem; letter-spacing: 0.02em; }
+  .history-table th:nth-child(1) { width: 8.6rem; }
+  .history-table th:nth-child(3),
+  .history-table th:nth-child(4),
+  .history-table th:nth-child(5) { width: 4.6rem; }
+  .history-table th:nth-child(6) { width: 22%; }
+  .col-time { white-space: nowrap; }
+  .hist-name { font-weight: 600; line-height: 1.25; }
+  .hist-barcode { font-size: 0.66rem; color: var(--text-dim); line-height: 1.2; }
+  .selisih-cell { font-weight: 700; }
+  .selisih-cell.plus { color: var(--success); }
+  .selisih-cell.minus { color: var(--danger); }
   .pager {
     display: flex; align-items: center; justify-content: space-between;
     padding: 0.5rem 0.9rem; border-top: 1px solid var(--border); flex-shrink:0;

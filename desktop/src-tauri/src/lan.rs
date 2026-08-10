@@ -740,6 +740,22 @@ pub fn dispatch(
             let a: A = args_of(args)?;
             ok_value(db::create_opname_special(conn, a.input)?)
         }
+        "preview_time_opname" => {
+            #[derive(serde::Deserialize)]
+            struct A {
+                input: crate::models::TimeOpnameInput,
+            }
+            let a: A = args_of(args)?;
+            ok_value(db::preview_time_opname(conn, a.input)?)
+        }
+        "create_time_opname" => {
+            #[derive(serde::Deserialize)]
+            struct A {
+                input: crate::models::TimeOpnameInput,
+            }
+            let a: A = args_of(args)?;
+            ok_value(db::create_time_opname(conn, a.input)?)
+        }
         "create_stock_movement_batch" => {
             #[derive(serde::Deserialize)]
             struct A {

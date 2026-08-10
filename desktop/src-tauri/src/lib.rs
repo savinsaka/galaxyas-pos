@@ -185,6 +185,8 @@ pub fn run() {
             commands::list_stock_movements,
             commands::delete_stock_movement,
             commands::create_opname_special,
+            commands::preview_time_opname,
+            commands::create_time_opname,
             commands::create_stock_movement_batch,
             commands::list_stock_movement_batches,
             commands::get_stock_movement_batch,

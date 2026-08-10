@@ -48,6 +48,9 @@ import type {
   StockFlowRow,
   StoreInfo,
   SyncResult,
+  TimeOpnameInput,
+  TimeOpnameResult,
+  TimeOpnameRow,
   TransactionDetail,
   TransactionPage,
   User,
@@ -140,6 +143,12 @@ export const api = {
   // Opname Spesial (satu merek: yang dihitung diset, sisanya dinolkan)
   createOpnameSpecial: (input: OpnameSpecialInput) =>
     invoke<OpnameSpecialResult>("create_opname_special", { input }),
+
+  // Time Opname (hasil hitung dicatat pada titik waktu di masa lalu)
+  previewTimeOpname: (input: TimeOpnameInput) =>
+    invoke<TimeOpnameRow[]>("preview_time_opname", { input }),
+  createTimeOpname: (input: TimeOpnameInput) =>
+    invoke<TimeOpnameResult>("create_time_opname", { input }),
 
   // Batch Item Masuk / Keluar (satu transaksi = banyak barang)
   createStockMovementBatch: (input: StockMovementBatchInput) =>

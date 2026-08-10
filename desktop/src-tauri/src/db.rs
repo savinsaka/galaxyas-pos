@@ -292,7 +292,55 @@ pub fn init_schema(conn: &Connection) -> AppResult<()> {
         [],
     )?;
 
+    // Migrasi: kolom stock_before pada stock_movements — stok "buku" sebelum
+    // mutasi. Dipakai riwayat opname untuk menampilkan Buku → Stok Akhir →
+    // Selisih. Baris lama diisi sekali lewat `isi_stock_before_kosong`.
+    let has_mov_before: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('stock_movements') WHERE name='stock_before'")?
+        .query_row([], |_| Ok(true))
+        .optional()?
+        .unwrap_or(false);
+    if !has_mov_before {
+        conn.execute("ALTER TABLE stock_movements ADD COLUMN stock_before REAL", [])?;
+        isi_stock_before_kosong(conn)?;
+    }
+
     Ok(())
+}
+
+/// Rekonstruksi `stock_before` untuk baris mutasi yang belum punya (baris lama
+/// sebelum kolomnya ada, atau hasil import dari POS 2 yang tidak membawanya).
+///
+/// - `in`/`out`/`sale`: pasti, tinggal balik aritmetikanya dari `stock_after`.
+/// - `opname` (dan jenis lain): stok akhir mutasi terdekat sebelumnya untuk
+///   barang yang sama. NULL kalau barang itu belum punya mutasi sebelumnya —
+///   riwayat menampilkannya sebagai "—", bukan angka tebakan.
+pub fn isi_stock_before_kosong(conn: &Connection) -> AppResult<()> {
+    conn.execute(
+        "UPDATE stock_movements SET stock_before = CASE
+             WHEN kind = 'in' THEN stock_after - qty
+             WHEN kind IN ('out','sale') THEN stock_after + qty
+             ELSE (
+                 SELECT m2.stock_after FROM stock_movements m2
+                 WHERE m2.product_id = stock_movements.product_id
+                   AND (m2.created_at < stock_movements.created_at
+                        OR (m2.created_at = stock_movements.created_at
+                            AND m2.id < stock_movements.id))
+                 ORDER BY m2.created_at DESC, m2.id DESC LIMIT 1
+             )
+         END
+         WHERE stock_before IS NULL",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Stok sekarang (0 kalau barang belum punya baris stok sama sekali).
+fn read_stock(conn: &Connection, product_id: &str) -> AppResult<f64> {
+    Ok(conn
+        .query_row("SELECT qty FROM stock WHERE product_id = ?1", params![product_id], |r| r.get(0))
+        .optional()?
+        .unwrap_or(0.0))
 }
 
 /// Isi data awal (kasir & setting default) bila kosong.
@@ -948,9 +996,12 @@ pub fn create_sale(conn: &mut Connection, input: SaleInput) -> AppResult<Transac
         )?;
         db_tx.execute(
             "INSERT INTO stock_movements
-                (product_id, kind, qty, stock_after, note, user_id, created_at)
-             VALUES (?1, 'sale', ?2, ?3, ?4, ?5, ?6)",
-            params![it.product_id, it.qty, after, format!("Invoice {invoice_no}"), input.cashier_id, now],
+                (product_id, kind, qty, stock_before, stock_after, note, user_id, created_at)
+             VALUES (?1, 'sale', ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                it.product_id, it.qty, after + it.qty, after,
+                format!("Invoice {invoice_no}"), input.cashier_id, now
+            ],
         )?;
     }
     db_tx.commit()?;
@@ -1268,6 +1319,7 @@ pub fn create_stock_movement(
 ) -> AppResult<StockMovement> {
     let now = resolve_created_at(&input.created_at);
     let qty = input.qty.abs();
+    let stock_before = read_stock(conn, &input.product_id)?;
     let stock_after = match input.kind.as_str() {
         "opname" => set_stock(conn, &input.product_id, qty)?,
         "in" => adjust_stock(conn, &input.product_id, qty)?,
@@ -1276,15 +1328,20 @@ pub fn create_stock_movement(
     };
     conn.execute(
         "INSERT INTO stock_movements
-            (product_id, kind, qty, stock_after, note, user_id, created_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7)",
-        params![input.product_id, input.kind, qty, stock_after, input.note, input.user_id, now],
+            (product_id, kind, qty, stock_before, stock_after, note, user_id, created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+        params![
+            input.product_id, input.kind, qty, stock_before, stock_after,
+            input.note, input.user_id, now
+        ],
     )?;
     let id = conn.last_insert_rowid();
-    let product_name: String = conn
-        .query_row("SELECT name FROM products WHERE id = ?1", params![input.product_id], |r| {
-            r.get(0)
-        })
+    let (product_name, barcode) = conn
+        .query_row(
+            "SELECT name, barcode FROM products WHERE id = ?1",
+            params![input.product_id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+        )
         .optional()?
         .unwrap_or_default();
 
@@ -1292,11 +1349,13 @@ pub fn create_stock_movement(
         id,
         product_id: input.product_id,
         product_name,
+        barcode,
         kind: input.kind,
         qty,
         note: input.note,
         user_id: input.user_id,
         created_at: now,
+        stock_before: Some(stock_before),
         stock_after,
     })
 }
@@ -1337,6 +1396,7 @@ pub fn create_stock_movement_batch(
     let mut items_out = Vec::with_capacity(input.items.len());
     for it in &input.items {
         let qty = it.qty.abs();
+        let stock_before = read_stock(&db_tx, &it.product_id)?;
         let stock_after = if input.kind == "in" {
             adjust_stock(&db_tx, &it.product_id, qty)?
         } else {
@@ -1344,9 +1404,12 @@ pub fn create_stock_movement_batch(
         };
         db_tx.execute(
             "INSERT INTO stock_movements
-                (product_id, kind, qty, stock_after, note, user_id, created_at, batch_id)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-            params![it.product_id, input.kind, qty, stock_after, it.note, input.user_id, now, id],
+                (product_id, kind, qty, stock_before, stock_after, note, user_id, created_at, batch_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![
+                it.product_id, input.kind, qty, stock_before, stock_after,
+                it.note, input.user_id, now, id
+            ],
         )?;
         let product_name: String = db_tx
             .query_row("SELECT name FROM products WHERE id = ?1", params![it.product_id], |r| r.get(0))
@@ -1404,12 +1467,13 @@ pub fn create_opname_special(
     let mut counted_ids: Vec<String> = Vec::with_capacity(input.items.len());
     for it in &input.items {
         let qty = it.qty.abs();
+        let stock_before = read_stock(&db_tx, &it.product_id)?;
         let stock_after = set_stock(&db_tx, &it.product_id, qty)?;
         db_tx.execute(
             "INSERT INTO stock_movements
-                (product_id, kind, qty, stock_after, note, user_id, created_at)
-             VALUES (?1,'opname',?2,?3,?4,?5,?6)",
-            params![it.product_id, qty, stock_after, counted_note, input.user_id, now],
+                (product_id, kind, qty, stock_before, stock_after, note, user_id, created_at)
+             VALUES (?1,'opname',?2,?3,?4,?5,?6,?7)",
+            params![it.product_id, qty, stock_before, stock_after, counted_note, input.user_id, now],
         )?;
         counted_ids.push(it.product_id.clone());
     }
@@ -1431,12 +1495,13 @@ pub fn create_opname_special(
         if counted_ids.iter().any(|c| c == &pid) {
             continue;
         }
+        let stock_before = read_stock(&db_tx, &pid)?;
         set_stock(&db_tx, &pid, 0.0)?;
         db_tx.execute(
             "INSERT INTO stock_movements
-                (product_id, kind, qty, stock_after, note, user_id, created_at)
-             VALUES (?1,'opname',0,0,?2,?3,?4)",
-            params![pid, zero_note, input.user_id, now],
+                (product_id, kind, qty, stock_before, stock_after, note, user_id, created_at)
+             VALUES (?1,'opname',0,?2,0,?3,?4,?5)",
+            params![pid, stock_before, zero_note, input.user_id, now],
         )?;
         zeroed += 1;
     }
@@ -1448,6 +1513,196 @@ pub fn create_opname_special(
         zeroed,
         created_at: now,
     })
+}
+
+// ---------- Time Opname ----------
+
+/// Stok buku pada satu titik waktu: stok akhir mutasi terakhir yang waktunya
+/// tidak melewati `at`. 0 kalau barang itu belum punya mutasi sama sekali —
+/// bukan stok hari ini, karena stok hari ini justru hasil mutasi setelahnya.
+fn stok_pada_waktu(conn: &Connection, product_id: &str, at: &str) -> AppResult<f64> {
+    Ok(conn
+        .query_row(
+            "SELECT stock_after FROM stock_movements
+             WHERE product_id = ?1 AND created_at <= ?2
+             ORDER BY created_at DESC, id DESC LIMIT 1",
+            params![product_id, at],
+            |r| r.get(0),
+        )
+        .optional()?
+        .unwrap_or(0.0))
+}
+
+/// Hasil pemutaran ulang mutasi setelah satu titik waktu.
+struct Rekalkulasi {
+    /// (id mutasi, stock_before baru, stock_after baru) — kosong saat pratinjau dipakai.
+    baris: Vec<(i64, f64, f64)>,
+    /// Stok akhir barang setelah semua mutasi itu diterapkan.
+    akhir: f64,
+    /// Ada opname lain di antaranya, jadi hasil hitung ini tidak menggeser stok hari ini.
+    ada_opname_lain: bool,
+}
+
+/// Putar ulang semua mutasi yang terjadi SETELAH `at` di atas stok `mulai`.
+///
+/// `in` menambah, `out`/`sale` mengurangi, dan `opname` adalah angka mutlak —
+/// ia me-reset hitungan (opname yang lebih baru selalu menang). Mutasi yang
+/// `created_at`-nya persis sama dengan `at` sengaja tidak ikut: id-nya lebih
+/// kecil dari baris time opname yang baru disisipkan, jadi ia dianggap terjadi
+/// lebih dulu — sama dengan cara `stok_pada_waktu` membaca.
+fn hitung_ulang_setelah(
+    conn: &Connection,
+    product_id: &str,
+    at: &str,
+    mulai: f64,
+) -> AppResult<Rekalkulasi> {
+    let mut stmt = conn.prepare(
+        "SELECT id, kind, qty FROM stock_movements
+         WHERE product_id = ?1 AND created_at > ?2
+         ORDER BY created_at ASC, id ASC",
+    )?;
+    let mutasi = stmt
+        .query_map(params![product_id, at], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, f64>(2)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut berjalan = mulai;
+    let mut baris = Vec::with_capacity(mutasi.len());
+    let mut ada_opname_lain = false;
+    for (id, kind, qty) in mutasi {
+        let sebelum = berjalan;
+        berjalan = match kind.as_str() {
+            "in" => berjalan + qty,
+            "out" | "sale" => berjalan - qty,
+            "opname" => {
+                ada_opname_lain = true;
+                qty
+            }
+            // Jenis tak dikenal (mis. sisa data lama): jangan tebak arahnya,
+            // biarkan stok berjalan apa adanya.
+            _ => berjalan,
+        };
+        baris.push((id, sebelum, berjalan));
+    }
+    Ok(Rekalkulasi { baris, akhir: berjalan, ada_opname_lain })
+}
+
+/// Nama & barcode barang untuk baris hasil time opname.
+fn produk_ringkas(conn: &Connection, product_id: &str) -> AppResult<(String, Option<String>)> {
+    Ok(conn
+        .query_row(
+            "SELECT name, barcode FROM products WHERE id = ?1",
+            params![product_id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+        )
+        .optional()?
+        .unwrap_or_default())
+}
+
+fn validasi_waktu_opname(created_at: &str) -> AppResult<String> {
+    let waktu = chrono::DateTime::parse_from_rfc3339(created_at)
+        .map_err(|_| AppError::Other("waktu opname tidak valid".into()))?;
+    if waktu.with_timezone(&Utc) > Utc::now() {
+        return Err(AppError::Other(
+            "waktu opname tidak boleh di masa depan — pilih tanggal/jam yang sudah lewat.".into(),
+        ));
+    }
+    Ok(created_at.to_string())
+}
+
+/// Pratinjau time opname: hitung dampaknya tanpa mengubah apa pun.
+pub fn preview_time_opname(
+    conn: &Connection,
+    input: crate::models::TimeOpnameInput,
+) -> AppResult<Vec<crate::models::TimeOpnameRow>> {
+    let at = validasi_waktu_opname(&input.created_at)?;
+    let mut rows = Vec::with_capacity(input.items.len());
+    for it in &input.items {
+        let qty = it.qty.abs();
+        let book = stok_pada_waktu(conn, &it.product_id, &at)?;
+        let rek = hitung_ulang_setelah(conn, &it.product_id, &at, qty)?;
+        let (product_name, barcode) = produk_ringkas(conn, &it.product_id)?;
+        rows.push(crate::models::TimeOpnameRow {
+            product_id: it.product_id.clone(),
+            product_name,
+            barcode,
+            book,
+            counted: qty,
+            diff: qty - book,
+            stock_now_before: read_stock(conn, &it.product_id)?,
+            stock_now_after: rek.akhir,
+            overridden_by_later_opname: rek.ada_opname_lain,
+        });
+    }
+    Ok(rows)
+}
+
+/// Simpan opname pada titik waktu tertentu di masa lalu, lalu putar ulang semua
+/// mutasi sesudahnya supaya stok hari ini ikut benar.
+///
+/// Contohnya: berkas hitung kertas selesai jam 12:05 berisi 50 pcs, tapi baru
+/// diinput setelah kasir menjual 9 pcs jam 13:00 — stok hari ini jadi 41, bukan
+/// 50. Semuanya satu transaksi DB: opname tidak bisa di-undo, jadi jangan
+/// sampai separuh barang tergeser dan separuhnya tidak.
+pub fn create_time_opname(
+    conn: &mut Connection,
+    input: crate::models::TimeOpnameInput,
+) -> AppResult<crate::models::TimeOpnameResult> {
+    if input.items.is_empty() {
+        return Err(AppError::Other("tidak ada barang untuk di-opname".into()));
+    }
+    let at = validasi_waktu_opname(&input.created_at)?;
+    let catatan = input
+        .note
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "Time opname".into());
+
+    let db_tx = conn.transaction()?;
+    let mut rows = Vec::with_capacity(input.items.len());
+    for it in &input.items {
+        let qty = it.qty.abs();
+        let book = stok_pada_waktu(&db_tx, &it.product_id, &at)?;
+        let stock_now_before = read_stock(&db_tx, &it.product_id)?;
+        let catatan_baris = it
+            .note
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| catatan.clone());
+
+        db_tx.execute(
+            "INSERT INTO stock_movements
+                (product_id, kind, qty, stock_before, stock_after, note, user_id, created_at)
+             VALUES (?1,'opname',?2,?3,?2,?4,?5,?6)",
+            params![it.product_id, qty, book, catatan_baris, input.user_id, at],
+        )?;
+
+        let rek = hitung_ulang_setelah(&db_tx, &it.product_id, &at, qty)?;
+        for (id, sebelum, sesudah) in &rek.baris {
+            db_tx.execute(
+                "UPDATE stock_movements SET stock_before = ?2, stock_after = ?3 WHERE id = ?1",
+                params![id, sebelum, sesudah],
+            )?;
+        }
+        set_stock(&db_tx, &it.product_id, rek.akhir)?;
+
+        let (product_name, barcode) = produk_ringkas(&db_tx, &it.product_id)?;
+        rows.push(crate::models::TimeOpnameRow {
+            product_id: it.product_id.clone(),
+            product_name,
+            barcode,
+            book,
+            counted: qty,
+            diff: qty - book,
+            stock_now_before,
+            stock_now_after: rek.akhir,
+            overridden_by_later_opname: rek.ada_opname_lain,
+        });
+    }
+    db_tx.commit()?;
+
+    Ok(crate::models::TimeOpnameResult { created_at: at, rows })
 }
 
 fn stock_movement_batch_where(
@@ -1656,6 +1911,7 @@ pub fn update_stock_movement_batch(
     let mut items_out = Vec::with_capacity(items.len());
     for it in &items {
         let qty = it.qty.abs();
+        let stock_before = read_stock(&db_tx, &it.product_id)?;
         let stock_after = if kind == "in" {
             adjust_stock(&db_tx, &it.product_id, qty)?
         } else {
@@ -1663,9 +1919,12 @@ pub fn update_stock_movement_batch(
         };
         db_tx.execute(
             "INSERT INTO stock_movements
-                (product_id, kind, qty, stock_after, note, user_id, created_at, batch_id)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-            params![it.product_id, kind, qty, stock_after, it.note, user_id, created_at, id],
+                (product_id, kind, qty, stock_before, stock_after, note, user_id, created_at, batch_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![
+                it.product_id, kind, qty, stock_before, stock_after,
+                it.note, user_id, created_at, id
+            ],
         )?;
         let product_name: String = db_tx
             .query_row("SELECT name FROM products WHERE id = ?1", params![it.product_id], |r| r.get(0))
@@ -1734,8 +1993,8 @@ pub fn list_stock_movements(
     limit: i64,
 ) -> AppResult<Vec<StockMovement>> {
     let mut sql = String::from(
-        "SELECT m.id, m.product_id, COALESCE(p.name,'') AS product_name, m.kind, m.qty,
-                m.stock_after, m.note, m.user_id, m.created_at
+        "SELECT m.id, m.product_id, COALESCE(p.name,'') AS product_name, p.barcode, m.kind, m.qty,
+                m.stock_before, m.stock_after, m.note, m.user_id, m.created_at
          FROM stock_movements m LEFT JOIN products p ON p.id = m.product_id WHERE 1=1",
     );
     let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -1766,8 +2025,10 @@ pub fn list_stock_movements(
                 id: r.get("id")?,
                 product_id: r.get("product_id")?,
                 product_name: r.get("product_name")?,
+                barcode: r.get("barcode")?,
                 kind: r.get("kind")?,
                 qty: r.get("qty")?,
+                stock_before: r.get("stock_before")?,
                 stock_after: r.get("stock_after")?,
                 note: r.get("note")?,
                 user_id: r.get("user_id")?,
@@ -1962,10 +2223,10 @@ pub fn update_transaction(
         )?;
         db_tx.execute(
             "INSERT INTO stock_movements
-                (product_id, kind, qty, stock_after, note, user_id, created_at)
-             VALUES (?1, 'sale', ?2, ?3, ?4, ?5, ?6)",
+                (product_id, kind, qty, stock_before, stock_after, note, user_id, created_at)
+             VALUES (?1, 'sale', ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
-                it.product_id, it.qty, after,
+                it.product_id, it.qty, after + it.qty, after,
                 format!("Invoice {}", existing.invoice_no), existing.cashier_id, now
             ],
         )?;
@@ -2670,8 +2931,8 @@ pub fn stock_flow_detail(
         .unwrap_or(0.0);
 
     let mut stmt = conn.prepare(
-        "SELECT m.id, m.product_id, COALESCE(p.name,'') AS product_name, m.kind, m.qty,
-                m.stock_after, m.note, m.user_id, m.created_at
+        "SELECT m.id, m.product_id, COALESCE(p.name,'') AS product_name, p.barcode, m.kind, m.qty,
+                m.stock_before, m.stock_after, m.note, m.user_id, m.created_at
          FROM stock_movements m LEFT JOIN products p ON p.id = m.product_id
          WHERE m.product_id = ?1
            AND date(m.created_at) >= date(?2) AND date(m.created_at) <= date(?3)
@@ -2683,8 +2944,10 @@ pub fn stock_flow_detail(
                 id: r.get("id")?,
                 product_id: r.get("product_id")?,
                 product_name: r.get("product_name")?,
+                barcode: r.get("barcode")?,
                 kind: r.get("kind")?,
                 qty: r.get("qty")?,
+                stock_before: r.get("stock_before")?,
                 stock_after: r.get("stock_after")?,
                 note: r.get("note")?,
                 user_id: r.get("user_id")?,
@@ -2898,5 +3161,172 @@ mod tests {
             },
         );
         assert!(hasil.is_err(), "merek kosong harus ditolak, bukan menolkan seluruh toko");
+    }
+
+    // ---------- Time Opname ----------
+
+    use crate::models::{TimeOpnameInput, TimeOpnameItemInput};
+
+    fn time_opname(product_id: &str, qty: f64, at: &str) -> TimeOpnameInput {
+        TimeOpnameInput {
+            created_at: at.into(),
+            note: Some("Berkas opname kertas".into()),
+            user_id: Some("admin".into()),
+            items: vec![TimeOpnameItemInput { product_id: product_id.into(), qty, note: None }],
+        }
+    }
+
+    fn mutasi(conn: &Connection, product_id: &str) -> Vec<(String, f64, Option<f64>, f64)> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT kind, qty, stock_before, stock_after FROM stock_movements
+                 WHERE product_id = ?1 ORDER BY created_at ASC, id ASC",
+            )
+            .expect("siapkan");
+        let rows = stmt
+            .query_map(params![product_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })
+            .expect("baca")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("kumpulkan");
+        rows
+    }
+
+    /// Skenario pemilik #1: stok sistem 0, tgl 11 barang masuk 3 (stok jadi 3),
+    /// lalu ketahuan ada berkas opname tgl 9 berisi 12 → stok hari ini 15.
+    #[test]
+    fn time_opname_mundur_lalu_barang_masuk_diputar_ulang_di_atasnya() {
+        let mut conn = test_db();
+        let id = produk(&conn, "Kopi A", "MEREK-X", 0.0, true);
+
+        create_stock_movement(
+            &conn,
+            StockMovementInput {
+                product_id: id.clone(),
+                kind: "in".into(),
+                qty: 3.0,
+                note: None,
+                user_id: None,
+                created_at: Some("2026-08-03T02:00:00Z".into()),
+            },
+        )
+        .expect("barang masuk");
+        assert_eq!(stok(&conn, &id), 3.0);
+
+        let hasil = create_time_opname(&mut conn, time_opname(&id, 12.0, "2026-08-01T02:00:00Z"))
+            .expect("time opname");
+
+        let baris = &hasil.rows[0];
+        assert_eq!(baris.book, 0.0, "di titik waktu itu belum ada mutasi apa pun");
+        assert_eq!(baris.counted, 12.0);
+        assert_eq!(baris.diff, 12.0);
+        assert_eq!(baris.stock_now_before, 3.0);
+        assert_eq!(baris.stock_now_after, 15.0);
+        assert!(!baris.overridden_by_later_opname);
+        assert_eq!(stok(&conn, &id), 15.0, "12 hasil hitung + 3 barang masuk sesudahnya");
+
+        // Riwayat ikut benar: opname di tanggal lama, barang masuk menumpuk di atasnya.
+        let m = mutasi(&conn, &id);
+        assert_eq!(m[0], ("opname".into(), 12.0, Some(0.0), 12.0));
+        assert_eq!(m[1], ("in".into(), 3.0, Some(12.0), 15.0));
+    }
+
+    /// Skenario pemilik #2: jam 12:00 stok 100, jam 13:00 kasir jual 9 (stok 91),
+    /// ternyata berkas hitung selesai jam 12:05 berisi 50 → stok hari ini 41.
+    #[test]
+    fn time_opname_sebelum_penjualan_membuat_penjualan_itu_dihitung_ulang() {
+        let mut conn = test_db();
+        let id = produk(&conn, "Kopi A", "MEREK-X", 0.0, true);
+
+        create_stock_movement(
+            &conn,
+            StockMovementInput {
+                product_id: id.clone(),
+                kind: "opname".into(),
+                qty: 100.0,
+                note: None,
+                user_id: None,
+                created_at: Some("2026-08-02T12:00:00Z".into()),
+            },
+        )
+        .expect("opname pagi");
+
+        let mut jual = penjualan(&id, 9.0, None);
+        jual.created_at = Some("2026-08-02T13:00:00Z".into());
+        create_sale(&mut conn, jual).expect("penjualan kasir");
+        assert_eq!(stok(&conn, &id), 91.0);
+
+        let hasil = create_time_opname(&mut conn, time_opname(&id, 50.0, "2026-08-02T12:05:00Z"))
+            .expect("time opname");
+
+        let baris = &hasil.rows[0];
+        assert_eq!(baris.book, 100.0, "buku jam 12:05 = hasil opname jam 12:00");
+        assert_eq!(baris.diff, -50.0);
+        assert_eq!(baris.stock_now_before, 91.0);
+        assert_eq!(baris.stock_now_after, 41.0);
+        assert_eq!(stok(&conn, &id), 41.0, "50 hasil hitung − 9 terjual sesudahnya");
+
+        let m = mutasi(&conn, &id);
+        assert_eq!(m[1], ("opname".into(), 50.0, Some(100.0), 50.0), "baris jam 12:05");
+        assert_eq!(m[2], ("sale".into(), 9.0, Some(50.0), 41.0), "penjualan dihitung ulang");
+    }
+
+    /// Kalau barangnya sudah pernah di-opname lagi SETELAH titik waktu itu,
+    /// riwayat lama tetap tercatat tapi stok hari ini mengikuti opname terbaru.
+    #[test]
+    fn time_opname_tidak_menggeser_stok_kalau_ada_opname_lebih_baru() {
+        let mut conn = test_db();
+        let id = produk(&conn, "Kopi A", "MEREK-X", 0.0, true);
+
+        create_stock_movement(
+            &conn,
+            StockMovementInput {
+                product_id: id.clone(),
+                kind: "opname".into(),
+                qty: 20.0,
+                note: None,
+                user_id: None,
+                created_at: Some("2026-08-03T02:00:00Z".into()),
+            },
+        )
+        .expect("opname yang lebih baru");
+
+        let hasil = create_time_opname(&mut conn, time_opname(&id, 12.0, "2026-08-01T02:00:00Z"))
+            .expect("time opname");
+
+        let baris = &hasil.rows[0];
+        assert!(baris.overridden_by_later_opname, "harus ditandai supaya pemakai tahu");
+        assert_eq!(baris.stock_now_after, 20.0);
+        assert_eq!(stok(&conn, &id), 20.0, "opname yang lebih baru tetap menang");
+
+        let m = mutasi(&conn, &id);
+        assert_eq!(m[0], ("opname".into(), 12.0, Some(0.0), 12.0), "riwayat lama tetap tercatat");
+        assert_eq!(m[1], ("opname".into(), 20.0, Some(12.0), 20.0));
+    }
+
+    #[test]
+    fn time_opname_menolak_waktu_masa_depan_dan_daftar_kosong() {
+        let mut conn = test_db();
+        let id = produk(&conn, "Kopi A", "MEREK-X", 5.0, true);
+
+        let besok = (Utc::now() + chrono::Duration::days(1)).to_rfc3339();
+        assert!(
+            create_time_opname(&mut conn, time_opname(&id, 3.0, &besok)).is_err(),
+            "opname di masa depan tidak masuk akal"
+        );
+        assert!(
+            create_time_opname(&mut conn, time_opname(&id, 3.0, "kemarin sore")).is_err(),
+            "waktu ngawur harus ditolak, bukan diam-diam jadi waktu sekarang"
+        );
+
+        let kosong = TimeOpnameInput {
+            created_at: "2026-08-01T02:00:00Z".into(),
+            note: None,
+            user_id: None,
+            items: vec![],
+        };
+        assert!(create_time_opname(&mut conn, kosong).is_err());
+        assert_eq!(stok(&conn, &id), 5.0, "tidak boleh ada yang tergeser");
     }
 }

@@ -10,6 +10,24 @@ export function formatPeriodLabel(from: string, to: string): string {
   return `Periode: ${fmt(from || to)}`;
 }
 
+/** Jam sekarang dalam format HH:MM (untuk isian `input type="time"`). */
+export const nowHHMM = () => {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+};
+
+/**
+ * Gabungkan tanggal (YYYY-MM-DD) + jam yang DIPILIH sendiri (HH:MM atau
+ * HH:MM:SS) menjadi datetime ISO. Dipakai Time Opname, yang jamnya justru
+ * bukan jam sekarang. Kembalikan "" kalau isiannya belum lengkap/valid.
+ */
+export function combineDateAndClock(dateStr: string, timeStr: string): string {
+  const [y, m, d] = (dateStr || "").split("-").map(Number);
+  const [hh, mm, ss] = (timeStr || "").split(":").map(Number);
+  if (!y || !m || !d || Number.isNaN(hh) || Number.isNaN(mm)) return "";
+  return new Date(y, m - 1, d, hh, mm, ss || 0, 0).toISOString();
+}
+
 /** Gabungkan tanggal terpilih (YYYY-MM-DD, bisa mundur) + jam saat ini menjadi datetime ISO. */
 export function combineDateAndTime(dateStr: string, time: Date): string {
   const [y, m, d] = dateStr.split("-").map(Number);

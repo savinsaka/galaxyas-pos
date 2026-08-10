@@ -201,11 +201,18 @@ pub struct StockMovement {
     pub id: i64,
     pub product_id: String,
     pub product_name: String,
+    /// Barcode barang (ikut ditampilkan di bawah nama pada riwayat opname).
+    #[serde(default)]
+    pub barcode: Option<String>,
     pub kind: String, // in | out | opname | sale
     pub qty: f64,
     pub note: Option<String>,
     pub user_id: Option<String>,
     pub created_at: String,
+    /// Stok "buku" sesaat sebelum mutasi ini dicatat. `None` hanya untuk baris
+    /// lama yang tidak bisa direkonstruksi (barang belum punya mutasi sebelumnya).
+    #[serde(default)]
+    pub stock_before: Option<f64>,
     pub stock_after: f64,
 }
 
@@ -220,6 +227,55 @@ pub struct StockMovementInput {
     /// mundur (tanggal kemarin dsb). Kosong = pakai waktu sekarang.
     #[serde(default)]
     pub created_at: Option<String>,
+}
+
+// ---------- Time Opname (opname yang dicatat mundur ke titik waktu tertentu) ----------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimeOpnameItemInput {
+    pub product_id: String,
+    /// Hasil hitung fisik pada `created_at` — angka mutlak, bukan selisih.
+    pub qty: f64,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimeOpnameInput {
+    /// Waktu barang itu benar-benar dihitung (RFC3339). Wajib — beda dari menu
+    /// opname lain yang boleh mengosongkannya dan jatuh ke waktu sekarang.
+    pub created_at: String,
+    #[serde(default)]
+    pub note: Option<String>,
+    #[serde(default)]
+    pub user_id: Option<String>,
+    pub items: Vec<TimeOpnameItemInput>,
+}
+
+/// Satu barang dalam pratinjau/hasil time opname — cukup untuk menjelaskan ke
+/// pemakai apa yang berubah, di titik waktu itu maupun pada stok hari ini.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimeOpnameRow {
+    pub product_id: String,
+    pub product_name: String,
+    pub barcode: Option<String>,
+    /// Stok buku tepat sebelum titik waktu opname.
+    pub book: f64,
+    pub counted: f64,
+    /// `counted - book` — selisih pada titik waktu itu, bukan terhadap stok hari ini.
+    pub diff: f64,
+    pub stock_now_before: f64,
+    /// Stok setelah semua mutasi sesudah titik waktu itu diputar ulang.
+    pub stock_now_after: f64,
+    /// Ada opname lain SETELAH titik waktu ini, jadi stok hari ini ditentukan
+    /// opname yang lebih baru itu — hitungan di sini tidak menggesernya.
+    pub overridden_by_later_opname: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimeOpnameResult {
+    pub created_at: String,
+    pub rows: Vec<TimeOpnameRow>,
 }
 
 // ---------- Batch Item Masuk / Keluar ----------

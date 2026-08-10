@@ -960,6 +960,10 @@ pub fn impor(conn: &mut Connection, db_path: &Path, data: &[u8]) -> AppResult<Ha
     );
     baris.insert("expenses".into(), sisip_expenses(&tx, &bundel)?);
 
+    // Bundel POS 2 tidak membawa stok "buku" sebelum mutasi — rekonstruksi
+    // seperti baris lama supaya riwayat opname tetap bisa menampilkan selisih.
+    crate::db::isi_stock_before_kosong(&tx)?;
+
     simpan_lampiran(&tx, &bundel, &mut peringatan)?;
 
     tx.commit()?;

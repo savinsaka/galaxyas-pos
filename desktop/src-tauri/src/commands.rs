@@ -486,6 +486,33 @@ pub async fn create_opname_special(
     db::create_opname_special(&mut conn, input)
 }
 
+/// Time Opname: catat hasil hitung pada titik waktu tertentu di masa lalu.
+/// Pratinjau dulu (murni baca) supaya pemakai lihat dampaknya ke stok hari ini
+/// sebelum menyimpan — opname tidak bisa dibatalkan.
+#[tauri::command]
+pub async fn preview_time_opname(
+    state: State<'_, AppState>,
+    input: crate::models::TimeOpnameInput,
+) -> AppResult<Vec<crate::models::TimeOpnameRow>> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "preview_time_opname", serde_json::json!({ "input": input })).await;
+    }
+    let conn = state.lock()?;
+    db::preview_time_opname(&conn, input)
+}
+
+#[tauri::command]
+pub async fn create_time_opname(
+    state: State<'_, AppState>,
+    input: crate::models::TimeOpnameInput,
+) -> AppResult<crate::models::TimeOpnameResult> {
+    if let Some(remote) = state.remote_config() {
+        return crate::lan::call(&remote, "create_time_opname", serde_json::json!({ "input": input })).await;
+    }
+    let mut conn = state.lock()?;
+    db::create_time_opname(&mut conn, input)
+}
+
 // ---------- Batch Item Masuk / Keluar ----------
 
 #[tauri::command]

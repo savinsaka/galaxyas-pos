@@ -265,11 +265,14 @@ export interface StockMovement {
   id: number;
   product_id: string;
   product_name: string;
+  barcode: string | null;
   kind: StockKind;
   qty: number;
   note: string | null;
   user_id: string | null;
   created_at: string;
+  /** Stok buku sebelum mutasi. null = baris lama yang tidak bisa direkonstruksi. */
+  stock_before: number | null;
   stock_after: number;
 }
 
@@ -301,6 +304,40 @@ export interface OpnameSpecialResult {
   counted: number;
   zeroed: number;
   created_at: string;
+}
+
+/** Time Opname: hasil hitung dicatat pada titik waktu tertentu di masa lalu. */
+export interface TimeOpnameItemInput {
+  product_id: string;
+  qty: number;
+  note?: string | null;
+}
+
+export interface TimeOpnameInput {
+  /** Wajib (ISO-8601) — waktu barang itu benar-benar dihitung. */
+  created_at: string;
+  note?: string | null;
+  user_id?: string | null;
+  items: TimeOpnameItemInput[];
+}
+
+export interface TimeOpnameRow {
+  product_id: string;
+  product_name: string;
+  barcode: string | null;
+  /** Stok buku tepat sebelum titik waktu opname. */
+  book: number;
+  counted: number;
+  diff: number;
+  stock_now_before: number;
+  stock_now_after: number;
+  /** Ada opname lain sesudah titik waktu itu → stok hari ini tidak tergeser. */
+  overridden_by_later_opname: boolean;
+}
+
+export interface TimeOpnameResult {
+  created_at: string;
+  rows: TimeOpnameRow[];
 }
 
 export interface StockMovementBatchItemInput {
