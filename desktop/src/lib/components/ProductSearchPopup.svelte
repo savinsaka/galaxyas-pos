@@ -8,10 +8,13 @@
 
   let {
     initialQuery = "",
+    showStock = true,
     onClose,
     onPick,
   }: {
     initialQuery?: string;
+    /** Set false untuk layar yang tidak boleh membocorkan stok (mis. Cek Harga). */
+    showStock?: boolean;
     onClose: () => void;
     onPick: (p: ProductWithStock) => void;
   } = $props();
@@ -73,11 +76,13 @@
         <div class="sr-empty text-dim">Mencari…</div>
       {:else}
         {#each results as p, i (p.id)}
-          <button class="sr-row" class:active={i === highlightIndex} data-sr-index={i} onclick={() => onPick(p)}>
+          <button class="sr-row" class:no-stock={!showStock} class:active={i === highlightIndex} data-sr-index={i} onclick={() => onPick(p)}>
             <span class="sr-name">{p.name}</span>
             <span class="sr-meta text-dim">{p.barcode ?? ""}</span>
             <span class="sr-price mono">{formatIDR(p.sell_price)}</span>
-            <span class="sr-stock text-dim">stok {formatQty(p.stock_qty)}</span>
+            {#if showStock}
+              <span class="sr-stock text-dim">stok {formatQty(p.stock_qty)}</span>
+            {/if}
           </button>
         {:else}
           <div class="sr-empty text-dim">{query.trim() ? "Tidak ditemukan." : "Ketik untuk mencari…"}</div>
@@ -113,6 +118,7 @@
     padding: 0.45rem 0.8rem;
     font-size: 0.85rem;
   }
+  .sr-row.no-stock { grid-template-columns: 1fr auto auto; }
   .sr-row:last-child { border-bottom: none; }
   .sr-row.active { background: var(--baby-blue-soft); }
   .sr-name { font-weight: 600; }

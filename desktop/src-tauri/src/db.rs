@@ -297,7 +297,8 @@ pub fn init_schema(conn: &Connection) -> AppResult<()> {
 
 /// Isi data awal (kasir & setting default) bila kosong.
 pub fn seed_defaults(conn: &Connection) -> AppResult<()> {
-    const ALL_PERMS: &str = r#"["master","penjualan","persediaan","laporan","pengaturan"]"#;
+    const ALL_PERMS: &str =
+        r#"["master","penjualan","persediaan","laporan","pengaturan","cek-harga"]"#;
     let user_count: i64 = conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))?;
     if user_count == 0 {
         conn.execute(

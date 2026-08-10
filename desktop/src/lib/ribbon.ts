@@ -131,6 +131,21 @@ export const RIBBON: RibbonCategory[] = [
     ],
   },
   {
+    // Modul berdiri sendiri: akun yang cuma dicentang "Cek Harga" hanya melihat
+    // tab ini — tidak ada kasir, stok, atau laporan.
+    key: "cek-harga",
+    label: "Cek Harga",
+    perm: "cek-harga",
+    groups: [
+      {
+        label: "Harga",
+        actions: [
+          { key: "cek-harga", label: "Cek Harga", icon: "🔍", viewKey: "cek-harga", title: "Cek Harga", singleton: true },
+        ],
+      },
+    ],
+  },
+  {
     key: "pengaturan",
     label: "Pengaturan",
     perm: "pengaturan",
@@ -146,6 +161,7 @@ export const RIBBON: RibbonCategory[] = [
           { key: "pengaturan-kasir", label: "Preferensi Kasir", icon: "🧮", viewKey: "pengaturan-kasir", title: "Preferensi Kasir", singleton: true, props: { section: "kasir" } },
           { key: "pengaturan-lanjutan", label: "Lanjutan", icon: "⚠️", viewKey: "pengaturan-lanjutan", title: "Lanjutan", singleton: true, props: { section: "lanjutan" } },
           { key: "hak-akses", label: "Hak Akses", icon: "🔐", viewKey: "hak-akses", title: "Hak Akses & Pengguna", singleton: true },
+          { key: "migrasi", label: "Migrasi Data", icon: "🚚", viewKey: "migrasi", title: "Migrasi Data Toko", singleton: true },
         ],
       },
     ],

@@ -4,6 +4,7 @@ import DataBarang from "./DataBarang.svelte";
 import TambahBarang from "./TambahBarang.svelte";
 import DataSheet from "./DataSheet.svelte";
 import ImportExport from "./ImportExport.svelte";
+import Migrasi from "./Migrasi.svelte";
 import DiskonPeriodik from "./DiskonPeriodik.svelte";
 import DaftarMerek from "./DaftarMerek.svelte";
 import SyncCenter from "./SyncCenter.svelte";
@@ -29,12 +30,14 @@ import HakAkses from "./HakAkses.svelte";
 import DaftarPelanggan from "./DaftarPelanggan.svelte";
 import Pengeluaran from "./Pengeluaran.svelte";
 import ShiftKasir from "./ShiftKasir.svelte";
+import CekHarga from "./CekHarga.svelte";
 
 export const VIEW_REGISTRY: Record<string, Component<any>> = {
   "data-barang": DataBarang,
   "tambah-barang": TambahBarang,
   "data-sheet": DataSheet,
   "import-export": ImportExport,
+  migrasi: Migrasi,
   diskon: DiskonPeriodik,
   "daftar-merek": DaftarMerek,
   sync: SyncCenter,
@@ -66,4 +69,5 @@ export const VIEW_REGISTRY: Record<string, Component<any>> = {
   "daftar-pelanggan": DaftarPelanggan,
   pengeluaran: Pengeluaran,
   "shift-kasir": ShiftKasir,
+  "cek-harga": CekHarga,
 };

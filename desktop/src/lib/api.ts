@@ -14,6 +14,9 @@ import type {
   Expense,
   ExpenseInput,
   LanServerStatus,
+  MigrationExport,
+  MigrationResult,
+  MigrationSource,
   MobileDevice,
   OpenShiftInput,
   OpnameSpecialInput,
@@ -210,6 +213,15 @@ export const api = {
     invoke<void>("print_escpos_to", { printer, bytes: Array.from(bytes) }),
   openPrintWindow: (html: string, css: string, title: string, width: number, height: number) =>
     invoke<void>("open_print_window", { html, css, title, width, height }),
+
+  // Migrasi toko: seluruh isi satu toko keluar-masuk lewat berkas `.gpos`.
+  // Isi berkas TIDAK melewati layar saat ekspor — Rust yang menulisnya, karena
+  // di dalamnya ada seluruh harga modal dan riwayat toko.
+  migrationExport: () => invoke<MigrationExport>("migration_export"),
+  migrationInspect: (bytes: Uint8Array) =>
+    invoke<MigrationSource>("migration_inspect", { bytes: Array.from(bytes) }),
+  migrationImport: (bytes: Uint8Array, confirm: string) =>
+    invoke<MigrationResult>("migration_import", { bytes: Array.from(bytes), confirm }),
 
   // Sinkronisasi (manual)
   syncPush: () => invoke<SyncResult>("sync_push"),

@@ -1,6 +1,6 @@
 [package]
 name = "desktop"
-version = "1.3.4"
+version = "1.3.5"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -50,6 +50,13 @@ qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 tokio = { version = "1", features = ["time", "sync", "macros", "rt"] }
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake", "native-tls"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+# Migrasi toko lewat berkas `.gpos` (lihat `src/migrasi.rs`). Ketiganya wajib
+# cocok byte demi byte dengan sisi Python di repo `Gpos2`, jadi yang dipakai
+# primitif baku — bukan susunan sendiri, yang mustahil dicocokkan lewat vektor
+# uji antar bahasa. `hkdf` menarik `hmac`, dan `sha2` sudah ada di atas.
+aes-gcm = "0.10"
+hkdf = "0.12"
+flate2 = "1"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

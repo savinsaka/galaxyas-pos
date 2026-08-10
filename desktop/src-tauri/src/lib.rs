@@ -2,6 +2,7 @@ mod commands;
 mod db;
 mod error;
 mod lan;
+mod migrasi;
 mod models;
 mod pull;
 mod relay;
@@ -165,6 +166,9 @@ pub fn run() {
             commands::delete_product,
             commands::dedupe_products,
             commands::reset_data,
+            commands::migration_export,
+            commands::migration_inspect,
+            commands::migration_import,
             commands::find_by_barcode,
             commands::adjust_stock,
             commands::set_stock,

@@ -234,7 +234,13 @@ export interface DedupeResult {
   details: DedupeDetail[];
 }
 
-export type ModuleKey = "master" | "penjualan" | "persediaan" | "laporan" | "pengaturan";
+export type ModuleKey =
+  | "master"
+  | "penjualan"
+  | "persediaan"
+  | "laporan"
+  | "pengaturan"
+  | "cek-harga";
 
 export interface User {
   id: string;
@@ -515,4 +521,42 @@ export interface StockFlowDetail {
   current_stock: number;
   opening: number;
   rows: StockMovement[];
+}
+
+// --- Migrasi toko (berkas .gpos) -------------------------------------------
+// Bentuknya dikunci `contracts/MIGRASI.md` di repo Gpos2 dan dipakai dua
+// aplikasi. Yang berubah di sini berubah juga di `src-tauri/src/migrasi.rs`
+// dan di sisi Python — bukan di sini saja.
+
+/** Asal-usul satu berkas `.gpos`, dibaca dari kepalanya yang terbuka. */
+export interface MigrationSource {
+  /** `gpos1` (aplikasi ini) atau `gpos2`. */
+  app: string;
+  versiApp: string;
+  versiBundel: number;
+  dibuat: string;
+  tokoId: string;
+  tokoNama: string;
+  jumlah: Record<string, number>;
+  omzetTotal: number;
+  penjualanPertama: string | null;
+  penjualanTerakhir: string | null;
+  /** Kalimat dari aplikasi pembuat: apa yang akan hilang kalau diimpor ke sini. */
+  catatan: string[];
+}
+
+export interface MigrationResult {
+  berkas: string;
+  ukuran: number;
+  sumber: MigrationSource;
+  baris: Record<string, number>;
+  dilewati: Record<string, number>;
+  peringatan: string[];
+  /** Letak salinan database sebelum diganti — jalan pulang kalau salah berkas. */
+  cadangan: string | null;
+}
+
+export interface MigrationExport {
+  path: string;
+  hasil: MigrationResult;
 }

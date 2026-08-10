@@ -199,6 +199,99 @@ pub fn reset_data(state: State<'_, AppState>, confirm: String) -> AppResult<()> 
     db::reset_data(&conn)
 }
 
+// ---------- Migrasi toko (berkas .gpos) ----------
+
+/// Letak berkas hasil ekspor + laporannya.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationExport {
+    pub path: String,
+    pub hasil: crate::migrasi::HasilMigrasi,
+}
+
+/// Migrasi selalu bekerja pada **database PC ini**, jadi ia dilarang saat PC ini
+/// sedang jadi klien Server Pusat.
+///
+/// Kalau tidak dijaga, ekspor akan mengambil isi SQLite lokal yang sejak PC ini
+/// jadi klien tidak lagi dipakai berjualan — berkasnya jadi kosong atau basi,
+/// dan tidak ada satu pun galat yang mengatakannya. Impor lebih buruk: ia
+/// menulis ke database yang tidak dibaca siapa pun, lalu terlihat berhasil.
+fn hanya_database_pc_ini(state: &State<'_, AppState>) -> AppResult<()> {
+    if state.remote_config().is_some() {
+        return Err(AppError::Other(
+            "PC ini sedang memakai database PC pusat, jadi migrasi harus dijalankan di PC \
+             pusat itu — bukan dari sini."
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Seluruh isi toko yang sedang aktif, jadi satu berkas `.gpos`.
+///
+/// Berkasnya ditulis di sini dan bukan di frontend supaya isinya tidak pernah
+/// melewati webview: ia berisi seluruh harga modal dan riwayat toko.
+#[tauri::command]
+pub fn migration_export(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> AppResult<MigrationExport> {
+    use tauri::Manager;
+
+    hanya_database_pc_ini(&state)?;
+
+    let toko = stores::current_store(&state.data_dir)?;
+    let (data, mut hasil) = {
+        let conn = state.lock()?;
+        crate::migrasi::ekspor(&conn, &toko.name)?
+    };
+
+    // Folder tetap di Dokumen, bukan folder temp: berkas ini justru dibuat
+    // untuk disimpan dan dikirim, dan yang di temp hilang tanpa pemberitahuan.
+    let folder = app
+        .path()
+        .document_dir()
+        .unwrap_or_else(|_| state.data_dir.clone())
+        .join("GALAXYAS POS Migrasi");
+    std::fs::create_dir_all(&folder)?;
+
+    let path = folder.join(crate::migrasi::nama_berkas(&toko.name));
+    std::fs::write(&path, &data)?;
+
+    hasil.berkas = path.to_string_lossy().into_owned();
+    Ok(MigrationExport { path: hasil.berkas.clone(), hasil })
+}
+
+/// Asal-usul berkas **tanpa mengimpornya** — untuk ditampilkan sebelum
+/// konfirmasi. Isi berkas tidak didekripsi, hanya kepalanya yang memang terbuka.
+#[tauri::command]
+pub fn migration_inspect(bytes: Vec<u8>) -> AppResult<crate::migrasi::SumberBerkas> {
+    crate::migrasi::periksa(&bytes)
+}
+
+/// **Ganti** seluruh isi toko aktif dengan isi berkas. Tidak bisa dibatalkan.
+///
+/// Yang menahan salah pencet bukan command ini melainkan dua hal lain: kalimat
+/// yang harus diketik ulang di layar, dan cadangan database yang dibuat sebelum
+/// baris pertama dihapus. Letak cadangannya ikut di jawaban — itu jalan
+/// pulangnya.
+#[tauri::command]
+pub fn migration_import(
+    state: State<'_, AppState>,
+    bytes: Vec<u8>,
+    confirm: String,
+) -> AppResult<crate::migrasi::HasilMigrasi> {
+    if confirm.trim() != "GANTI SEMUA DATA" {
+        return Err(AppError::Other("Konfirmasi tidak sesuai.".into()));
+    }
+    hanya_database_pc_ini(&state)?;
+
+    let toko = stores::current_store(&state.data_dir)?;
+    let path = stores::db_path(&state.data_dir, &toko);
+    let mut conn = state.lock()?;
+    crate::migrasi::impor(&mut conn, &path, &bytes)
+}
+
 #[tauri::command]
 pub async fn find_by_barcode(
     state: State<'_, AppState>,

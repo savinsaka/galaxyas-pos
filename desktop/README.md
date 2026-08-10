@@ -10,6 +10,46 @@ npm run tauri dev
 
 Rilis: lihat [RELEASE.md](RELEASE.md).
 
+## Migrasi ke/dari GALAXYAS POS 2 (berkas `.gpos`)
+
+*Pengaturan → Migrasi Data* memindahkan **seluruh isi satu toko** — barang,
+stok, seluruh riwayat penjualan, mutasi stok, nota masuk/keluar, shift,
+pengeluaran, merek, pelanggan, diskon periodik, pengguna, dan setelan toko —
+antara app ini dan GALAXYAS POS 2, lewat satu berkas berekstensi `.gpos`.
+Dua arah: keluar dan masuk.
+
+Yang ikut hanya **toko yang sedang terbuka**. Instalasi yang memegang tiga toko
+menghasilkan tiga berkas; pindah dulu ke toko yang dimaksud, lalu ulangi.
+
+**Impor mengganti seluruh isi toko, bukan menggabungkan.** Database toko
+disalin lebih dulu ke `<nama>.sebelum-migrasi-<stempel>.bak` di folder yang
+sama, dan gagal menyalin berarti impor batal. Konfirmasinya kalimat yang harus
+diketik ulang, bukan tombol.
+
+Beberapa hal **tidak bisa** ikut masuk ke sini karena app ini tidak punya
+kolomnya. Semuanya dilaporkan di layar, bukan didiamkan:
+
+- penjualan & nota stok yang **dibatalkan** di POS 2 — app ini tidak punya
+  konsep pembatalan, jadi kalau ikut masuk ia terhitung sebagai penjualan
+  sungguhan dan omzet melar;
+- **PIN kasir** dari POS 2 — di sana ia disimpan sebagai hash yang tidak bisa
+  dikembalikan, jadi tiap kasir harus menyetel PIN-nya lagi lewat Hak Akses;
+- merek, pelanggan, dan diskon yang sudah dihapus di POS 2.
+
+Daftar HP terdaftar tidak pernah ikut ke arah mana pun: tokennya milik pasangan
+PC–perangkat tertentu, dan memindahkannya berarti memindahkan hak akses.
+
+Migrasi **dimatikan saat PC ini sedang jadi klien Server Pusat**: ia selalu
+bekerja pada database PC ini, dan di mode klien database itu bukan yang dipakai
+berjualan.
+
+> **Format berkasnya kontrak antar dua aplikasi**, bukan urusan internal:
+> `contracts/MIGRASI.md` di repo `Gpos2`. Implementasi di sini
+> `src-tauri/src/migrasi.rs`, dan berkas contoh yang dibuat sisi POS 2
+> (`src-tauri/fixtures/migrasi-contoh.gpos`) ikut dibaca `cargo test`. Yang
+> mengubah formatnya di satu sisi saja akan melihat gejalanya di toko sebagai
+> "berkas migrasi rusak" untuk berkas yang sebenarnya baik-baik saja.
+
 ## Server Pusat: beberapa kasir, satu database
 
 Satu PC bisa dijadikan **Server Pusat** (Pengaturan → Server Pusat → centang
@@ -70,6 +110,24 @@ Terhubung" di PC pusat (dengan nama komputernya) dan bisa dicabut satu-satu.
   hanya mencegah pendaftaran baru. Untuk memutus satu perangkat, cabut dari
   daftar "Perangkat Terhubung".
 - Struk, printer, dan laci kasir tetap memakai pengaturan PC masing-masing.
+
+## Cek Harga: akun yang hanya boleh melihat harga
+
+Modul **Cek Harga** adalah satu kolom scan dan satu kartu jawaban: nama barang,
+harga, diskon, dan harga bayar. Diskonnya dihitung dengan aturan yang sama
+persis dengan kasir (diskon periodik menang atas diskon default barang, cakupan
+item menang atas merek, yang terbesar dipakai) untuk 1 buah — jadi angka di
+layar ini sama dengan yang nanti keluar di kasir.
+
+Kolom scannya berperilaku sama dengan kolom scan kasir: barcode yang tidak
+ketemu membuka popup pencarian nama (F5 membukanya kapan saja). Bedanya, di
+popup itu **kolom stok disembunyikan** — layar ini sengaja tidak menampilkan
+stok maupun harga modal.
+
+Hak aksesnya berdiri sendiri: centang **Cek Harga** di *Pengaturan → Hak Akses*
+dan biarkan modul lain kosong, maka akun itu hanya melihat satu tab Cek Harga —
+tidak ada kasir, stok, laporan, atau pengaturan. Akun kasir yang sudah ada tidak
+otomatis mendapatkannya; centang sendiri kalau memang mau.
 
 ## Recommended IDE Setup
 
