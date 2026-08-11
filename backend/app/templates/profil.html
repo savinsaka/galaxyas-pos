@@ -1,0 +1,67 @@
+{% extends "sqladmin/layout.html" %}
+{% block content %}
+<div class="col-12 col-lg-7">
+  {% if pesan %}
+  <div class="alert alert-success" role="alert">{{ pesan }}</div>
+  {% endif %}
+  {% if galat %}
+  <div class="alert alert-danger" role="alert">{{ galat }}</div>
+  {% endif %}
+
+  <div class="card mb-3">
+    <div class="card-header">
+      <h3 class="card-title">Identitas</h3>
+    </div>
+    <div class="card-body">
+      <form method="POST">
+        <input type="hidden" name="aksi" value="identitas" />
+        <div class="mb-3">
+          <label class="form-label" for="username">Username</label>
+          <input class="form-control" id="username" name="username" value="{{ user.username }}"
+                 autocomplete="username" required />
+          <small class="form-hint">Dipakai untuk login. Ganti username berarti login berikutnya pakai yang baru.</small>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="full_name">Nama</label>
+          <input class="form-control" id="full_name" name="full_name" value="{{ user.full_name }}"
+                 placeholder="Administrator" />
+        </div>
+        <button type="submit" class="btn btn-primary">Simpan</button>
+      </form>
+    </div>
+    <div class="card-footer text-muted">
+      Login terakhir:
+      {{ user.last_login_at.strftime("%d-%m-%Y %H:%M UTC") if user.last_login_at else "belum pernah" }}
+      &middot; Akun dibuat: {{ user.created_at.strftime("%d-%m-%Y") }}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Ganti Password</h3>
+    </div>
+    <div class="card-body">
+      <form method="POST">
+        <input type="hidden" name="aksi" value="password" />
+        <div class="mb-3">
+          <label class="form-label" for="password_lama">Password lama</label>
+          <input type="password" class="form-control" id="password_lama" name="password_lama"
+                 autocomplete="current-password" required />
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="password_baru">Password baru</label>
+          <input type="password" class="form-control" id="password_baru" name="password_baru"
+                 autocomplete="new-password" minlength="{{ min_password }}" required />
+          <small class="form-hint">Minimal {{ min_password }} karakter.</small>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="password_ulang">Ulangi password baru</label>
+          <input type="password" class="form-control" id="password_ulang" name="password_ulang"
+                 autocomplete="new-password" minlength="{{ min_password }}" required />
+        </div>
+        <button type="submit" class="btn btn-primary">Ganti Password</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

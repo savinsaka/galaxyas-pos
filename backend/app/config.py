@@ -9,7 +9,9 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg2://postgres:postgres@localhost:5432/galaxyas"
     cors_origins: str = "http://localhost:1420,http://localhost:5173,tauri://localhost"
 
-    # Panel admin (/admin) untuk lihat & ubah data langsung — ganti nilai ini di .env untuk produksi.
+    # Panel admin (/admin). Username & password di bawah hanya dipakai untuk
+    # membuat akun pertama (lihat app.admin.ensure_admin_user); selanjutnya
+    # password dikelola dari halaman Profil dan disimpan sebagai hash di DB.
     admin_username: str = "admin"
     admin_password: str = "ganti-password-ini"
     admin_secret_key: str = "ganti-secret-key-ini-untuk-produksi"

@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-from app.admin import setup_admin
+from app.admin import ensure_admin_user, setup_admin
 from app.config import settings
 from app.database import Base, engine
 from app.routers import sync
@@ -14,6 +14,7 @@ from app.routers import sync
 async def lifespan(app: FastAPI):
     # Untuk produksi sebaiknya pakai migrasi (Alembic). Untuk scaffold: auto-create.
     Base.metadata.create_all(bind=engine)
+    ensure_admin_user()  # akun panel pertama dari .env, sekali saja
     yield
 
 

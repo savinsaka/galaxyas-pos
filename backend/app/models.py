@@ -40,6 +40,30 @@ class Product(Base):
     )
 
 
+class AdminUser(Base):
+    """Akun untuk login panel `/admin`.
+
+    Password disimpan sebagai hash (lihat `app.security`), bukan di `.env`,
+    supaya bisa diganti sendiri lewat halaman Profil tanpa SSH ke VPS. Nilai
+    `ADMIN_USERNAME`/`ADMIN_PASSWORD` di `.env` hanya dipakai sekali untuk
+    membuat akun pertama saat tabel ini masih kosong.
+    """
+
+    __tablename__ = "admin_users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    username: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    full_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
 class SyncLog(Base):
     """Riwayat sinkronisasi (audit), per toko & arah."""
 
