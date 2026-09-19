@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { printElement } from "$lib/print";
+  import { printElement, printElementPdf } from "$lib/print";
   import SalesRecapReport from "$lib/components/SalesRecapReport.svelte";
 
   let from = $state("");
@@ -38,6 +38,7 @@
   <h1>Laporan Umum</h1>
   <div class="row no-print">
     <button onclick={() => printElement("printable-page", "Laporan Umum")}>🖨️ Print</button>
+    <button onclick={() => printElementPdf("printable-page", "Laporan Umum")} title="Simpan sebagai PDF — ukuran kertas mengikuti isi (tidak terpaku A4)">📄 Export PDF</button>
   </div>
 </div>
 

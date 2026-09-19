@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
-  import { printElement, extractReportForEscPos } from "$lib/print";
+  import { printElement, printElementPdf, extractReportForEscPos } from "$lib/print";
   import { buildReportEscPos } from "$lib/escpos";
   import { api } from "$lib/api";
   import { parseReceiptConfig } from "$lib/receipt";
@@ -20,6 +20,11 @@
 
   function printDialog() {
     printElement("printable-report-content", title);
+  }
+
+  /** Export PDF: satu halaman panjang custom (tidak terpaku A4), fidelity penuh. */
+  function exportPdf() {
+    printElementPdf("printable-report-content", title);
   }
 
   /** Cetak langsung ke printer thermal (ESC/POS) — bukan lewat dialog print, supaya tidak buram. */
@@ -49,6 +54,7 @@
       <h2>{title}</h2>
       <div class="row">
         <button onclick={printDialog}>🖨️ Print</button>
+        <button onclick={exportPdf} title="Simpan sebagai PDF — ukuran kertas mengikuti isi (tidak terpaku A4)">📄 Export PDF</button>
         <button disabled={strukBusy} onclick={printStruk} title="Cetak langsung ke printer thermal (ESC/POS)">
           {strukBusy ? "Mencetak…" : "🧾 Cetak Struk"}
         </button>

@@ -3,7 +3,7 @@
   import { api } from "$lib/api";
   import { formatIDR, formatQty } from "$lib/format";
   import { toastError } from "$lib/toast";
-  import { printElement } from "$lib/print";
+  import { printElement, printElementPdf } from "$lib/print";
   import SummaryTable from "$lib/components/SummaryTable.svelte";
   import { REPORT_TYPES, defaultConfig, loadReportDesign, blockOrder, blockHidden, type ReportDesignConfig } from "$lib/reportDesign";
   import type { ProductWithStock, StockMovement } from "$lib/types";
@@ -107,6 +107,7 @@
       <button class:btn-primary={gran === g} onclick={() => (gran = g as Gran)}>{g}</button>
     {/each}
     <button onclick={() => printElement("printable-page", "Laporan Persediaan")}>🖨️ Print</button>
+    <button onclick={() => printElementPdf("printable-page", "Laporan Persediaan")} title="Simpan sebagai PDF — ukuran kertas mengikuti isi (tidak terpaku A4)">📄 Export PDF</button>
   </div>
 </div>
 

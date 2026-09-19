@@ -3,7 +3,7 @@
   import { api } from "$lib/api";
   import { formatQty, formatDateTime } from "$lib/format";
   import { toastError } from "$lib/toast";
-  import { printElement } from "$lib/print";
+  import { printElement, printElementPdf } from "$lib/print";
   import { debounce } from "$lib/debounce";
   import { formatPeriodLabel, todayIso } from "$lib/dateTime";
   import ProductSearchPopup from "$lib/components/ProductSearchPopup.svelte";
@@ -186,6 +186,14 @@
     printElement("printable-page", "Alur Barang");
     renderAll = false;
   }
+
+  /** Export PDF seluruh baris: satu halaman panjang custom (tidak terpaku A4). */
+  async function exportPdf() {
+    renderAll = true;
+    await tick();
+    printElementPdf("printable-page", "Alur Barang");
+    renderAll = false;
+  }
 </script>
 
 <div class="view-flex">
@@ -199,6 +207,7 @@
         <button class:btn-primary={mode === "item"} onclick={() => (mode = "item")}>Per Barang</button>
         <button class:btn-primary={mode === "all"} onclick={() => (mode = "all")}>Semua Barang</button>
         <button onclick={print}>🖨️ Print</button>
+        <button onclick={exportPdf} title="Simpan sebagai PDF — ukuran kertas mengikuti isi (tidak terpaku A4)">📄 Export PDF</button>
       </div>
     </div>
 

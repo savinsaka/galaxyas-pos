@@ -32,8 +32,9 @@ async function openPrintWindow(html: string, css: string, title: string, width: 
   }
 }
 
-const REPORT_OVERRIDES = `
-  @page { size: A4; margin: 15mm; }
+// Semua gaya cetak laporan KECUALI aturan @page — ukuran halaman dipilih per
+// mode: A4 untuk Print biasa, atau halaman panjang custom untuk Export PDF.
+const REPORT_BODY_CSS = `
   body { margin: 0; }
   #print-root {
     background: #fff !important; color: #000 !important;
@@ -68,7 +69,60 @@ export function printElement(elementId: string, title = "Cetak Laporan") {
   if (!source) return;
   const clone = source.cloneNode(true) as HTMLElement;
   clone.id = "print-root";
-  openPrintWindow(clone.outerHTML, currentAppCss() + REPORT_OVERRIDES, title, 980, 760);
+  const css = `@page { size: A4; margin: 15mm; }\n` + REPORT_BODY_CSS;
+  openPrintWindow(clone.outerHTML, currentAppCss() + css, title, 980, 760);
+}
+
+// Lebar halaman Export PDF (mm) — selebar A4 biar tabel lega, tapi tingginya
+// mengikuti isi jadi seluruh laporan muat di SATU halaman panjang (tidak
+// dipotong per A4, tidak terpaku ukuran kertas yang tersedia di dialog).
+const PDF_PAGE_WIDTH_MM = 210;
+const PDF_MARGIN_MM = 15;
+const PX_PER_MM = 96 / 25.4;
+
+/**
+ * Ukur tinggi laporan (mm) seandainya dirender pada lebar cetak, memakai CSS
+ * cetak yang sama. Kloningnya dirender di luar layar (tak terlihat), diukur,
+ * lalu dibuang — supaya tinggi @page bisa dipatok pas dengan isi.
+ */
+function measureReportHeightMm(elementId: string, contentWidthMm: number): number {
+  const source = document.getElementById(elementId);
+  if (!source) return 0;
+  const clone = source.cloneNode(true) as HTMLElement;
+  clone.id = "print-root";
+  const widthPx = Math.round(contentWidthMm * PX_PER_MM);
+
+  const holder = document.createElement("div");
+  holder.setAttribute(
+    "style",
+    `position:fixed; left:-100000px; top:0; width:${widthPx}px; visibility:hidden; pointer-events:none; z-index:-1;`,
+  );
+  const style = document.createElement("style");
+  style.textContent = REPORT_BODY_CSS;
+  holder.appendChild(style);
+  holder.appendChild(clone);
+  document.body.appendChild(holder);
+  const heightPx = clone.scrollHeight;
+  document.body.removeChild(holder);
+  return heightPx / PX_PER_MM;
+}
+
+/**
+ * Export laporan `elementId` sebagai PDF: buka preview cetak yang halamannya
+ * sudah dipatok jadi satu lembar panjang (lebar A4, tinggi = isi), lalu user
+ * pilih "Save as PDF". Beda dari printElement (A4) yang ukurannya terpaku dan
+ * memotong laporan panjang jadi banyak halaman.
+ */
+export function printElementPdf(elementId: string, title = "Export PDF Laporan") {
+  const source = document.getElementById(elementId);
+  if (!source) return;
+  const contentWidthMm = PDF_PAGE_WIDTH_MM - PDF_MARGIN_MM * 2;
+  // +slack kecil supaya baris terakhir tidak mepet/terpotong akibat beda font.
+  const heightMm = Math.ceil(measureReportHeightMm(elementId, contentWidthMm)) + PDF_MARGIN_MM * 2 + 8;
+  const clone = source.cloneNode(true) as HTMLElement;
+  clone.id = "print-root";
+  const css = `@page { size: ${PDF_PAGE_WIDTH_MM}mm ${heightMm}mm; margin: ${PDF_MARGIN_MM}mm; }\n` + REPORT_BODY_CSS;
+  openPrintWindow(clone.outerHTML, currentAppCss() + css, title, 980, 760);
 }
 
 /** Cetak isi elemen `elementId` sebagai struk thermal (lebar kertas dalam mm) di window terpisah. */

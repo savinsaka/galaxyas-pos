@@ -4,7 +4,7 @@
   import { formatIDR, formatDateTime } from "$lib/format";
   import { showToast, toastError } from "$lib/toast";
   import { currentUser } from "$lib/stores/auth";
-  import { printElement } from "$lib/print";
+  import { printElement, printElementPdf } from "$lib/print";
   import { activeShiftStore } from "$lib/stores/shift";
   import type { Shift } from "$lib/types";
 
@@ -71,7 +71,12 @@
 <div id="printable-page">
 <div class="page-head">
   <h1>Manajemen Shift &amp; Tutup Kasir</h1>
-  {#if closedResult}<button class="no-print" onclick={() => printElement("printable-page", "Laporan Rekonsiliasi Shift")}>🖨️ Print Rekonsiliasi</button>{/if}
+  {#if closedResult}
+    <div class="row no-print" style="gap:0.4rem;">
+      <button onclick={() => printElement("printable-page", "Laporan Rekonsiliasi Shift")}>🖨️ Print Rekonsiliasi</button>
+      <button onclick={() => printElementPdf("printable-page", "Laporan Rekonsiliasi Shift")} title="Simpan sebagai PDF — ukuran kertas mengikuti isi (tidak terpaku A4)">📄 Export PDF</button>
+    </div>
+  {/if}
 </div>
 
 {#if !active}

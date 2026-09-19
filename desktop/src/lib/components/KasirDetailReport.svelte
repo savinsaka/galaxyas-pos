@@ -4,8 +4,6 @@
   import { formatIDR } from "$lib/format";
   import { toastError } from "$lib/toast";
   import { todayIso, formatPeriodLabel } from "$lib/dateTime";
-  import { generateKasirDetailPdf } from "$lib/pdfTemplates";
-  import { openPath } from "@tauri-apps/plugin-opener";
   import SummaryTable from "$lib/components/SummaryTable.svelte";
   import { totalsByMethod } from "$lib/payment";
   import type { Transaction } from "$lib/types";
@@ -13,7 +11,6 @@
   let from = $state(todayIso());
   let to = $state(todayIso());
   let txs = $state<Transaction[]>([]);
-  let pdfBusy = $state(false);
 
   async function load() {
     try {
@@ -51,26 +48,6 @@
     { label: "Total", value: formatIDR(totalNet), bold: true },
     ...methods.map((m) => ({ label: `Pembayaran ${m}`, value: formatIDR(byMethod.get(m)?.total ?? 0) })),
   ]);
-
-  /** Generate PDF dokumen (layout tetap) untuk laporan ini. */
-  async function cetakPdf() {
-    pdfBusy = true;
-    try {
-      const s = await api.getSettings();
-      const path = await generateKasirDetailPdf({
-        title: "LAPORAN KASIR DETAIL",
-        store_name: s.store_name || "GALAXYAS POS",
-        periode: formatPeriodLabel(from, to),
-        dicetak: `Dicetak: ${new Date().toLocaleString("id-ID")}`,
-        ringkasan: JSON.stringify(ringkasanRows.map((r) => [r.label, r.value])),
-      });
-      await openPath(path);
-    } catch (e) {
-      toastError(e);
-    } finally {
-      pdfBusy = false;
-    }
-  }
 </script>
 
 <div class="card no-print" style="margin-bottom:1rem;">
@@ -78,9 +55,6 @@
     <div><label>Dari</label><input type="date" bind:value={from} /></div>
     <div><label>Sampai</label><input type="date" bind:value={to} /></div>
     <button onclick={presetHariIni}>Hari Ini</button>
-    <button disabled={pdfBusy} onclick={cetakPdf} title="Cetak sebagai PDF">
-      {pdfBusy ? "Membuat PDF…" : "📄 Cetak PDF"}
-    </button>
   </div>
 </div>
 

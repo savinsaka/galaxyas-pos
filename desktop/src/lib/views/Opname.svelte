@@ -53,6 +53,7 @@
   let tanggal = $state(todayIso());
   let showPopup = $state(false);
   let fisikInputEl = $state<HTMLInputElement | null>(null);
+  let searchInputEl = $state<HTMLInputElement | null>(null);
 
   const HISTORY_PAGE_SIZE = 12;
   let historyPage = $state(0);
@@ -155,6 +156,9 @@
       resetForm();
       tanggal = todayIso();
       await load();
+      // Balik fokus ke kolom scan biar bisa langsung tembak barang berikutnya.
+      await tick();
+      searchInputEl?.focus();
     } catch (e) { toastError(e); } finally { busy = false; }
   }
 
@@ -313,6 +317,7 @@
     <input
       placeholder="Scan barcode atau ketik nama lalu Enter…"
       bind:value={search}
+      bind:this={searchInputEl}
       onkeydown={onSearchKey}
       autocomplete="off"
     />
