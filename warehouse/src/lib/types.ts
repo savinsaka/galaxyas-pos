@@ -400,6 +400,23 @@ export interface PullItem {
   known_locally: boolean;
 }
 
+// ---------- Pengiriman ke Toko (GPOS Warehouse, sisi Pengirim) ----------
+
+/** Toko tujuan dari server mobile (dropdown Kirim ke Toko). */
+export interface DestStore {
+  id: string;
+  code: string;
+  name: string;
+}
+
+/** Satu item yang dikirim: field snake_case (langsung ke serde ShipItemInput). */
+export interface ShipItem {
+  product_id: string;
+  barcode: string;
+  name: string | null;
+  qty: number;
+}
+
 export interface DiscountPeriod {
   id: string;
   code: string;

@@ -1304,6 +1304,116 @@ pub async fn bridge_reject_pull(state: State<'_, AppState>, row_id: String) -> A
     Ok(())
 }
 
+// ---------- Pengiriman ke Toko (sisi Pengirim gudang, GPOS Warehouse) ----------
+//
+// Kebalikan dari bridge Pull di atas: di sini gudang MEMBUAT baris pengiriman
+// (barcode+qty_dikirim) di server mobile untuk toko tujuan, lalu toko yang
+// menariknya. Auth pakai JWT (email+password pengirim), server-nya sama dengan
+// `mobile_server_url` yang dipakai bridge. Lihat `ship.rs`.
+
+fn read_ship_config(state: &State<'_, AppState>) -> AppResult<(String, String, String)> {
+    let conn = state.lock()?;
+    let server_url = db::get_setting(&conn, "mobile_server_url")?
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::Config("URL server pengiriman belum diatur (menu Pengaturan).".into()))?;
+    let email = db::get_setting(&conn, "ship_email")?
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::Config("Email pengirim belum diatur (menu Pengaturan → Pengiriman).".into()))?;
+    let password = db::get_setting(&conn, "ship_password")?
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::Config("Password pengirim belum diatur (menu Pengaturan → Pengiriman).".into()))?;
+    Ok((server_url, email, password))
+}
+
+/// Daftar toko tujuan dari server mobile (untuk dropdown "Kirim ke Toko").
+#[tauri::command]
+pub async fn ship_list_stores(state: State<'_, AppState>) -> AppResult<Vec<crate::ship::DestStore>> {
+    let (url, email, password) = read_ship_config(&state)?;
+    let token = crate::ship::login(&url, &email, &password).await?;
+    crate::ship::list_stores(&url, &token).await
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ShipItemInput {
+    pub product_id: String,
+    pub barcode: String,
+    pub name: Option<String>,
+    pub qty: f64,
+}
+
+/// Kirim barang ke satu toko tujuan. Alur: (1) push tiap item jadi OrderRow di
+/// server toko tujuan; (2) baru catat keluarnya stok gudang (satu batch
+/// kind="out"). Push didahulukan supaya kalau gagal, stok gudang belum
+/// terlanjur dikurangi (tidak ada selisih diam-diam).
+#[tauri::command]
+pub async fn ship_send(
+    state: State<'_, AppState>,
+    store_id: String,
+    store_name: String,
+    items: Vec<ShipItemInput>,
+    user_id: Option<String>,
+    note: Option<String>,
+) -> AppResult<crate::models::StockMovementBatchDetail> {
+    if items.is_empty() {
+        return Err(AppError::Other("Tidak ada item untuk dikirim.".into()));
+    }
+    for it in &items {
+        if it.barcode.trim().is_empty() {
+            return Err(AppError::Other(format!(
+                "Barang \"{}\" belum punya barcode — barcode wajib untuk dikirim ke toko.",
+                it.name.clone().unwrap_or_else(|| it.product_id.clone())
+            )));
+        }
+        if it.qty <= 0.0 {
+            return Err(AppError::Other("Ada item dengan qty tidak valid (harus > 0).".into()));
+        }
+    }
+
+    let (url, email, password) = read_ship_config(&state)?;
+    let token = crate::ship::login(&url, &email, &password).await?;
+
+    let order_date = Utc::now().format("%Y-%m-%d").to_string();
+    for it in &items {
+        crate::ship::create_order_row(
+            &url,
+            &token,
+            &store_id,
+            &order_date,
+            it.barcode.trim(),
+            it.qty,
+            it.name.as_deref(),
+        )
+        .await?;
+    }
+
+    let batch_items: Vec<crate::models::StockMovementBatchItemInput> = items
+        .iter()
+        .map(|it| crate::models::StockMovementBatchItemInput {
+            product_id: it.product_id.clone(),
+            qty: it.qty,
+            note: None,
+        })
+        .collect();
+
+    // Toko tujuan disimpan di note batch dengan penanda `[kirim:<toko>]` supaya
+    // Daftar & Laporan Pengiriman bisa menyaring/menampilkannya.
+    let full_note = match note {
+        Some(n) if !n.trim().is_empty() => format!("[kirim:{}] {}", store_name, n.trim()),
+        _ => format!("[kirim:{}]", store_name),
+    };
+    let input = crate::models::StockMovementBatchInput {
+        kind: "out".into(),
+        note: Some(full_note),
+        user_id,
+        items: batch_items,
+        created_at: None,
+    };
+
+    let mut conn = state.lock()?;
+    let detail = db::create_stock_movement_batch(&mut conn, input)?;
+    Ok(detail)
+}
+
 // ---------- Server Pusat (wifi & internet) ----------
 
 use crate::servers::{ServerInfo, ServerPath};

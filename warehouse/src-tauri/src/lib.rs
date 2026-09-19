@@ -7,6 +7,7 @@ mod models;
 mod pull;
 mod relay;
 mod servers;
+mod ship;
 mod stores;
 mod sync;
 #[cfg(target_os = "windows")]
@@ -226,6 +227,8 @@ pub fn run() {
             commands::bridge_list_pending,
             commands::bridge_confirm_pull,
             commands::bridge_reject_pull,
+            commands::ship_list_stores,
+            commands::ship_send,
             commands::list_servers,
             commands::current_server,
             commands::ping_server,

@@ -70,11 +70,13 @@
     { key: "store_id", label: "ID Toko", hint: "Identitas untuk sinkronisasi" },
     { key: "server_url", label: "URL Server Sync", hint: "http://localhost:8000" },
   ];
-  // Server GALAXYAS Mobile (bridge tombol "Pull" di Item Masuk) — TERPISAH
+  // Server GALAXYAS Mobile untuk PENGIRIMAN (menu Kirim ke Toko) — login
+  // sebagai Pengirim (JWT), lalu buat baris kiriman per toko tujuan. TERPISAH
   // dari Server Sinkronisasi di atas (beda server, beda database, beda auth).
-  const mobileFields = [
+  const mobileFields: { key: string; label: string; hint: string; password?: boolean }[] = [
     { key: "mobile_server_url", label: "URL Server Mobile", hint: "https://mobile-api.jjapps.net" },
-    { key: "mobile_store_api_key", label: "API Key Toko", hint: "Diminta ke Bos (dari app mobile)" },
+    { key: "ship_email", label: "Email Pengirim", hint: "akun pengirim/supervisor/bos" },
+    { key: "ship_password", label: "Password Pengirim", hint: "••••••", password: true },
   ];
   let savingMobile = $state(false);
   const receiptKeys = [
@@ -270,7 +272,8 @@
       settings.store_id ??= "";
       settings.server_url ??= "";
       settings.mobile_server_url ??= "";
-      settings.mobile_store_api_key ??= "";
+      settings.ship_email ??= "";
+      settings.ship_password ??= "";
       settings.tax_percent ??= "0";
       settings.theme ??= "baby-blue";
       activeTheme = settings.theme;
@@ -457,21 +460,21 @@
   </div>
 
   <div class="card" style="max-width:520px; margin-top:0.8rem;">
-    <h2>Server Mobile (Bridge Pull)</h2>
+    <h2>Server Pengiriman</h2>
     <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
-      Server terpisah untuk app mobile (order/pengirim/absen/gaji/dst). Diisi
-      sekali agar tombol "Pull" di menu Item Masuk bisa menarik pengiriman
-      dari Pengirim. API Key didapat dari Bos lewat app mobile.
+      Untuk menu <b>Kirim ke Toko</b>: gudang login ke server mobile sebagai
+      Pengirim, lalu daftar toko tujuan diambil otomatis. Akun harus ber-role
+      pengirim/supervisor/bos. URL & akun diminta ke Bos.
     </p>
     {#each mobileFields as f}
       <div style="margin-bottom:0.9rem;">
         <label>{f.label}</label>
-        <input bind:value={settings[f.key]} placeholder={f.hint} />
+        <input type={f.password ? "password" : "text"} bind:value={settings[f.key]} placeholder={f.hint} autocomplete="off" />
       </div>
     {/each}
     <div class="row" style="justify-content:flex-end;">
       <button class="btn-primary" disabled={savingMobile} onclick={saveMobile}>
-        Simpan Pengaturan Mobile
+        Simpan Pengaturan Pengiriman
       </button>
     </div>
   </div>

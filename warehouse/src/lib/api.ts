@@ -26,6 +26,8 @@ import type {
   Product,
   ProductInput,
   PullItem,
+  DestStore,
+  ShipItem,
   ProductPage,
   ProductSalesRow,
   ProductWithStock,
@@ -243,6 +245,12 @@ export const api = {
   bridgeConfirmPull: (items: PullItem[], userId: string | null) =>
     invoke<StockMovementBatchDetail>("bridge_confirm_pull", { items, userId }),
   bridgeRejectPull: (rowId: string) => invoke<void>("bridge_reject_pull", { rowId }),
+
+  // Pengiriman ke Toko (GPOS Warehouse, sisi Pengirim) — login JWT ke server
+  // mobile, ambil toko tujuan, lalu buat OrderRow per item.
+  shipListStores: () => invoke<DestStore[]>("ship_list_stores"),
+  shipSend: (storeId: string, storeName: string, items: ShipItem[], userId: string | null, note: string | null) =>
+    invoke<StockMovementBatchDetail>("ship_send", { storeId, storeName, items, userId, note }),
 
   // Server Pusat (multi-kasir lewat wifi ATAU internet)
   listServers: () => invoke<ServerInfo[]>("list_servers"),
