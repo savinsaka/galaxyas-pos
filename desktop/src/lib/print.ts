@@ -46,9 +46,12 @@ const REPORT_BODY_CSS = `
   #print-root .print-header .print-subtitle { font-size: 10pt !important; color: #333 !important; margin-bottom: 1mm; }
   #print-root .print-header .print-meta { font-size: 8.5pt !important; color: #555 !important; }
   #print-root .print-header hr { border: none; border-top: 1px solid #000; margin-top: 3mm; }
+  /* break-inside JANGAN avoid: kartu berisi tabel panjang harus boleh pecah,
+     kalau tidak seluruh tabel didorong ke halaman berikutnya & halaman pertama
+     jadi kosong (cuma header). */
   #print-root .card {
     border: 1px solid #999 !important; box-shadow: none !important;
-    border-radius: 0 !important; background: #fff !important; break-inside: avoid;
+    border-radius: 0 !important; background: #fff !important; break-inside: auto;
   }
   #print-root h1, #print-root h2, #print-root h3 { color: #000 !important; }
   #print-root table { width: 100%; border-collapse: collapse !important; }
@@ -58,8 +61,11 @@ const REPORT_BODY_CSS = `
   }
   #print-root thead th { background: #eee !important; }
   /* Paginasi rapi saat laporan panjang pecah ke banyak halaman: header tabel
-     diulang tiap halaman & satu baris tidak dipotong di tengah. */
+     diulang tiap halaman & satu baris tidak dipotong di tengah. tfoot dibuat
+     seperti baris biasa supaya baris Total TIDAK ikut diulang tiap halaman —
+     cukup sekali di paling akhir. */
   #print-root thead { display: table-header-group; }
+  #print-root tfoot { display: table-row-group; }
   #print-root tr { break-inside: avoid; }
   #print-root .text-dim { color: #444 !important; }
   #print-root .badge, #print-root .disc-badge, #print-root .stock-badge {
@@ -109,10 +115,12 @@ function withOffscreenClone(elementId: string, holderWidth: string, measure: (cl
   return result;
 }
 
-/** Lebar minimum (mm) supaya tidak ada kolom yang terpotong: holder dipaksa
- * 1px sehingga tabel menyusut ke min-content, lalu overflow-nya diukur. */
-function measureNaturalWidthMm(elementId: string): number {
-  return withOffscreenClone(elementId, "1px", (clone) => clone.scrollWidth) / PX_PER_MM;
+/** Lebar (mm) saat isi tabel dirender max-content: holder di-shrink-wrap
+ * (`max-content`) sehingga tiap sel muat dalam SATU baris (tidak wrap ke bawah),
+ * mirip tampilan spreadsheet landscape. Ini juga menjamin tidak ada kolom yang
+ * terpotong karena halaman dibuat selebar isi. */
+function measureMaxContentWidthMm(elementId: string): number {
+  return withOffscreenClone(elementId, "max-content", (clone) => clone.scrollWidth) / PX_PER_MM;
 }
 
 /**
@@ -124,8 +132,9 @@ function measureNaturalWidthMm(elementId: string): number {
 export function printElementPdf(elementId: string, title = "Export PDF Laporan") {
   const source = document.getElementById(elementId);
   if (!source) return;
-  // Lebar = max(A4, lebar yang benar-benar dibutuhkan tabel) + sedikit slack.
-  const contentWidthMm = Math.max(PDF_MIN_CONTENT_MM, Math.ceil(measureNaturalWidthMm(elementId)) + 6);
+  // Lebar = max(A4, lebar max-content tabel) + sedikit slack: kolom tidak wrap
+  // & tidak terpotong; laporan sempit tetap minimal seukuran A4.
+  const contentWidthMm = Math.max(PDF_MIN_CONTENT_MM, Math.ceil(measureMaxContentWidthMm(elementId)) + 6);
   const pageWidthMm = Math.ceil(contentWidthMm) + PDF_MARGIN_MM * 2;
   const clone = source.cloneNode(true) as HTMLElement;
   clone.id = "print-root";
