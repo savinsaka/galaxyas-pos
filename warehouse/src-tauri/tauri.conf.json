@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "GPOS Warehouse",
+  "version": "1.0.0",
+  "identifier": "com.galaxyas.warehouse",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../build"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "GPOS Warehouse",
+        "width": 1280,
+        "height": 720,
+        "minWidth": 900,
+        "minHeight": 600,
+        "maximized": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI1OEYyNzEwN0U5RkZGOUIKUldTYi81OStFQ2VQSlRvZ0NBaSs4WXBBRGg1R0JoUjNCdWhnL2I0M1R0eVVqdSt5ajVtQm56R2gK",
+      "endpoints": [
+        "https://github.com/savinsaka/gpos-warehouse-releases/releases/latest/download/latest.json"
+      ],
+      "dialog": false
+    }
+  }
+}

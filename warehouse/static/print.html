@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8" />
+<title>Cetak</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #fff; }
+  body { font-family: system-ui, sans-serif; }
+  #toolbar {
+    position: sticky; top: 0; z-index: 10;
+    display: flex; gap: 0.5rem; align-items: center;
+    padding: 0.6rem 0.8rem; background: #f3f6f9; border-bottom: 1px solid #d7dee6;
+  }
+  #toolbar .spacer { flex: 1; }
+  #toolbar button {
+    font: inherit; font-size: 0.85rem; font-weight: 600; padding: 0.4rem 0.9rem;
+    border-radius: 8px; border: 1px solid #c7d2dc; background: #fff; cursor: pointer;
+  }
+  #toolbar button.primary { background: #4a90d9; border-color: #4a90d9; color: #fff; }
+  #toolbar button#btn-x {
+    width: 2rem; height: 2rem; padding: 0; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center; font-size: 0.95rem;
+  }
+  #toolbar button#btn-x:hover { background: #d9534f; border-color: #d9534f; color: #fff; }
+  #content-wrap { padding: 1rem; }
+  #error { padding: 1rem; color: #b3261e; font-family: system-ui, sans-serif; }
+  @media print {
+    #toolbar, #error { display: none !important; }
+    #content-wrap { padding: 0; }
+  }
+</style>
+<style id="payload-style"></style>
+</head>
+<body>
+  <div id="toolbar">
+    <button id="btn-print" class="primary" type="button">🖨️ Cetak</button>
+    <button id="btn-close" type="button">Tutup</button>
+    <div class="spacer"></div>
+    <button id="btn-x" type="button" title="Tutup window cetak">✕</button>
+  </div>
+  <div id="content-wrap">
+    <div id="content"></div>
+  </div>
+  <script>
+    (function () {
+      var params = new URLSearchParams(location.search);
+      var label = params.get("label");
+      var contentEl = document.getElementById("content");
+      var styleEl = document.getElementById("payload-style");
+
+      function closeWindow() {
+        try {
+          window.__TAURI__.window.getCurrentWindow().close();
+        } catch (e) {
+          window.close();
+        }
+      }
+
+      async function load() {
+        try {
+          var invoke = window.__TAURI__.core.invoke;
+          var payload = await invoke("take_print_payload", { label: label });
+          styleEl.textContent = payload.css || "";
+          contentEl.innerHTML = payload.html || "";
+        } catch (err) {
+          contentEl.innerHTML = "";
+          var errEl = document.createElement("div");
+          errEl.id = "error";
+          errEl.textContent = "Gagal memuat konten cetak: " + err;
+          contentEl.appendChild(errEl);
+        }
+      }
+
+      document.getElementById("btn-print").addEventListener("click", function () {
+        window.print();
+      });
+      document.getElementById("btn-close").addEventListener("click", closeWindow);
+      document.getElementById("btn-x").addEventListener("click", closeWindow);
+
+      load();
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,81 @@
+import type { Component } from "svelte";
+
+import DataBarang from "./DataBarang.svelte";
+import TambahBarang from "./TambahBarang.svelte";
+import DataSheet from "./DataSheet.svelte";
+import ImportExport from "./ImportExport.svelte";
+import Migrasi from "./Migrasi.svelte";
+import DiskonPeriodik from "./DiskonPeriodik.svelte";
+import DaftarMerek from "./DaftarMerek.svelte";
+import SyncCenter from "./SyncCenter.svelte";
+import DaftarKasir from "./DaftarKasir.svelte";
+import EditKasir from "./EditKasir.svelte";
+import KasirPOS from "./KasirPOS.svelte";
+import Opname from "./Opname.svelte";
+import OpnamePerMerek from "./OpnamePerMerek.svelte";
+import OpnameSpesial from "./OpnameSpesial.svelte";
+import TimeOpname from "./TimeOpname.svelte";
+import ItemMasuk from "./ItemMasuk.svelte";
+import ItemKeluar from "./ItemKeluar.svelte";
+import DaftarItemMasuk from "./DaftarItemMasuk.svelte";
+import DaftarItemKeluar from "./DaftarItemKeluar.svelte";
+import EditStockBatch from "./EditStockBatch.svelte";
+import AlurBarang from "./AlurBarang.svelte";
+import LaporanPenjualan from "./LaporanPenjualan.svelte";
+import LaporanPersediaan from "./LaporanPersediaan.svelte";
+import LaporanUmum from "./LaporanUmum.svelte";
+import LaporanItem from "./LaporanItem.svelte";
+import DesainLaporan from "./DesainLaporan.svelte";
+import Pengaturan from "./Pengaturan.svelte";
+import HakAkses from "./HakAkses.svelte";
+import KirimToko from "./KirimToko.svelte";
+import DaftarPengiriman from "./DaftarPengiriman.svelte";
+import LaporanPengiriman from "./LaporanPengiriman.svelte";
+import DaftarPelanggan from "./DaftarPelanggan.svelte";
+import Pengeluaran from "./Pengeluaran.svelte";
+import ShiftKasir from "./ShiftKasir.svelte";
+import CekHarga from "./CekHarga.svelte";
+
+export const VIEW_REGISTRY: Record<string, Component<any>> = {
+  "data-barang": DataBarang,
+  "tambah-barang": TambahBarang,
+  "data-sheet": DataSheet,
+  "import-export": ImportExport,
+  migrasi: Migrasi,
+  diskon: DiskonPeriodik,
+  "daftar-merek": DaftarMerek,
+  sync: SyncCenter,
+  "daftar-kasir": DaftarKasir,
+  "edit-kasir": EditKasir,
+  "kasir-pos": KasirPOS,
+  opname: Opname,
+  "opname-brand": OpnamePerMerek,
+  "opname-spesial": OpnameSpesial,
+  "time-opname": TimeOpname,
+  "item-masuk": ItemMasuk,
+  "item-keluar": ItemKeluar,
+  "daftar-item-masuk": DaftarItemMasuk,
+  "daftar-item-keluar": DaftarItemKeluar,
+  "edit-stock-batch": EditStockBatch,
+  "alur-barang": AlurBarang,
+  "laporan-penjualan": LaporanPenjualan,
+  "laporan-persediaan": LaporanPersediaan,
+  "laporan-umum": LaporanUmum,
+  "laporan-item": LaporanItem,
+  "desain-laporan": DesainLaporan,
+  "pengaturan-toko": Pengaturan,
+  "pengaturan-server": Pengaturan,
+  "pengaturan-lan": Pengaturan,
+  "pengaturan-struk": Pengaturan,
+  "pengaturan-tema": Pengaturan,
+  "pengaturan-kasir": Pengaturan,
+  "pengaturan-lanjutan": Pengaturan,
+  "hak-akses": HakAkses,
+  "daftar-pelanggan": DaftarPelanggan,
+  pengeluaran: Pengeluaran,
+  "shift-kasir": ShiftKasir,
+  "cek-harga": CekHarga,
+  "kirim-toko": KirimToko,
+  "daftar-pengiriman": DaftarPengiriman,
+  "laporan-pengiriman": LaporanPengiriman,
+};

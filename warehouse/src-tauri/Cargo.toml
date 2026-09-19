@@ -1,0 +1,66 @@
+[package]
+name = "desktop"
+version = "1.0.0"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+# `gzip`: relay memasang GZipMiddleware, tapi hanya memampatkan kalau klien
+# mengirim Accept-Encoding — tanpa fitur ini laporan besar lewat internet
+# terkirim mentah dan memakan kuota. Tidak berpengaruh ke jalur LAN (tiny_http
+# tidak memampatkan apa pun).
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls", "gzip"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+thiserror = "2"
+tiny_http = "0.12"
+local-ip-address = "0.6"
+sha2 = "0.10"
+# Kode Setup PC klien: isi QR pairing dikemas jadi satu baris teks yang bisa
+# disalin-tempel (PC tidak punya kamera untuk scan QR).
+base64 = "0.22"
+# QR pairing: Store ID relay 32 karakter hex mustahil diketik benar di HP.
+# Dibuat di Rust (bukan paket npm) karena npm di mesin ini pernah OOM saat
+# resolve dependency graph besar — lihat catatan di desktop/README.
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+# Agent relay (akses HP dari luar wifi toko). `native-tls` disengaja, BUKAN
+# rustls: di Windows itu memakai Schannel, sama seperti browser/curl — rustls
+# pernah bikin koneksi ke server jjapps.net gagal total karena menolak TLS
+# renegotiation. Lihat catatan yang sama di `reqwest` di atas.
+tokio = { version = "1", features = ["time", "sync", "macros", "rt"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "handshake", "native-tls"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+# Migrasi toko lewat berkas `.gpos` (lihat `src/migrasi.rs`). Ketiganya wajib
+# cocok byte demi byte dengan sisi Python di repo `Gpos2`, jadi yang dipakai
+# primitif baku — bukan susunan sendiri, yang mustahil dicocokkan lewat vektor
+# uji antar bahasa. `hkdf` menarik `hmac`, dan `sha2` sudah ada di atas.
+aes-gcm = "0.10"
+hkdf = "0.12"
+flate2 = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Printing",
+] }
+
