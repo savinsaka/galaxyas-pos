@@ -57,6 +57,10 @@ const REPORT_BODY_CSS = `
     position: static !important;
   }
   #print-root thead th { background: #eee !important; }
+  /* Paginasi rapi saat laporan panjang pecah ke banyak halaman: header tabel
+     diulang tiap halaman & satu baris tidak dipotong di tengah. */
+  #print-root thead { display: table-header-group; }
+  #print-root tr { break-inside: avoid; }
   #print-root .text-dim { color: #444 !important; }
   #print-root .badge, #print-root .disc-badge, #print-root .stock-badge {
     border: 1px solid #000 !important; background: #fff !important; color: #000 !important; border-radius: 0 !important;
@@ -73,13 +77,14 @@ export function printElement(elementId: string, title = "Cetak Laporan") {
   openPrintWindow(clone.outerHTML, currentAppCss() + css, title, 980, 760);
 }
 
-// Export PDF = SATU halaman panjang yang ukurannya (lebar & tinggi) mengikuti
-// isi laporan — tidak terpaku A4/kertas yang tersedia di dialog. Lantai lebar
-// dipakai supaya laporan sempit tetap seukuran A4 (tidak melebar sia-sia),
-// sedangkan laporan berkolom banyak melebar otomatis biar kolom kanan tidak
-// terpotong.
+// Export PDF: LEBAR halaman mengikuti lebar tabel (biar kolom kanan tidak
+// terpotong), TINGGI dipatok setinggi A4 landscape sehingga laporan panjang
+// otomatis pecah ke halaman 2, 3, dst — bukan satu lembar raksasa yang berat
+// dirender (mis. laporan 30 hari). Lantai lebar dipakai supaya laporan sempit
+// tidak jadi kertas kekecilan.
 const PDF_MARGIN_MM = 15;
 const PDF_MIN_CONTENT_MM = 210 - PDF_MARGIN_MM * 2; // area isi A4 = 180mm
+const PDF_PAGE_HEIGHT_MM = 210; // tinggi A4 landscape
 const PX_PER_MM = 96 / 25.4;
 
 /** Bikin klon laporan (id print-root) di dalam holder tak terlihat, lalu
@@ -110,29 +115,21 @@ function measureNaturalWidthMm(elementId: string): number {
   return withOffscreenClone(elementId, "1px", (clone) => clone.scrollWidth) / PX_PER_MM;
 }
 
-/** Tinggi laporan (mm) kalau dirender pada lebar cetak `contentWidthMm`. */
-function measureReportHeightMm(elementId: string, contentWidthMm: number): number {
-  const widthPx = Math.round(contentWidthMm * PX_PER_MM);
-  return withOffscreenClone(elementId, `${widthPx}px`, (clone) => clone.scrollHeight) / PX_PER_MM;
-}
-
 /**
- * Export laporan `elementId` sebagai PDF: buka preview cetak yang halamannya
- * sudah dipatok jadi satu lembar panjang custom (lebar & tinggi mengikuti isi),
- * lalu user pilih "Save as PDF". Beda dari printElement (A4) yang ukurannya
- * terpaku dan bisa memotong laporan lebar/panjang.
+ * Export laporan `elementId` sebagai PDF: buka preview cetak yang lebar
+ * halamannya mengikuti lebar tabel (tak ada kolom terpotong) dan tingginya
+ * setinggi A4 landscape sehingga laporan panjang pecah rapi ke halaman 2, 3,
+ * dst. Lalu user pilih "Save as PDF".
  */
 export function printElementPdf(elementId: string, title = "Export PDF Laporan") {
   const source = document.getElementById(elementId);
   if (!source) return;
   // Lebar = max(A4, lebar yang benar-benar dibutuhkan tabel) + sedikit slack.
   const contentWidthMm = Math.max(PDF_MIN_CONTENT_MM, Math.ceil(measureNaturalWidthMm(elementId)) + 6);
-  // Tinggi diukur pada lebar itu; +slack supaya baris terakhir tidak mepet.
-  const heightMm = Math.ceil(measureReportHeightMm(elementId, contentWidthMm)) + PDF_MARGIN_MM * 2 + 8;
   const pageWidthMm = Math.ceil(contentWidthMm) + PDF_MARGIN_MM * 2;
   const clone = source.cloneNode(true) as HTMLElement;
   clone.id = "print-root";
-  const css = `@page { size: ${pageWidthMm}mm ${heightMm}mm; margin: ${PDF_MARGIN_MM}mm; }\n` + REPORT_BODY_CSS;
+  const css = `@page { size: ${pageWidthMm}mm ${PDF_PAGE_HEIGHT_MM}mm; margin: ${PDF_MARGIN_MM}mm; }\n` + REPORT_BODY_CSS;
   openPrintWindow(clone.outerHTML, currentAppCss() + css, title, 980, 760);
 }
 
