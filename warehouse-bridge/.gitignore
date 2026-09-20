@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+gudang.db
+gudang.db-*
+.env
