@@ -1,0 +1,49 @@
+name: Release warehouse app
+
+# Build GPOS Warehouse (folder warehouse/) di repo private ini, lalu publish
+# installer-nya ke repo TERPISAH yang public (savinsaka/gpos-warehouse-releases).
+# Terpisah dari workflow desktop: dipicu tag "wh-v*" (bukan "v*") supaya rilis
+# POS dan Warehouse tidak saling memicu. Signing key sama dengan POS (pubkey
+# di warehouse/src-tauri/tauri.conf.json identik), jadi secret yang dipakai
+# juga sama.
+on:
+  push:
+    tags:
+      - "wh-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        working-directory: warehouse
+        run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          # Token dengan akses tulis ke repo publik gpos-warehouse-releases.
+          # (RELEASE_REPO_TOKEN harus di-set akses-nya mencakup repo ini juga.)
+          GITHUB_TOKEN: ${{ secrets.RELEASE_REPO_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: warehouse
+          owner: savinsaka
+          repo: gpos-warehouse-releases
+          releaseCommitish: main
+          tagName: ${{ github.ref_name }}
+          releaseName: "GPOS Warehouse ${{ github.ref_name }}"
+          releaseBody: "Lihat commit log di repo utama untuk detail perubahan."
+          releaseDraft: true
+          prerelease: false
