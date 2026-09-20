@@ -74,9 +74,8 @@
   // sebagai Pengirim (JWT), lalu buat baris kiriman per toko tujuan. TERPISAH
   // dari Server Sinkronisasi di atas (beda server, beda database, beda auth).
   const mobileFields: { key: string; label: string; hint: string; password?: boolean }[] = [
-    { key: "mobile_server_url", label: "URL Server Mobile", hint: "https://mobile-api.jjapps.net" },
-    { key: "ship_email", label: "Email Pengirim", hint: "akun pengirim/supervisor/bos" },
-    { key: "ship_password", label: "Password Pengirim", hint: "••••••", password: true },
+    { key: "mobile_server_url", label: "URL Server Bridge", hint: "https://app.jjapps.net" },
+    { key: "ship_warehouse_key", label: "Warehouse Key", hint: "kunci mesin dari Bos", password: true },
   ];
   let savingMobile = $state(false);
   const receiptKeys = [
@@ -272,8 +271,7 @@
       settings.store_id ??= "";
       settings.server_url ??= "";
       settings.mobile_server_url ??= "";
-      settings.ship_email ??= "";
-      settings.ship_password ??= "";
+      settings.ship_warehouse_key ??= "";
       settings.tax_percent ??= "0";
       settings.theme ??= "baby-blue";
       activeTheme = settings.theme;
@@ -462,9 +460,9 @@
   <div class="card" style="max-width:520px; margin-top:0.8rem;">
     <h2>Server Pengiriman</h2>
     <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
-      Untuk menu <b>Kirim ke Toko</b>: gudang login ke server mobile sebagai
-      Pengirim, lalu daftar toko tujuan diambil otomatis. Akun harus ber-role
-      pengirim/supervisor/bos. URL & akun diminta ke Bos.
+      Untuk menu <b>Kirim ke Toko</b>: isi URL server bridge + <b>Warehouse Key</b>
+      (kunci mesin dari Bos). Daftar toko tujuan lalu muncul otomatis. Tanpa akun/
+      email — cukup satu kunci.
     </p>
     {#each mobileFields as f}
       <div style="margin-bottom:0.9rem;">

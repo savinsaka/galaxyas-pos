@@ -1311,26 +1311,22 @@ pub async fn bridge_reject_pull(state: State<'_, AppState>, row_id: String) -> A
 // menariknya. Auth pakai JWT (email+password pengirim), server-nya sama dengan
 // `mobile_server_url` yang dipakai bridge. Lihat `ship.rs`.
 
-fn read_ship_config(state: &State<'_, AppState>) -> AppResult<(String, String, String)> {
+fn read_ship_config(state: &State<'_, AppState>) -> AppResult<(String, String)> {
     let conn = state.lock()?;
     let server_url = db::get_setting(&conn, "mobile_server_url")?
         .filter(|s| !s.is_empty())
         .ok_or_else(|| AppError::Config("URL server pengiriman belum diatur (menu Pengaturan).".into()))?;
-    let email = db::get_setting(&conn, "ship_email")?
+    let warehouse_key = db::get_setting(&conn, "ship_warehouse_key")?
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| AppError::Config("Email pengirim belum diatur (menu Pengaturan → Pengiriman).".into()))?;
-    let password = db::get_setting(&conn, "ship_password")?
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| AppError::Config("Password pengirim belum diatur (menu Pengaturan → Pengiriman).".into()))?;
-    Ok((server_url, email, password))
+        .ok_or_else(|| AppError::Config("Warehouse Key belum diatur (menu Pengaturan → Server Pengiriman).".into()))?;
+    Ok((server_url, warehouse_key))
 }
 
-/// Daftar toko tujuan dari server mobile (untuk dropdown "Kirim ke Toko").
+/// Daftar toko tujuan dari server bridge (untuk dropdown "Kirim ke Toko").
 #[tauri::command]
 pub async fn ship_list_stores(state: State<'_, AppState>) -> AppResult<Vec<crate::ship::DestStore>> {
-    let (url, email, password) = read_ship_config(&state)?;
-    let token = crate::ship::login(&url, &email, &password).await?;
-    crate::ship::list_stores(&url, &token).await
+    let (url, key) = read_ship_config(&state)?;
+    crate::ship::list_stores(&url, &key).await
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -1369,22 +1365,18 @@ pub async fn ship_send(
         }
     }
 
-    let (url, email, password) = read_ship_config(&state)?;
-    let token = crate::ship::login(&url, &email, &password).await?;
+    let (url, key) = read_ship_config(&state)?;
 
-    let order_date = Utc::now().format("%Y-%m-%d").to_string();
-    for it in &items {
-        crate::ship::create_order_row(
-            &url,
-            &token,
-            &store_id,
-            &order_date,
-            it.barcode.trim(),
-            it.qty,
-            it.name.as_deref(),
-        )
-        .await?;
-    }
+    // Semua item satu request (atomik di server) — tidak ada dobel-separuh.
+    let ship_items: Vec<crate::ship::ShipItem> = items
+        .iter()
+        .map(|it| crate::ship::ShipItem {
+            barcode: it.barcode.trim(),
+            qty: it.qty,
+            name: it.name.as_deref(),
+        })
+        .collect();
+    crate::ship::create_order_rows(&url, &key, &store_id, ship_items).await?;
 
     let batch_items: Vec<crate::models::StockMovementBatchItemInput> = items
         .iter()

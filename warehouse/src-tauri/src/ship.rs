@@ -1,25 +1,15 @@
-//! Sisi PENGIRIM (gudang) ke server GALAXYAS Mobile — kebalikan dari `pull.rs`.
+//! Sisi PENGIRIM (gudang) ke server bridge Gudang (`warehouse-bridge`).
 //!
-//! GPOS Warehouse login sebagai user (role pengirim/supervisor/bos) lalu bikin
-//! OrderRow (barcode + qty_dikirim) untuk toko tujuan. Toko lalu menariknya
-//! lewat bridge Pull (`X-Store-Api-Key`) yang sudah ada di POS (`pull.rs`).
-//!
-//! Auth di sini pakai JWT Bearer (email + password) — BEDA dari `X-Store-Api-Key`
-//! yang dipakai sisi pull. `native-tls` diwarisi dari Cargo.toml (server jjapps
-//! menolak TLS renegotiation ala rustls — lihat catatan di `pull.rs`/Cargo.toml).
+//! Auth pakai **API key mesin** lewat header `X-Warehouse-Key` (tanpa akun/
+//! email/password). GPOS Warehouse ambil daftar toko lalu membuat baris kiriman
+//! (batch, sekali kirim = atomik di server). Toko menariknya lewat "Pull dari
+//! Gudang" (`X-Store-Api-Key`). `native-tls` diwarisi dari Cargo.toml.
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
 
-#[derive(Debug, Deserialize)]
-struct TokenResponse {
-    access_token: String,
-    // refresh_token diabaikan: Warehouse login ulang tiap operasi (sederhana,
-    // operasinya jarang & manual).
-}
-
-/// Toko tujuan (subset dari StoreOut server; field lain diabaikan serde).
+/// Toko tujuan (subset; field lain diabaikan serde).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DestStore {
     pub id: String,
@@ -27,20 +17,19 @@ pub struct DestStore {
     pub name: String,
 }
 
+/// Satu item kiriman untuk body POST /order-rows.
 #[derive(Debug, Serialize)]
-struct LoginBody<'a> {
-    email: &'a str,
-    password: &'a str,
+pub struct ShipItem<'a> {
+    pub barcode: &'a str,
+    pub qty: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<&'a str>,
 }
 
 #[derive(Debug, Serialize)]
-struct OrderRowBody<'a> {
+struct ShipRequest<'a> {
     store_id: &'a str,
-    order_date: &'a str,
-    barcode: &'a str,
-    qty_dikirim: f64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    name: Option<&'a str>,
+    items: Vec<ShipItem<'a>>,
 }
 
 fn client() -> AppResult<reqwest::Client> {
@@ -49,65 +38,43 @@ fn client() -> AppResult<reqwest::Client> {
         .build()?)
 }
 
-/// Login sebagai Pengirim, kembalikan access token (dipakai sebagai Bearer).
-pub async fn login(server_url: &str, email: &str, password: &str) -> AppResult<String> {
-    let url = format!("{}/api/v1/auth/login", server_url.trim_end_matches('/'));
-    let resp = client()?
-        .post(&url)
-        .json(&LoginBody { email, password })
-        .send()
-        .await?;
-    if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
-        return Err(AppError::Config(
-            "Email atau password pengirim salah (cek menu Pengaturan → Pengiriman).".into(),
-        ));
-    }
-    if resp.status() == reqwest::StatusCode::FORBIDDEN {
-        return Err(AppError::Config(
-            "Akun pengirim belum aktif / role-nya tidak boleh mengirim. Hubungi Bos.".into(),
-        ));
-    }
-    let resp = resp.error_for_status()?;
-    Ok(resp.json::<TokenResponse>().await?.access_token)
+fn key_err() -> AppError {
+    AppError::Config("Warehouse Key salah / belum benar (cek Pengaturan → Server Pengiriman).".into())
 }
 
-/// Daftar toko tujuan (butuh Bearer).
-pub async fn list_stores(server_url: &str, token: &str) -> AppResult<Vec<DestStore>> {
+/// Daftar toko tujuan.
+pub async fn list_stores(server_url: &str, warehouse_key: &str) -> AppResult<Vec<DestStore>> {
     let url = format!("{}/api/v1/stores", server_url.trim_end_matches('/'));
     let resp = client()?
         .get(&url)
-        .bearer_auth(token)
+        .header("X-Warehouse-Key", warehouse_key)
         .send()
-        .await?
-        .error_for_status()?;
+        .await?;
+    if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(key_err());
+    }
+    let resp = resp.error_for_status()?;
     Ok(resp.json::<Vec<DestStore>>().await?)
 }
 
-/// Buat satu OrderRow (barcode + qty_dikirim) untuk `store_id`. Karena hanya
-/// qty_dikirim yang diisi (bukan qty_minta), server menandainya origin
-/// "pengirim" dan pull_status "pending" — siap ditarik toko.
-pub async fn create_order_row(
+/// Buat semua baris kiriman untuk satu toko dalam SATU request (atomik di
+/// server — tidak ada risiko dobel-separuh saat retry).
+pub async fn create_order_rows(
     server_url: &str,
-    token: &str,
+    warehouse_key: &str,
     store_id: &str,
-    order_date: &str,
-    barcode: &str,
-    qty: f64,
-    name: Option<&str>,
+    items: Vec<ShipItem<'_>>,
 ) -> AppResult<()> {
     let url = format!("{}/api/v1/order-rows", server_url.trim_end_matches('/'));
-    client()?
+    let resp = client()?
         .post(&url)
-        .bearer_auth(token)
-        .json(&OrderRowBody {
-            store_id,
-            order_date,
-            barcode,
-            qty_dikirim: qty,
-            name,
-        })
+        .header("X-Warehouse-Key", warehouse_key)
+        .json(&ShipRequest { store_id, items })
         .send()
-        .await?
-        .error_for_status()?;
+        .await?;
+    if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(key_err());
+    }
+    resp.error_for_status()?;
     Ok(())
 }
