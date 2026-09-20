@@ -70,7 +70,7 @@
       }
       if (matched.length > 0) {
         const detail = await api.bridgeConfirmPull(matched, $currentUser?.username ?? null);
-        showToast(`${detail.no}: ${detail.items.length} item dari app mobile masuk ke stok.`, "success");
+        showToast(`${detail.no}: ${detail.items.length} item dari gudang masuk ke stok.`, "success");
         markStockBatchesDirty();
       } else {
         showToast("Semua barang ditolak (barcode tidak ditemukan).", "info");
@@ -105,7 +105,7 @@
 <div class="card" style="margin-bottom:0.8rem;">
   <div class="row" style="align-items:center; gap:0.6rem; justify-content:space-between;">
     <div class="row" style="align-items:center; gap:0.6rem;">
-      <span style="font-weight:650;">📥 Pull dari App Mobile</span>
+      <span style="font-weight:650;">📥 Pull dari Gudang</span>
       {#if checked && pending.length > 0}
         <span class="pending-badge">{pending.length} menunggu</span>
       {/if}

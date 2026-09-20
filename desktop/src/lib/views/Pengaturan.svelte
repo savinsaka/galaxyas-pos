@@ -70,11 +70,11 @@
     { key: "store_id", label: "ID Toko", hint: "Identitas untuk sinkronisasi" },
     { key: "server_url", label: "URL Server Sync", hint: "http://localhost:8000" },
   ];
-  // Server GALAXYAS Mobile (bridge tombol "Pull" di Item Masuk) — TERPISAH
+  // Server Gudang (bridge tombol "Pull dari Gudang" di Item Masuk) — TERPISAH
   // dari Server Sinkronisasi di atas (beda server, beda database, beda auth).
   const mobileFields = [
-    { key: "mobile_server_url", label: "URL Server Mobile", hint: "https://mobile-api.jjapps.net" },
-    { key: "mobile_store_api_key", label: "API Key Toko", hint: "Diminta ke Bos (dari app mobile)" },
+    { key: "mobile_server_url", label: "URL Server Gudang", hint: "https://app.jjapps.net" },
+    { key: "mobile_store_api_key", label: "API Key Toko", hint: "Diminta ke Bos (dari gudang)" },
   ];
   let savingMobile = $state(false);
   const receiptKeys = [
@@ -340,7 +340,7 @@
     savingMobile = true;
     try {
       for (const f of mobileFields) await api.updateSetting(f.key, String(settings[f.key] ?? ""));
-      showToast("Pengaturan server mobile tersimpan.", "success");
+      showToast("Pengaturan server gudang tersimpan.", "success");
     } catch (e) { toastError(e); } finally { savingMobile = false; }
   }
 
@@ -457,11 +457,10 @@
   </div>
 
   <div class="card" style="max-width:520px; margin-top:0.8rem;">
-    <h2>Server Mobile (Bridge Pull)</h2>
+    <h2>Server Gudang</h2>
     <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
-      Server terpisah untuk app mobile (order/pengirim/absen/gaji/dst). Diisi
-      sekali agar tombol "Pull" di menu Item Masuk bisa menarik pengiriman
-      dari Pengirim. API Key didapat dari Bos lewat app mobile.
+      Diisi sekali agar tombol <b>"Pull dari Gudang"</b> di menu Item Masuk bisa
+      menarik barang yang dikirim gudang ke toko ini. API Key toko didapat dari Bos.
     </p>
     {#each mobileFields as f}
       <div style="margin-bottom:0.9rem;">
