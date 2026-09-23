@@ -25,7 +25,7 @@ import LaporanPenjualan from "./LaporanPenjualan.svelte";
 import LaporanPersediaan from "./LaporanPersediaan.svelte";
 import LaporanUmum from "./LaporanUmum.svelte";
 import LaporanItem from "./LaporanItem.svelte";
-import DesainLaporan from "./DesainLaporan.svelte";
+import ReportEditor from "./ReportEditor.svelte";
 import Pengaturan from "./Pengaturan.svelte";
 import HakAkses from "./HakAkses.svelte";
 import DaftarPelanggan from "./DaftarPelanggan.svelte";
@@ -59,7 +59,7 @@ export const VIEW_REGISTRY: Record<string, Component<any>> = {
   "laporan-persediaan": LaporanPersediaan,
   "laporan-umum": LaporanUmum,
   "laporan-item": LaporanItem,
-  "desain-laporan": DesainLaporan,
+  "editor-laporan": ReportEditor,
   "pengaturan-toko": Pengaturan,
   "pengaturan-server": Pengaturan,
   "pengaturan-lan": Pengaturan,

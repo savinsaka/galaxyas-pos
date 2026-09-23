@@ -3,7 +3,8 @@
   import { api } from "$lib/api";
   import { showToast, toastError } from "$lib/toast";
   import { parseReceiptConfig, RECEIPT_SHOW_KEYS, maxFontSizeForPaper } from "$lib/receipt";
-  import { buildDrawerKick, buildReceiptEscPos } from "$lib/escpos";
+  import { buildDrawerKick } from "$lib/escpos";
+  import { receiptEscPos } from "$lib/report/print";
   import { THEMES, saveTheme } from "$lib/theme";
   import type {
     LanServerStatus, MobileDevice, PairingQr, RelayStatus, SetupCode, TransactionDetail,
@@ -356,7 +357,7 @@
   async function testPrint() {
     await saveReceipt();
     try {
-      await api.printEscposTo(settings.receipt_printer || null, buildReceiptEscPos(sampleDetail, parseReceiptConfig(settings)));
+      await api.printEscposTo(settings.receipt_printer || null, await receiptEscPos(sampleDetail, settings));
       showToast("Test print dikirim.", "success");
     } catch (e) { toastError(e); }
   }

@@ -1,12 +1,12 @@
 import type { StockMovementBatchDetail, TransactionDetail } from "./types";
 import { paperCols, type CashDrawerPin, type ReceiptConfig } from "./receipt";
 
-const formatQty = (n: number) => (Number.isInteger(n) ? n.toString() : n.toFixed(2));
+export const formatQty = (n: number) => (Number.isInteger(n) ? n.toString() : n.toFixed(2));
 
 const ESC = 0x1b;
 const GS = 0x1d;
 
-function money(n: number): string {
+export function money(n: number): string {
   return "Rp" + Math.round(n || 0).toLocaleString("id-ID");
 }
 
@@ -21,7 +21,7 @@ function asciiBytes(s: string): number[] {
   return out;
 }
 
-class EscPosBuilder {
+export class EscPosBuilder {
   private bytes: number[] = [];
   raw(...b: number[]): this {
     this.bytes.push(...b);

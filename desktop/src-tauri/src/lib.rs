@@ -50,6 +50,15 @@ pub fn run() {
                 .expect("gagal menentukan app data dir");
             std::fs::create_dir_all(&data_dir).expect("gagal membuat app data dir");
 
+            // Pastikan folder template laporan (.Greport) ada di Dokumen. Jaring
+            // pengaman untuk instalasi lama & dev build; installer NSIS juga
+            // membuatnya saat instalasi. Kegagalan tidak menggagalkan startup.
+            if let Ok(doc_dir) = app.path().document_dir() {
+                if let Err(e) = commands::ensure_report_dirs(doc_dir) {
+                    eprintln!("gagal menyiapkan folder template laporan: {e}");
+                }
+            }
+
             let active = stores::current_store(&data_dir).expect("gagal membaca registry toko");
             let db_path = stores::db_path(&data_dir, &active);
 
@@ -215,6 +224,12 @@ pub fn run() {
             commands::stock_flow_recap,
             commands::stock_flow_detail,
             commands::write_temp_file,
+            commands::list_report_templates,
+            commands::read_report_template,
+            commands::write_report_template,
+            commands::delete_report_template,
+            commands::rename_report_template,
+            commands::duplicate_report_template,
             commands::list_printers,
             commands::print_text_to,
             commands::print_escpos_to,

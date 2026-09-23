@@ -5,16 +5,27 @@
   import { onMount } from "svelte";
   import BrandMultiSelect from "$lib/components/BrandMultiSelect.svelte";
   import SummaryTable from "$lib/components/SummaryTable.svelte";
+  import TemplateReport from "$lib/components/TemplateReport.svelte";
   import { totalsByMethod } from "$lib/payment";
+  import { formatPeriodLabel } from "$lib/dateTime";
   import { REPORT_TYPES, defaultConfig, loadReportDesign, blockOrder, blockHidden, type ReportDesignConfig } from "$lib/reportDesign";
+  import { hasActiveTemplate, loadActiveTemplate } from "$lib/report/storage";
+  import type { ReportContext } from "$lib/report/kinds";
+  import type { ReportTemplate } from "$lib/report/template";
   import type { Brand, BrandSalesRow, Expense, ProductSalesRow, StockMovement, Transaction } from "$lib/types";
 
   let { from, to }: { from: string; to: string } = $props();
 
   const BLOCKS = REPORT_TYPES.find((t) => t.key === "sales-recap")!.blocks;
   let design = $state<ReportDesignConfig>(defaultConfig(BLOCKS));
+  // Template aktif (opt-in): bila user memilihnya di Editor Laporan, laporan
+  // dirender dari template; kalau tidak, pakai tata letak bawaan di bawah.
+  let activeTpl = $state<ReportTemplate | null>(null);
   onMount(() => {
     loadReportDesign("sales-recap", BLOCKS).then((d) => (design = d));
+    hasActiveTemplate("recap-penjualan").then(async (has) => {
+      if (has) activeTpl = await loadActiveTemplate("recap-penjualan");
+    });
   });
 
   type Gran = "harian" | "bulanan" | "tahunan";
@@ -108,6 +119,39 @@
   const grossProfit = $derived(totalRevenue - totalCogs);
   const totalExpenses = $derived(expenses.reduce((s, e) => s + e.amount, 0));
   const netProfit = $derived(grossProfit - totalExpenses);
+
+  // Konteks untuk render via template (angka SAMA dengan tata letak bawaan).
+  const tplCtx = $derived<ReportContext>({
+    kind: "recap-penjualan",
+    title: "Recap Penjualan",
+    subtitle: formatPeriodLabel(from, to),
+    meta: selectedBrands.size ? `Merek: ${[...selectedBrands].join(", ")}` : "",
+    scalars: {
+      title: "Recap Penjualan",
+      subtitle: formatPeriodLabel(from, to),
+      meta: selectedBrands.size ? `Merek: ${[...selectedBrands].join(", ")}` : "",
+    },
+    datasets: {
+      ringkasan: [
+        { label: "Transaksi", value: String(txs.length) },
+        { label: "Total Penjualan", value: formatIDR(grandTotal) },
+        { label: "Total Diskon", value: formatIDR(grandDiscount) },
+        { label: "Rata-rata", value: formatIDR(txs.length ? grandTotal / txs.length : 0) },
+      ],
+      laba_rugi: [
+        { label: "HPP (Modal Barang)", value: formatIDR(totalCogs) },
+        { label: "Laba Kotor", value: formatIDR(grossProfit) },
+        { label: "Pengeluaran Operasional", value: `−${formatIDR(totalExpenses)}` },
+        { label: "Laba Bersih", value: formatIDR(netProfit) },
+      ],
+      per_barang: productReport.map((r) => ({ name: r.name, brand: r.brand ?? "-", qty: r.qty, discount: r.discount, net: r.net })),
+      per_merek: brandReport.map((r) => ({ brand: r.brand, qty: r.qty, discount: r.discount, net: r.net })),
+      per_periode: buckets.map(([k, b]) => ({ periode: k, count: b.count, discount: b.discount, total: b.total })),
+      item_terlaris: topItems.map(([name, qty]) => ({ name, qty })),
+      per_metode: byMethod.map(([m, b]) => ({ metode: m, count: b.count, total: b.total })),
+      per_kasir: byCashier.map(([c, b]) => ({ kasir: c, count: b.count, total: b.total })),
+    },
+  });
 </script>
 
 <div class="row no-print" style="justify-content:flex-end; margin-bottom:0.6rem;">
@@ -121,6 +165,9 @@
   <BrandMultiSelect {allBrands} bind:selected={selectedBrands} />
 </div>
 
+{#if activeTpl}
+  <TemplateReport template={activeTpl} ctx={tplCtx} />
+{:else}
 <div class="grid-2" style="align-items:start;">
   {#if !blockHidden(design, "ringkasan")}
     <div style="grid-column:1/-1; order:{blockOrder(design, 'ringkasan')};">
@@ -239,3 +286,4 @@
     </div>
   {/if}
 </div>
+{/if}

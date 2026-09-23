@@ -215,6 +215,20 @@ export const api = {
   // Sistem: file & printer
   writeTempFile: (fileName: string, bytes: number[]) =>
     invoke<string>("write_temp_file", { fileName, bytes }),
+
+  // Template laporan (.Greport) di Documents\GalaxyAS POS\Reports\<kategori>\<kind>
+  listReportTemplates: (category: string, kind: string) =>
+    invoke<string[]>("list_report_templates", { category, kind }),
+  readReportTemplate: (category: string, kind: string, name: string) =>
+    invoke<string>("read_report_template", { category, kind, name }),
+  writeReportTemplate: (category: string, kind: string, name: string, json: string) =>
+    invoke<void>("write_report_template", { category, kind, name, json }),
+  deleteReportTemplate: (category: string, kind: string, name: string) =>
+    invoke<void>("delete_report_template", { category, kind, name }),
+  renameReportTemplate: (category: string, kind: string, oldName: string, newName: string) =>
+    invoke<void>("rename_report_template", { category, kind, oldName, newName }),
+  duplicateReportTemplate: (category: string, kind: string, name: string, newName: string) =>
+    invoke<void>("duplicate_report_template", { category, kind, name, newName }),
   listPrinters: () => invoke<string[]>("list_printers"),
   printTextTo: (printer: string | null, text: string) =>
     invoke<void>("print_text_to", { printer, text }),

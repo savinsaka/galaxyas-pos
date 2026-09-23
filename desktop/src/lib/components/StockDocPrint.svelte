@@ -8,7 +8,7 @@
     paperWidthMm,
     type ReceiptConfig,
   } from "$lib/receipt";
-  import { buildStockDocEscPos } from "$lib/escpos";
+  import { stockDocEscPos } from "$lib/report/print";
   import { printReceiptElement } from "$lib/print";
   import type { StockMovementBatchDetail } from "$lib/types";
 
@@ -64,7 +64,7 @@
 
   async function printToPrinter() {
     try {
-      await api.printEscposTo(cfg.printer, buildStockDocEscPos(detail, cfg));
+      await api.printEscposTo(cfg.printer, await stockDocEscPos(detail, await api.getSettings()));
       showToast(cfg.printer ? `Dikirim ke printer: ${cfg.printer}` : "Dikirim ke printer default.", "success");
     } catch (e) {
       toastError(e);

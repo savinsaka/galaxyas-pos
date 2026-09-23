@@ -14,7 +14,8 @@
   import { setTabDirty, clearTabDirty } from "$lib/stores/tabGuard";
   import { activeShiftStore } from "$lib/stores/shift";
   import { parseReceiptConfig, saleNeedsDrawer, type ReceiptConfig } from "$lib/receipt";
-  import { buildDrawerKick, buildReceiptEscPos, withDrawerKick } from "$lib/escpos";
+  import { buildDrawerKick, withDrawerKick } from "$lib/escpos";
+  import { receiptEscPos } from "$lib/report/print";
   import { formatMoneyInput, onMoneyInput } from "$lib/moneyInput";
   import ShortcutBar from "$lib/components/ShortcutBar.svelte";
   import type { Customer, DiscountPeriod, PaymentMethod, ProductWithStock, SaleInput, Shift, TransactionDetail } from "$lib/types";
@@ -676,8 +677,9 @@
     if (!lastReceipt || !receiptCfg) return;
     try {
       // Perintah buka laci disatukan ke job cetak yang sama (bukan kirim
-      // terpisah) supaya laci membuka begitu struk selesai keluar.
-      const bytes = buildReceiptEscPos(lastReceipt, receiptCfg);
+      // terpisah) supaya laci membuka begitu struk selesai keluar. Byte struk
+      // lewat template aktif bila dipilih user, jika tidak jalur bawaan.
+      const bytes = await receiptEscPos(lastReceipt, await api.getSettings());
       await api.printEscposTo(
         receiptCfg.printer,
         saleNeedsDrawer(lastReceipt) ? withDrawerKick(bytes, receiptCfg.cashDrawer) : bytes,

@@ -1,12 +1,24 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { api } from "$lib/api";
   import { formatIDR } from "$lib/format";
   import { toastError } from "$lib/toast";
+  import { formatPeriodLabel } from "$lib/dateTime";
+  import TemplateReport from "$lib/components/TemplateReport.svelte";
+  import { hasActiveTemplate, loadActiveTemplate } from "$lib/report/storage";
+  import type { ReportContext } from "$lib/report/kinds";
+  import type { ReportTemplate } from "$lib/report/template";
   import type { DailySalesRow } from "$lib/types";
 
   let { from, to, brands }: { from: string; to: string; brands: string[] } = $props();
 
   let rows = $state<DailySalesRow[]>([]);
+  let activeTpl = $state<ReportTemplate | null>(null);
+  onMount(() => {
+    hasActiveTemplate("item-daily").then(async (has) => {
+      if (has) activeTpl = await loadActiveTemplate("item-daily");
+    });
+  });
 
   async function load() {
     const f = from || "0001-01-01";
@@ -28,8 +40,26 @@
   const totalQty = $derived(rows.reduce((s, r) => s + r.qty, 0));
   const totalDiscount = $derived(rows.reduce((s, r) => s + r.discount, 0));
   const totalNet = $derived(rows.reduce((s, r) => s + r.net, 0));
+
+  const tplCtx = $derived<ReportContext>({
+    kind: "item-daily",
+    title: "Laporan Item Per Hari",
+    subtitle: brands.length ? `${formatPeriodLabel(from, to)} · Merek: ${brands.join(", ")}` : formatPeriodLabel(from, to),
+    meta: "",
+    scalars: {
+      title: "Laporan Item Per Hari",
+      subtitle: brands.length ? `${formatPeriodLabel(from, to)} · Merek: ${brands.join(", ")}` : formatPeriodLabel(from, to),
+      meta: "",
+    },
+    datasets: {
+      rows: rows.map((r) => ({ day: r.day, qty: r.qty, gross: r.gross, discount: r.discount, net: r.net })),
+    },
+  });
 </script>
 
+{#if activeTpl}
+  <TemplateReport template={activeTpl} ctx={tplCtx} />
+{:else}
 <div class="card" style="padding:0; overflow:hidden;">
   <table>
     <thead>
@@ -61,6 +91,7 @@
     {/if}
   </table>
 </div>
+{/if}
 
 <style>
   .fw-bold { font-weight: 700; }

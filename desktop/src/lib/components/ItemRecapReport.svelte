@@ -4,14 +4,23 @@
   import { formatIDR } from "$lib/format";
   import { toastError } from "$lib/toast";
   import { REPORT_TYPES, defaultConfig, loadReportDesign, blockOrder, blockHidden, type ReportDesignConfig } from "$lib/reportDesign";
+  import TemplateReport from "$lib/components/TemplateReport.svelte";
+  import { formatPeriodLabel } from "$lib/dateTime";
+  import { hasActiveTemplate, loadActiveTemplate } from "$lib/report/storage";
+  import type { ReportContext } from "$lib/report/kinds";
+  import type { ReportTemplate } from "$lib/report/template";
   import type { BrandSalesRow, ProductSalesRow } from "$lib/types";
 
   let { from, to, brands }: { from: string; to: string; brands: string[] } = $props();
 
   const BLOCKS = REPORT_TYPES.find((t) => t.key === "item-recap")!.blocks;
   let design = $state<ReportDesignConfig>(defaultConfig(BLOCKS));
+  let activeTpl = $state<ReportTemplate | null>(null);
   onMount(() => {
     loadReportDesign("item-recap", BLOCKS).then((d) => (design = d));
+    hasActiveTemplate("recap-item").then(async (has) => {
+      if (has) activeTpl = await loadActiveTemplate("recap-item");
+    });
   });
 
   let productReport = $state<ProductSalesRow[]>([]);
@@ -40,8 +49,27 @@
   const totalQty = $derived(productReport.reduce((s, r) => s + r.qty, 0));
   const totalDiscount = $derived(productReport.reduce((s, r) => s + r.discount, 0));
   const totalNet = $derived(productReport.reduce((s, r) => s + r.net, 0));
+
+  const tplCtx = $derived<ReportContext>({
+    kind: "recap-item",
+    title: "Recap Item",
+    subtitle: brands.length ? `${formatPeriodLabel(from, to)} · Merek: ${brands.join(", ")}` : formatPeriodLabel(from, to),
+    meta: "",
+    scalars: {
+      title: "Recap Item",
+      subtitle: brands.length ? `${formatPeriodLabel(from, to)} · Merek: ${brands.join(", ")}` : formatPeriodLabel(from, to),
+      meta: "",
+    },
+    datasets: {
+      per_barang: productReport.map((r) => ({ name: r.name, brand: r.brand ?? "-", qty: r.qty, discount: r.discount, net: r.net })),
+      per_merek: brandReport.map((r) => ({ brand: r.brand, qty: r.qty, discount: r.discount, net: r.net })),
+    },
+  });
 </script>
 
+{#if activeTpl}
+  <TemplateReport template={activeTpl} ctx={tplCtx} />
+{:else}
 <div class="grid-2" style="align-items:start;">
   {#if !blockHidden(design, "per_barang")}
     <div class="card" style="padding:0; overflow:hidden; order:{blockOrder(design, 'per_barang')};">
@@ -78,6 +106,7 @@
     </div>
   {/if}
 </div>
+{/if}
 
 <style>
   .fw-bold { font-weight: 700; }

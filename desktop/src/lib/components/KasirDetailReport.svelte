@@ -5,7 +5,11 @@
   import { toastError } from "$lib/toast";
   import { todayIso, formatPeriodLabel } from "$lib/dateTime";
   import SummaryTable from "$lib/components/SummaryTable.svelte";
+  import TemplateReport from "$lib/components/TemplateReport.svelte";
   import { totalsByMethod } from "$lib/payment";
+  import { hasActiveTemplate, loadActiveTemplate } from "$lib/report/storage";
+  import type { ReportContext } from "$lib/report/kinds";
+  import type { ReportTemplate } from "$lib/report/template";
   import type { Transaction } from "$lib/types";
 
   let from = $state(todayIso());
@@ -20,7 +24,13 @@
     }
   }
 
-  onMount(load);
+  let activeTpl = $state<ReportTemplate | null>(null);
+  onMount(() => {
+    load();
+    hasActiveTemplate("kasir-detail").then(async (has) => {
+      if (has) activeTpl = await loadActiveTemplate("kasir-detail");
+    });
+  });
   $effect(() => {
     from;
     to;
@@ -48,6 +58,15 @@
     { label: "Total", value: formatIDR(totalNet), bold: true },
     ...methods.map((m) => ({ label: `Pembayaran ${m}`, value: formatIDR(byMethod.get(m)?.total ?? 0) })),
   ]);
+
+  const tplCtx = $derived<ReportContext>({
+    kind: "kasir-detail",
+    title: "Laporan Kasir Detail",
+    subtitle: formatPeriodLabel(from, to),
+    meta: "",
+    scalars: { title: "Laporan Kasir Detail", subtitle: formatPeriodLabel(from, to), meta: "" },
+    datasets: { ringkasan: ringkasanRows.map((r) => ({ label: r.label, value: r.value })) },
+  });
 </script>
 
 <div class="card no-print" style="margin-bottom:1rem;">
@@ -60,4 +79,8 @@
 
 <div class="text-dim" style="margin-bottom:0.6rem;">{formatPeriodLabel(from, to)}</div>
 
-<SummaryTable rows={ringkasanRows} />
+{#if activeTpl}
+  <TemplateReport template={activeTpl} ctx={tplCtx} />
+{:else}
+  <SummaryTable rows={ringkasanRows} />
+{/if}

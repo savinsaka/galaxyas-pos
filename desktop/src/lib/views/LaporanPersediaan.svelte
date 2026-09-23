@@ -5,11 +5,17 @@
   import { toastError } from "$lib/toast";
   import { printElement, printElementPdf } from "$lib/print";
   import SummaryTable from "$lib/components/SummaryTable.svelte";
+  import TemplateReport from "$lib/components/TemplateReport.svelte";
+  import { formatPeriodLabel } from "$lib/dateTime";
   import { REPORT_TYPES, defaultConfig, loadReportDesign, blockOrder, blockHidden, type ReportDesignConfig } from "$lib/reportDesign";
+  import { hasActiveTemplate, loadActiveTemplate } from "$lib/report/storage";
+  import type { ReportContext } from "$lib/report/kinds";
+  import type { ReportTemplate } from "$lib/report/template";
   import type { ProductWithStock, StockMovement } from "$lib/types";
 
   const BLOCKS = REPORT_TYPES.find((t) => t.key === "persediaan")!.blocks;
   let design = $state<ReportDesignConfig>(defaultConfig(BLOCKS));
+  let activeTpl = $state<ReportTemplate | null>(null);
 
   type Gran = "harian" | "bulanan" | "tahunan";
   let gran = $state<Gran>("bulanan");
@@ -32,6 +38,9 @@
     presetTahunIni();
     load();
     loadReportDesign("persediaan", BLOCKS).then((d) => (design = d));
+    hasActiveTemplate("laporan-persediaan").then(async (has) => {
+      if (has) activeTpl = await loadActiveTemplate("laporan-persediaan");
+    });
   });
 
   const dateStr = (iso: string) => {
@@ -97,6 +106,22 @@
 
   const stockValueCost = $derived(products.reduce((s, p) => s + p.stock_qty * p.cost_price, 0));
   const stockValueSell = $derived(products.reduce((s, p) => s + p.stock_qty * p.sell_price, 0));
+
+  const tplCtx = $derived<ReportContext>({
+    kind: "laporan-persediaan",
+    title: "Laporan Persediaan",
+    subtitle: formatPeriodLabel(from, to),
+    meta: "",
+    scalars: { title: "Laporan Persediaan", subtitle: formatPeriodLabel(from, to), meta: "" },
+    datasets: {
+      nilai_stok: [
+        { label: "Nilai Stok (Pokok)", value: stockValueCost },
+        { label: "Nilai Stok (Jual)", value: stockValueSell },
+      ],
+      pergerakan: buckets.map(([k, b]) => ({ periode: k, masuk: b.masuk, keluar: b.keluar, jual: b.jual, opname: b.opname })),
+      rekap_barang: perItem.map(([name, b]) => ({ name, masuk: b.masuk, keluar: b.keluar, jual: b.jual })),
+    },
+  });
 </script>
 
 <div id="printable-page">
@@ -123,6 +148,9 @@
   </div>
 </div>
 
+{#if activeTpl}
+  <TemplateReport template={activeTpl} ctx={tplCtx} />
+{:else}
 <div style="display:flex; flex-direction:column; gap:1rem;">
   {#if !blockHidden(design, "nilai_stok")}
     <div style="order:{blockOrder(design, 'nilai_stok')};">
@@ -163,4 +191,5 @@
     </div>
   {/if}
 </div>
+{/if}
 </div>

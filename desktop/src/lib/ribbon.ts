@@ -123,12 +123,6 @@ export const RIBBON: RibbonCategory[] = [
           { key: "lap-umum", label: "Lap. Umum", icon: "📋", viewKey: "laporan-umum", title: "Laporan Umum", singleton: true },
         ],
       },
-      {
-        label: "Desain",
-        actions: [
-          { key: "desain-laporan", label: "Desain Laporan", icon: "🧩", viewKey: "desain-laporan", title: "Desain Laporan", singleton: true },
-        ],
-      },
     ],
   },
   {
@@ -161,6 +155,7 @@ export const RIBBON: RibbonCategory[] = [
           { key: "pengaturan-tema", label: "Tema", icon: "🎨", viewKey: "pengaturan-tema", title: "Tema", singleton: true, props: { section: "tema" } },
           { key: "pengaturan-kasir", label: "Preferensi Kasir", icon: "🧮", viewKey: "pengaturan-kasir", title: "Preferensi Kasir", singleton: true, props: { section: "kasir" } },
           { key: "pengaturan-lanjutan", label: "Lanjutan", icon: "⚠️", viewKey: "pengaturan-lanjutan", title: "Lanjutan", singleton: true, props: { section: "lanjutan" } },
+          { key: "editor-laporan", label: "Editor Laporan", icon: "🎨", viewKey: "editor-laporan", title: "Editor Laporan", singleton: true },
           { key: "hak-akses", label: "Hak Akses", icon: "🔐", viewKey: "hak-akses", title: "Hak Akses & Pengguna", singleton: true },
           { key: "migrasi", label: "Migrasi Data", icon: "🚚", viewKey: "migrasi", title: "Migrasi Data Toko", singleton: true },
         ],

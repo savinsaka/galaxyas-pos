@@ -8,7 +8,7 @@
     paperWidthMm,
     type ReceiptConfig,
   } from "$lib/receipt";
-  import { buildReceiptEscPos } from "$lib/escpos";
+  import { receiptEscPos } from "$lib/report/print";
   import { printReceiptElement } from "$lib/print";
   import type { TransactionDetail } from "$lib/types";
 
@@ -80,7 +80,7 @@
 
   async function printToPrinter() {
     try {
-      await api.printEscposTo(cfg.printer, buildReceiptEscPos(detail, cfg));
+      await api.printEscposTo(cfg.printer, await receiptEscPos(detail, await api.getSettings()));
       showToast(cfg.printer ? `Dikirim ke printer: ${cfg.printer}` : "Dikirim ke printer default.", "success");
     } catch (e) {
       toastError(e);

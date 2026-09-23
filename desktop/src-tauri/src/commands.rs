@@ -887,6 +887,187 @@ pub fn write_temp_file(file_name: String, bytes: Vec<u8>) -> AppResult<String> {
     Ok(path.to_string_lossy().to_string())
 }
 
+// ---------- Template Laporan (.Greport) ----------
+
+/// Kategori folder template yang diizinkan. Divalidasi di setiap command supaya
+/// nama kategori tidak bisa dipakai untuk path traversal keluar dari Reports/.
+pub const REPORT_CATEGORIES: [&str; 5] = ["kasir", "penjualan", "item", "persediaan", "umum"];
+
+const REPORT_EXT: &str = "Greport";
+
+/// Folder induk template: `Documents\GalaxyAS POS\Reports` (fallback ke data_dir
+/// bila folder Dokumen tidak terbaca). Dipakai command & ensure-on-startup.
+pub fn reports_root(doc_dir: PathBuf) -> PathBuf {
+    doc_dir.join("GalaxyAS POS").join("Reports")
+}
+
+/// Buat semua subfolder kategori bila belum ada. Idempotent; dipanggil saat
+/// startup (lib.rs) sebagai jaring pengaman untuk instalasi lama & dev build —
+/// installer NSIS juga membuatnya saat instalasi.
+pub fn ensure_report_dirs(doc_dir: PathBuf) -> std::io::Result<()> {
+    let root = reports_root(doc_dir);
+    for cat in REPORT_CATEGORIES {
+        std::fs::create_dir_all(root.join(cat))?;
+    }
+    Ok(())
+}
+
+fn valid_category(category: &str) -> AppResult<()> {
+    if REPORT_CATEGORIES.contains(&category) {
+        Ok(())
+    } else {
+        Err(AppError::Other(format!(
+            "Kategori laporan tidak dikenal: {category}"
+        )))
+    }
+}
+
+/// Nama template harus aman sebagai nama berkas: tanpa pemisah path, tanpa "..",
+/// tanpa karakter terlarang Windows. Mengembalikan nama yang sudah di-trim.
+fn safe_template_name(name: &str) -> AppResult<String> {
+    let n = name.trim();
+    if n.is_empty() {
+        return Err(AppError::Other("Nama template kosong.".into()));
+    }
+    let bad = ['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
+    if n.contains("..") || n.chars().any(|c| bad.contains(&c) || c.is_control()) {
+        return Err(AppError::Other(
+            "Nama template mengandung karakter terlarang.".into(),
+        ));
+    }
+    Ok(n.to_string())
+}
+
+fn doc_dir(app: &tauri::AppHandle, state: &State<'_, AppState>) -> PathBuf {
+    use tauri::Manager;
+    app.path()
+        .document_dir()
+        .unwrap_or_else(|_| state.data_dir.clone())
+}
+
+fn template_path(doc_dir: PathBuf, category: &str, kind: &str, name: &str) -> AppResult<PathBuf> {
+    valid_category(category)?;
+    let sub = safe_template_name(kind)?; // subfolder per-jenis (mis. struk-transaksi)
+    let clean = safe_template_name(name)?;
+    let dir = reports_root(doc_dir).join(category).join(sub);
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir.join(format!("{clean}.{REPORT_EXT}")))
+}
+
+/// Daftar nama template (tanpa ekstensi) di satu jenis laporan, urut alfabet.
+#[tauri::command]
+pub fn list_report_templates(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    category: String,
+    kind: String,
+) -> AppResult<Vec<String>> {
+    valid_category(&category)?;
+    let sub = safe_template_name(&kind)?;
+    let dir = reports_root(doc_dir(&app, &state)).join(&category).join(sub);
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let is_greport = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case(REPORT_EXT))
+                .unwrap_or(false);
+            if is_greport {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    out.push(stem.to_string());
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    Ok(out)
+}
+
+#[tauri::command]
+pub fn read_report_template(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    category: String,
+    kind: String,
+    name: String,
+) -> AppResult<String> {
+    let path = template_path(doc_dir(&app, &state), &category, &kind, &name)?;
+    Ok(std::fs::read_to_string(&path)?)
+}
+
+#[tauri::command]
+pub fn write_report_template(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    category: String,
+    kind: String,
+    name: String,
+    json: String,
+) -> AppResult<()> {
+    let path = template_path(doc_dir(&app, &state), &category, &kind, &name)?;
+    std::fs::write(&path, json)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn delete_report_template(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    category: String,
+    kind: String,
+    name: String,
+) -> AppResult<()> {
+    let path = template_path(doc_dir(&app, &state), &category, &kind, &name)?;
+    if path.exists() {
+        std::fs::remove_file(&path)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn rename_report_template(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    category: String,
+    kind: String,
+    old_name: String,
+    new_name: String,
+) -> AppResult<()> {
+    let dir = doc_dir(&app, &state);
+    let from = template_path(dir.clone(), &category, &kind, &old_name)?;
+    let to = template_path(dir, &category, &kind, &new_name)?;
+    if to.exists() {
+        return Err(AppError::Other(format!(
+            "Template \"{new_name}\" sudah ada."
+        )));
+    }
+    std::fs::rename(&from, &to)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn duplicate_report_template(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    category: String,
+    kind: String,
+    name: String,
+    new_name: String,
+) -> AppResult<()> {
+    let dir = doc_dir(&app, &state);
+    let from = template_path(dir.clone(), &category, &kind, &name)?;
+    let to = template_path(dir, &category, &kind, &new_name)?;
+    if to.exists() {
+        return Err(AppError::Other(format!(
+            "Template \"{new_name}\" sudah ada."
+        )));
+    }
+    std::fs::copy(&from, &to)?;
+    Ok(())
+}
+
 /// Daftar printer yang terpasang (Windows). Kosong pada OS lain.
 #[tauri::command]
 pub fn list_printers() -> Vec<String> {
