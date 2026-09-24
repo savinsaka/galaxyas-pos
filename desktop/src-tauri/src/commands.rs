@@ -1311,6 +1311,110 @@ pub async fn sync_all(state: State<'_, AppState>) -> AppResult<SyncResult> {
     })
 }
 
+// ---------- Hard Push / Hard Pull ----------
+//
+// Mengabaikan Last Write Wins: hard push menimpa SSoT dengan data lokal,
+// hard pull menimpa lokal dengan data SSoT. Keduanya TIDAK menghapus produk
+// yang cuma ada di satu sisi. Merek yang dikecualikan (setting
+// `hard_sync_exclude_brands`, JSON array) dilewati di kedua arah.
+
+fn read_hard_sync_excludes(state: &State<'_, AppState>) -> AppResult<Vec<String>> {
+    let conn = state.lock()?;
+    let raw = db::get_setting(&conn, "hard_sync_exclude_brands")?.unwrap_or_default();
+    Ok(serde_json::from_str::<Vec<String>>(&raw).unwrap_or_default())
+}
+
+#[tauri::command]
+pub async fn sync_hard_push(state: State<'_, AppState>) -> AppResult<SyncResult> {
+    let (server_url, store_id, _) = read_sync_config(&state)?;
+    let excludes = read_hard_sync_excludes(&state)?;
+    let excluded: std::collections::HashSet<String> =
+        excludes.iter().map(|b| db::brand_key(Some(b))).filter(|b| !b.is_empty()).collect();
+
+    let all: Vec<Product> = {
+        let conn = state.lock()?;
+        db::get_all_products_for_sync(&conn)?
+    };
+    let (to_send, local_excluded): (Vec<Product>, Vec<Product>) =
+        all.into_iter().partition(|p| !excluded.contains(&db::brand_key(p.brand.as_deref())));
+
+    if to_send.is_empty() {
+        return Ok(SyncResult {
+            skipped: local_excluded.len() as i64,
+            message: "Tidak ada produk untuk di-hard push.".into(),
+            ..Default::default()
+        });
+    }
+
+    let resp = sync::hard_push(&server_url, &store_id, &to_send, &excludes).await?;
+
+    let names: std::collections::HashMap<&str, &str> =
+        to_send.iter().map(|p| (p.id.as_str(), p.name.as_str())).collect();
+    let mut log: Vec<SyncLogEntry> = Vec::with_capacity(to_send.len() + local_excluded.len());
+    let mut done_ids: Vec<String> = Vec::new();
+    for r in &resp.results {
+        let name = names.get(r.id.as_str()).copied().unwrap_or(r.id.as_str()).to_string();
+        let action = match r.status.as_str() {
+            "created" | "applied" => {
+                done_ids.push(r.id.clone());
+                "Dikirim"
+            }
+            "skipped_brand" => "Dikecualikan",
+            _ => "Dilewati",
+        };
+        log.push(SyncLogEntry { id: r.id.clone(), name, action: action.into() });
+    }
+    log.extend(local_excluded.iter().map(|p| SyncLogEntry {
+        id: p.id.clone(),
+        name: p.name.clone(),
+        action: "Dikecualikan".into(),
+    }));
+
+    {
+        let conn = state.lock()?;
+        db::mark_products_hard_pushed(&conn, &done_ids, &resp.server_time)?;
+    }
+
+    let skipped = resp.skipped + local_excluded.len() as i64;
+    Ok(SyncResult {
+        pushed: resp.applied,
+        pulled: 0,
+        skipped,
+        message: format!(
+            "Hard push selesai: {} produk menimpa SSoT, {} dikecualikan (merek).",
+            resp.applied, skipped
+        ),
+        log,
+    })
+}
+
+#[tauri::command]
+pub async fn sync_hard_pull(state: State<'_, AppState>) -> AppResult<SyncResult> {
+    let (server_url, store_id, _) = read_sync_config(&state)?;
+    let excludes = read_hard_sync_excludes(&state)?;
+
+    // Full pull (tanpa `since`) — semua produk SSoT.
+    let resp = sync::pull(&server_url, &store_id, None).await?;
+
+    let (applied, skipped, log) = {
+        let conn = state.lock()?;
+        let res = db::apply_pulled_products_forced(&conn, &resp.products, &excludes)?;
+        db::set_setting(&conn, "last_pull_at", &Utc::now().to_rfc3339())?;
+        res
+    };
+
+    Ok(SyncResult {
+        pulled: applied,
+        skipped,
+        pushed: 0,
+        message: format!(
+            "Hard pull selesai: {} produk lokal disamakan dengan SSoT, {} dikecualikan (merek).",
+            applied, skipped
+        ),
+        log,
+    })
+}
+
 // ---------- Bridge: Pull dari app mobile (galaxyas-mobile, fase 6) ----------
 //
 // TERPISAH TOTAL dari sync di atas: bridge ini bicara ke server GALAXYAS

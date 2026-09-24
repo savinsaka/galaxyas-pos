@@ -238,6 +238,8 @@ pub fn run() {
             commands::sync_push,
             commands::sync_pull,
             commands::sync_all,
+            commands::sync_hard_push,
+            commands::sync_hard_pull,
             commands::bridge_list_pending,
             commands::bridge_confirm_pull,
             commands::bridge_reject_pull,

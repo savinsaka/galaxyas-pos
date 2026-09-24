@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Product, SyncLog
 from app.schemas import (
+    HardPushRequest,
     ProductOut,
     PullResponse,
     PushRequest,
@@ -129,6 +130,87 @@ def push_products(payload: PushRequest, db: Session = Depends(get_db)) -> PushRe
 
     return PushResponse(
         server_time=datetime.now(timezone.utc),
+        received=len(payload.products),
+        applied=applied,
+        skipped=skipped,
+        results=results,
+    )
+
+
+@router.post("/products/hard-push", response_model=PushResponse)
+def hard_push_products(payload: HardPushRequest, db: Session = Depends(get_db)) -> PushResponse:
+    """Timpa SSoT dengan data klien, TANPA Last Write Wins.
+
+    - Produk yang dikirim selalu menimpa yang ada di SSoT (atau dibuat baru).
+    - Produk SSoT yang tidak ikut dikirim TIDAK dihapus.
+    - Produk yang di SSoT bermerek dikecualikan (`exclude_brands`) dilewati.
+    - `updated_at` diisi waktu server supaya toko lain ikut menarik perubahan
+      ini lewat Delta Sync biasa (kalau pakai `updated_at` klien yang lebih
+      tua, delta pull toko lain tidak akan melihatnya).
+    """
+    excluded = {b.strip().lower() for b in payload.exclude_brands if b.strip()}
+    now = datetime.now(timezone.utc)
+    results: list[PushResultItem] = []
+    applied = 0
+    skipped = 0
+
+    for incoming in payload.products:
+        existing = db.get(Product, incoming.id)
+        if existing is None:
+            db.add(
+                Product(
+                    id=incoming.id,
+                    name=incoming.name,
+                    barcode=incoming.barcode,
+                    category=incoming.category,
+                    brand=incoming.brand,
+                    unit=incoming.unit,
+                    sell_price=incoming.sell_price,
+                    cost_price=incoming.cost_price,
+                    default_discount=incoming.default_discount,
+                    is_active=incoming.is_active,
+                    is_deleted=incoming.is_deleted,
+                    updated_at=now,
+                )
+            )
+            applied += 1
+            results.append(PushResultItem(id=incoming.id, status="created"))
+            continue
+
+        if (existing.brand or "").strip().lower() in excluded:
+            skipped += 1
+            results.append(PushResultItem(id=incoming.id, status="skipped_brand"))
+            continue
+
+        existing.name = incoming.name
+        existing.barcode = incoming.barcode
+        existing.category = incoming.category
+        existing.brand = incoming.brand
+        existing.unit = incoming.unit
+        existing.sell_price = incoming.sell_price
+        existing.cost_price = incoming.cost_price
+        existing.default_discount = incoming.default_discount
+        existing.is_active = incoming.is_active
+        existing.is_deleted = incoming.is_deleted
+        existing.updated_at = now
+        applied += 1
+        results.append(PushResultItem(id=incoming.id, status="applied"))
+
+    db.add(
+        SyncLog(
+            store_id=payload.store_id,
+            direction="upload",
+            record_count=applied,
+            detail=(
+                f"HARD push received={len(payload.products)} applied={applied} "
+                f"skipped={skipped} exclude={sorted(excluded)}"
+            ),
+        )
+    )
+    db.commit()
+
+    return PushResponse(
+        server_time=now,
         received=len(payload.products),
         applied=applied,
         skipped=skipped,

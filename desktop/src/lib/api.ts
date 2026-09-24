@@ -250,6 +250,8 @@ export const api = {
   syncPush: () => invoke<SyncResult>("sync_push"),
   syncPull: () => invoke<SyncResult>("sync_pull"),
   syncAll: () => invoke<SyncResult>("sync_all"),
+  syncHardPush: () => invoke<SyncResult>("sync_hard_push"),
+  syncHardPull: () => invoke<SyncResult>("sync_hard_pull"),
 
   // Bridge: Pull dari app mobile (galaxyas-mobile, fase 6) — server & auth
   // TERPISAH dari Sinkronisasi di atas (itu ke server POS, ini ke server mobile).

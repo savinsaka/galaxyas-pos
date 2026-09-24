@@ -43,6 +43,16 @@ class PushRequest(BaseModel):
     products: list[ProductIn]
 
 
+class HardPushRequest(PushRequest):
+    """Hard push: timpa SSoT tanpa aturan Last Write Wins.
+
+    `exclude_brands` = merek yang dikecualikan; produk yang di SSoT bermerek
+    salah satu dari ini tidak ikut ditimpa (dibanding case-insensitive).
+    """
+
+    exclude_brands: list[str] = []
+
+
 class PushResultItem(BaseModel):
     id: str
     status: str  # "applied" | "skipped_stale" | "created"

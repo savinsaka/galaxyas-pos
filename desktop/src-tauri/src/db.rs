@@ -1146,6 +1146,28 @@ pub fn get_dirty_products(conn: &Connection) -> AppResult<Vec<Product>> {
     Ok(rows)
 }
 
+/// Semua produk lokal (termasuk yang non-aktif/terhapus) — dipakai hard push.
+pub fn get_all_products_for_sync(conn: &Connection) -> AppResult<Vec<Product>> {
+    let mut stmt = conn.prepare("SELECT * FROM products")?;
+    let rows = stmt.query_map([], map_product)?.collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Setelah hard push: server menstempel `updated_at` dengan waktu server,
+/// jadi samakan lokal supaya delta pull berikutnya tidak menarik balik
+/// ribuan baris yang isinya sama.
+pub fn mark_products_hard_pushed(conn: &Connection, ids: &[String], server_time: &str) -> AppResult<()> {
+    let tx = conn.unchecked_transaction()?;
+    for id in ids {
+        tx.execute(
+            "UPDATE products SET dirty = 0, ever_synced = 1, updated_at = ?2 WHERE id = ?1",
+            params![id, server_time],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 /// Dipanggil setelah push sukses. `ever_synced=1` ikut di-set: begitu produk
 /// berhasil dikirim ke server, server sudah "kenal" ID ini, jadi LWW timestamp
 /// normal berlaku untuk pull berikutnya (kalau tidak, produk yang baru dibuat
@@ -1167,25 +1189,70 @@ pub fn apply_pulled_products(
     conn: &Connection,
     incoming: &[Product],
 ) -> AppResult<(i64, i64, Vec<SyncLogEntry>)> {
+    apply_products(conn, incoming, false, &[])
+}
+
+/// Hard pull: terapkan SEMUA produk dari server tanpa Last Write Wins
+/// (lokal disamakan persis dengan SSoT). Produk lokal yang tidak ada di
+/// server tidak dihapus. Produk yang merek-nya (versi server ATAU lokal)
+/// ada di `exclude_brands` dilewati.
+pub fn apply_pulled_products_forced(
+    conn: &Connection,
+    incoming: &[Product],
+    exclude_brands: &[String],
+) -> AppResult<(i64, i64, Vec<SyncLogEntry>)> {
+    apply_products(conn, incoming, true, exclude_brands)
+}
+
+/// Normalisasi nama merek untuk pencocokan pengecualian hard sync.
+pub fn brand_key(brand: Option<&str>) -> String {
+    brand.unwrap_or("").trim().to_lowercase()
+}
+
+fn apply_products(
+    conn: &Connection,
+    incoming: &[Product],
+    force: bool,
+    exclude_brands: &[String],
+) -> AppResult<(i64, i64, Vec<SyncLogEntry>)> {
+    let excluded: std::collections::HashSet<String> = exclude_brands
+        .iter()
+        .map(|b| brand_key(Some(b)))
+        .filter(|b| !b.is_empty())
+        .collect();
+    let tx = conn.unchecked_transaction()?;
+    let conn: &Connection = &tx;
     let mut applied = 0i64;
     let mut skipped = 0i64;
     let mut log: Vec<SyncLogEntry> = Vec::with_capacity(incoming.len());
     for p in incoming {
-        let local: Option<(String, bool)> = conn
+        let local: Option<(String, bool, Option<String>)> = conn
             .query_row(
-                "SELECT updated_at, ever_synced FROM products WHERE id = ?1",
+                "SELECT updated_at, ever_synced, brand FROM products WHERE id = ?1",
                 params![p.id],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? != 0)),
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? != 0, r.get::<_, Option<String>>(2)?)),
             )
             .optional()?;
 
-        let should_apply = match &local {
-            None => true,
-            // Bandingkan ISO-8601 (UTC) secara leksikografis = urutan kronologis.
-            Some((local_updated, ever_synced)) => {
-                !ever_synced || p.updated_at.as_str() > local_updated.as_str()
+        if !excluded.is_empty() {
+            let local_brand = local.as_ref().and_then(|l| l.2.as_deref());
+            if excluded.contains(&brand_key(p.brand.as_deref()))
+                || excluded.contains(&brand_key(local_brand))
+            {
+                skipped += 1;
+                log.push(SyncLogEntry { id: p.id.clone(), name: p.name.clone(), action: "Dikecualikan".into() });
+                continue;
             }
-        };
+        }
+
+        let should_apply = force
+            || match &local {
+                None => true,
+                // Bandingkan ISO-8601 (UTC) secara leksikografis = urutan kronologis.
+                Some((local_updated, ever_synced, _)) => {
+                    !ever_synced || p.updated_at.as_str() > local_updated.as_str()
+                }
+            };
 
         if should_apply {
             conn.execute(
@@ -1221,6 +1288,7 @@ pub fn apply_pulled_products(
             log.push(SyncLogEntry { id: p.id.clone(), name: p.name.clone(), action: "Dilewati".into() });
         }
     }
+    tx.commit()?;
     Ok((applied, skipped, log))
 }
 
