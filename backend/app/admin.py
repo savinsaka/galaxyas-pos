@@ -6,6 +6,7 @@ polling, TIDAK ada build frontend terpisah. Server tetap seringan sebelumnya;
 panel ini cuma menjawab request yang datang, sama seperti endpoint sync.
 """
 
+import secrets
 from pathlib import Path
 
 from anyio.to_thread import run_sync
@@ -295,6 +296,12 @@ def _hapus_toko_chat(code: str) -> bool:
         return True
 
 
+# Hasil aksi di halaman Toko Chat (termasuk Kunci Chat yang tampil sekali),
+# dititipkan di memori server — BUKAN di cookie session yang bisa dibaca
+# browser — lalu diambil sekali oleh GET sesudah redirect.
+_chat_flash: dict[str, dict] = {}
+
+
 class TokoChatView(BaseView):
     """Daftar toko yang boleh ikut Chat antar toko + pembuatan Kunci Chat."""
 
@@ -307,6 +314,13 @@ class TokoChatView(BaseView):
         pesan: str | None = None
         galat: str | None = None
         kunci: dict | None = None
+
+        if request.method == "GET":
+            # Pola Post/Redirect/Get: hasil aksi terakhir diambil SEKALI di sini.
+            token = request.session.pop("toko_chat_flash", None)
+            flash = _chat_flash.pop(token, None) if token else None
+            if flash:
+                pesan, galat, kunci = flash.get("pesan"), flash.get("galat"), flash.get("kunci")
 
         if request.method == "POST":
             form = await request.form()
@@ -328,6 +342,18 @@ class TokoChatView(BaseView):
                     pesan = f"Toko {code} dihapus dari chat."
                 else:
                     galat = "Toko tidak ditemukan."
+
+            # Jangan render langsung dari POST: kalau halaman hasil POST
+            # di-refresh, browser mengirim ulang formulir — "Ganti Kunci" jadi
+            # terulang dan PC toko terus-terusan terputus. Redirect ke GET
+            # membuat refresh aman.
+            token = secrets.token_urlsafe(16)
+            _chat_flash[token] = {"pesan": pesan, "galat": galat, "kunci": kunci}
+            if len(_chat_flash) > 50:  # flash yatim (tab ditutup sebelum redirect)
+                _chat_flash.pop(next(iter(_chat_flash)))
+            request.session["toko_chat_flash"] = token
+            # Path relatif: di belakang Caddy, url_for bisa menghasilkan http://.
+            return RedirectResponse(request.url.path, status_code=303)
 
         stores, saran = await run_sync(_daftar_toko_chat)
         return await self.templates.TemplateResponse(

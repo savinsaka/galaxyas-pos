@@ -220,6 +220,29 @@ with TestClient(app) as client:
     r = client.get("/admin/toko-chat", follow_redirects=False)
     check("halaman Toko Chat butuh login", r.status_code in (302, 303, 307))
 
+    # 19. Bug nyata 2026-09-25: refresh halaman sesudah "Ganti Kunci" mengirim
+    # ulang formulir → kunci diganti lagi → PC toko terus terputus.
+    from app.config import settings
+    from app.models import ChatStore
+
+    client.post("/admin/login", data={"username": settings.admin_username, "password": settings.admin_password})
+    r = client.post("/admin/toko-chat", data={"aksi": "kunci", "code": "toko-002"}, follow_redirects=False)
+    check("aksi admin dibalas redirect 303 (bukan halaman)", r.status_code == 303)
+    page = client.get(r.headers["location"]).text
+    import re as _re
+    shown = _re.search(r"[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}", page)
+    check("kunci baru tampil sekali setelah redirect", shown is not None)
+    with SessionLocal() as db:
+        hash_before = db.get(ChatStore, "toko-002").key_hash
+    with client.websocket_connect("/api/v1/chat/ws", headers=hdr("toko-002", shown.group(0))) as b:
+        check("PC tersambung dengan kunci baru", b.receive_json()["type"] == "hello")
+        page2 = client.get("/admin/toko-chat").text  # = refresh browser
+        with SessionLocal() as db:
+            hash_after = db.get(ChatStore, "toko-002").key_hash
+        check("refresh halaman TIDAK mengganti kunci", hash_before == hash_after)
+        check("kunci tidak tampil lagi saat refresh", shown.group(0) not in page2)
+        check("PC tetap online sesudah refresh", chat.online("toko-002"))
+
 failed = [n for n, ok in results if not ok]
 print(f"\n{len(results) - len(failed)}/{len(results)} lulus")
 engine.dispose()
