@@ -13,6 +13,7 @@
     { k: "pengaturan", l: "Pengaturan" },
     { k: "cek-harga", l: "Cek Harga" },
     { k: "remote", l: "Remote" },
+    { k: "chat", l: "Chat" },
   ];
 
   let users = $state<User[]>([]);

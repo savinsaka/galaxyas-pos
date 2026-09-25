@@ -27,6 +27,9 @@ import type {
   ProductInput,
   PullItem,
   RemoteHostStatus,
+  ChatContact,
+  ChatMessage,
+  ChatStatus,
   RemoteViewerStatus,
   ProductPage,
   ProductSalesRow,
@@ -294,4 +297,38 @@ export const api = {
     invoke<void>("remote_gpos_connect", { remoteId, otp, frames }),
   remoteGposSend: (message: unknown) => invoke<void>("remote_gpos_send", { message }),
   remoteGposDisconnect: () => invoke<void>("remote_gpos_disconnect"),
+
+  // ---- Chat antar toko ----
+  chatStatus: () => invoke<{ status: ChatStatus; suggested_code: string }>("chat_status"),
+  chatSetup: (code: string, key: string) => invoke<ChatStatus>("chat_setup", { code, key }),
+  chatLogout: () => invoke<void>("chat_logout"),
+  chatHistory: () => invoke<ChatMessage[]>("chat_history"),
+  chatLookup: (code: string) => invoke<{ code: string; name: string; online: boolean }>("chat_lookup", { code }),
+  chatSend: (to: string, body: string, push: boolean, clientId: string) =>
+    invoke<string>("chat_send", { to, body, push, clientId }),
+  // Isi file dikirim mentah (bukan array JSON); metadata lewat header.
+  chatSendFile: (
+    to: string,
+    name: string,
+    bytes: Uint8Array,
+    push: boolean,
+    clientId: string,
+    voiceDuration: number | null = null,
+  ) =>
+    invoke<string>("chat_send_file", bytes, {
+      headers: {
+        "x-chat-to": to,
+        "x-chat-name": encodeURIComponent(name),
+        "x-chat-push": push ? "1" : "0",
+        "x-chat-client-id": clientId,
+        "x-chat-voice": voiceDuration === null ? "0" : "1",
+        "x-chat-duration": String(voiceDuration ?? 0),
+      },
+    }),
+  chatReadFile: (path: string) => invoke<ArrayBuffer>("chat_read_file", { path }),
+  chatContacts: () => invoke<ChatContact[]>("chat_contacts"),
+  chatSaveContact: (code: string, name: string) => invoke<ChatContact[]>("chat_save_contact", { code, name }),
+  chatDeleteContact: (code: string) => invoke<ChatContact[]>("chat_delete_contact", { code }),
+  chatOpenFile: (path: string, reveal = false) => invoke<void>("chat_open_file", { path, reveal }),
+  chatMarkRead: (peer: string, upTo: number) => invoke<void>("chat_mark_read", { peer, upTo }),
 };

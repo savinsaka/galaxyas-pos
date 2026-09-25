@@ -155,6 +155,21 @@ export const RIBBON: RibbonCategory[] = [
     ],
   },
   {
+    // Chat antar toko + Push Alert. Pesan biasa tidak memunculkan notifikasi;
+    // hanya pesan yang dikirim sebagai alert yang muncul di tab mana pun.
+    key: "chat",
+    label: "Chat",
+    perm: "chat",
+    groups: [
+      {
+        label: "Chat Toko",
+        actions: [
+          { key: "chat", label: "Chat", icon: "💬", viewKey: "chat", title: "Chat Toko", singleton: true },
+        ],
+      },
+    ],
+  },
+  {
     key: "pengaturan",
     label: "Pengaturan",
     perm: "pengaturan",

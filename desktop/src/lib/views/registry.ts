@@ -33,6 +33,7 @@ import Pengeluaran from "./Pengeluaran.svelte";
 import ShiftKasir from "./ShiftKasir.svelte";
 import CekHarga from "./CekHarga.svelte";
 import RemoteGpos from "./RemoteGpos.svelte";
+import Chat from "./Chat.svelte";
 
 export const VIEW_REGISTRY: Record<string, Component<any>> = {
   "data-barang": DataBarang,
@@ -74,4 +75,5 @@ export const VIEW_REGISTRY: Record<string, Component<any>> = {
   "shift-kasir": ShiftKasir,
   "cek-harga": CekHarga,
   "remote-gpos": RemoteGpos,
+  chat: Chat,
 };

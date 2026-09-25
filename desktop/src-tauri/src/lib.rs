@@ -7,6 +7,7 @@ mod models;
 mod pull;
 mod relay;
 mod remote_gpos;
+mod chat;
 mod servers;
 mod stores;
 mod sync;
@@ -108,6 +109,10 @@ pub fn run() {
                 }
                 app.manage(remote_gpos);
             }
+            // Chat antar toko: sambung otomatis bila Kode Toko + Kunci Chat
+            // sudah diatur di PC ini.
+            app.manage(chat::ChatState::default());
+            chat::autostart(app.handle());
 
             // Bila server aktif tersimpan di registry adalah "remote", set
             // AppState.remote supaya command yang di-proxy langsung memanggil
@@ -274,6 +279,19 @@ pub fn run() {
             remote_gpos::remote_gpos_connect,
             remote_gpos::remote_gpos_send,
             remote_gpos::remote_gpos_disconnect,
+            chat::chat_status,
+            chat::chat_setup,
+            chat::chat_logout,
+            chat::chat_history,
+            chat::chat_lookup,
+            chat::chat_send,
+            chat::chat_send_file,
+            chat::chat_contacts,
+            chat::chat_save_contact,
+            chat::chat_delete_contact,
+            chat::chat_open_file,
+            chat::chat_mark_read,
+            chat::chat_read_file,
             commands::save_relay_settings,
             commands::set_relay_enabled,
         ])

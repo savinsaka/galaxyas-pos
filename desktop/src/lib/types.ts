@@ -241,7 +241,57 @@ export type ModuleKey =
   | "laporan"
   | "pengaturan"
   | "cek-harga"
-  | "remote";
+  | "remote"
+  | "chat";
+
+export interface ChatStatus {
+  configured: boolean;
+  connected: boolean;
+  code: string;
+  name: string;
+  error: string | null;
+}
+
+export interface ChatContact {
+  code: string;
+  name: string;
+}
+
+/** Pesan keluar yang belum dikonfirmasi server: 🕓 sedang dikirim / ✕ gagal. */
+export interface ChatOutgoing {
+  client_id: string;
+  to: string;
+  body: string;
+  push: boolean;
+  created_at: string;
+  status: "sending" | "failed";
+  error?: string;
+  /** Untuk kirim ulang file — disimpan di memori saja, hilang saat app ditutup. */
+  file?: { name: string; size: number; bytes: Uint8Array };
+  /** Voice note yang belum terkirim (durasi dalam detik). */
+  voice?: { bytes: Uint8Array; duration: number };
+}
+
+export interface ChatMessage {
+  id: number;
+  from: string;
+  to: string;
+  /** Untuk "voice", `body` berisi durasi rekaman dalam detik. */
+  kind: "text" | "file" | "voice";
+  body: string;
+  file_name: string | null;
+  file_size: number | null;
+  push: boolean;
+  created_at: string;
+  /** ✓✓ abu: sudah diterima minimal satu PC toko tujuan. */
+  delivered_at: string | null;
+  /** ✓✓ biru: sudah dibaca di toko tujuan. */
+  read_at: string | null;
+  client_id?: string | null;
+  /** File yang diterima PC ini dan masih ada di disk. */
+  local_path?: string;
+  save_error?: string;
+}
 
 /** Remote GPOS — status PC ini sebagai yang diremote. */
 export interface RemoteHostStatus {

@@ -15,6 +15,7 @@
   import TabBar from "$lib/components/TabBar.svelte";
   import Workspace from "$lib/components/Workspace.svelte";
   import RemoteBanner from "$lib/components/RemoteBanner.svelte";
+  import ChatAlert from "$lib/components/ChatAlert.svelte";
 
   let ready = $state(false);
   let showServerPicker = $state(false);
@@ -103,6 +104,9 @@
     <TabBar />
     <Workspace />
   </div>
+  {#if $currentUser.role === "admin" || $currentUser.permissions.includes("chat")}
+    <ChatAlert />
+  {/if}
 {/if}
 
 <RemoteBanner />
