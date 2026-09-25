@@ -25,9 +25,9 @@ from typing import Any
 from anyio.to_thread import run_sync
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, inspect, or_, select, text, update
 
-from app.database import SessionLocal
+from app.database import SessionLocal, engine
 from app.models import ChatMessage, ChatStore, utcnow
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
@@ -81,6 +81,74 @@ def safe_file_name(name: str) -> str:
 
 
 # ---------- Akses DB (sinkron, dijalankan di thread) ----------
+
+
+def ensure_chat_columns() -> None:
+    """Migrasi kecil: kolom centang ditambahkan setelah tabel chat_messages
+    sudah ada di produksi, dan create_all tidak mengubah tabel lama."""
+    cols = {c["name"] for c in inspect(engine).get_columns("chat_messages")}
+    kind = "TIMESTAMP WITH TIME ZONE" if engine.dialect.name == "postgresql" else "TIMESTAMP"
+    with engine.begin() as conn:
+        for col in ("delivered_at", "read_at"):
+            if col not in cols:
+                conn.execute(text(f"ALTER TABLE chat_messages ADD COLUMN {col} {kind}"))
+
+
+def _iso(dt: datetime | None) -> str | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
+
+
+def _mark_delivered(to_code: str) -> dict[str, Any]:
+    """Semua pesan untuk toko ini yang belum 'diterima' → diterima sekarang.
+    Balik {"at": waktu, "by_sender": {kode pengirim: [id]}} untuk dikabarkan
+    ke pengirimnya."""
+    now = utcnow()
+    with SessionLocal() as db:
+        rows = db.execute(
+            select(ChatMessage.id, ChatMessage.from_code)
+            .where(ChatMessage.to_code == to_code, ChatMessage.delivered_at.is_(None))
+        ).all()
+        if not rows:
+            return {}
+        db.execute(
+            update(ChatMessage)
+            .where(ChatMessage.id.in_([r.id for r in rows]))
+            .values(delivered_at=now)
+        )
+        db.commit()
+    out: dict[str, list[int]] = defaultdict(list)
+    for r in rows:
+        out[r.from_code].append(r.id)
+    return {"at": _iso(now), "by_sender": dict(out)}
+
+
+def _mark_read(me: str, peer: str, up_to: int) -> tuple[list[int], str]:
+    """Pesan dari `peer` ke `me` sampai id `up_to` → dibaca."""
+    now = utcnow()
+    with SessionLocal() as db:
+        ids = list(
+            db.scalars(
+                select(ChatMessage.id).where(
+                    ChatMessage.from_code == peer,
+                    ChatMessage.to_code == me,
+                    ChatMessage.id <= up_to,
+                    ChatMessage.read_at.is_(None),
+                )
+            ).all()
+        )
+        if ids:
+            db.execute(update(ChatMessage).where(ChatMessage.id.in_(ids)).values(read_at=now))
+            db.execute(
+                update(ChatMessage)
+                .where(ChatMessage.id.in_(ids), ChatMessage.delivered_at.is_(None))
+                .values(delivered_at=now)
+            )
+            db.commit()
+    return ids, _iso(now) or ""
 
 
 def _verify(code: str, key: str) -> ChatStore | None:
@@ -149,6 +217,8 @@ def message_dict(m: ChatMessage) -> dict[str, Any]:
         "file_size": m.file_size,
         "push": m.push,
         "created_at": created.isoformat(),
+        "delivered_at": _iso(m.delivered_at),
+        "read_at": _iso(m.read_at),
     }
 
 
@@ -236,6 +306,10 @@ async def chat_ws(websocket: WebSocket) -> None:
     me = Conn(code, websocket)
     CONNS[code].add(me)
     await me.send_json({"type": "hello", "code": code, "name": store.name})
+    # PC toko ini baru tersambung: pesan yang menunggu kini "diterima" (✓✓).
+    delivered = await run_sync(_mark_delivered, code)
+    for sender, ids in (delivered.get("by_sender") or {}).items():
+        await _receipt(sender, ids, delivered_at=delivered["at"])
 
     try:
         while True:
@@ -256,6 +330,8 @@ async def chat_ws(websocket: WebSocket) -> None:
                 await _handle_text(me, msg)
             elif kind == "file":
                 await _handle_file(me, msg, websocket)
+            elif kind == "read":
+                await _handle_read(me, msg)
     except WebSocketDisconnect:
         pass
     except Exception:
@@ -264,6 +340,29 @@ async def chat_ws(websocket: WebSocket) -> None:
         CONNS.get(code, set()).discard(me)
         if code in CONNS and not CONNS[code]:
             del CONNS[code]
+
+
+async def _receipt(code: str, ids: list[int], delivered_at: str | None = None, read_at: str | None = None) -> None:
+    """Kabari semua PC toko `code` bahwa status centang pesan-pesan ini berubah."""
+    if not ids:
+        return
+    payload = {"type": "receipt", "ids": ids, "delivered_at": delivered_at, "read_at": read_at}
+    for conn in list(CONNS.get(code, ())):
+        await conn.send_json(payload)
+
+
+async def _handle_read(me: Conn, msg: dict[str, Any]) -> None:
+    peer = str(msg.get("peer", "")).strip()
+    try:
+        up_to = int(msg.get("up_to", 0))
+    except (TypeError, ValueError):
+        return
+    if not CODE_RE.match(peer) or up_to <= 0:
+        return
+    ids, at = await run_sync(_mark_read, me.code, peer, up_to)
+    # Pengirim melihat ✓✓ biru; PC lain toko ini ikut menghapus angka belum dibaca.
+    await _receipt(peer, ids, delivered_at=at, read_at=at)
+    await _receipt(me.code, ids, delivered_at=at, read_at=at)
 
 
 async def _reject(me: Conn, client_id: Any, message: str) -> None:
@@ -294,7 +393,14 @@ async def _handle_text(me: Conn, msg: dict[str, Any]) -> None:
         return
     if not await _check_target(me, client_id, to):
         return
-    row = ChatMessage(from_code=me.code, to_code=to, kind="text", body=body, push=bool(msg.get("push")))
+    row = ChatMessage(
+        from_code=me.code,
+        to_code=to,
+        kind="text",
+        body=body,
+        push=bool(msg.get("push")),
+        delivered_at=utcnow() if online(to) else None,
+    )
     saved = await run_sync(_save_message, row)
     saved["client_id"] = client_id
     await _deliver(saved, me)
@@ -336,6 +442,7 @@ async def _handle_file(me: Conn, msg: dict[str, Any], websocket: WebSocket) -> N
         file_name=name,
         file_size=len(data),
         push=bool(msg.get("push")),
+        delivered_at=utcnow(),  # file hanya dikirim kalau tujuan online
     )
     saved = await run_sync(_save_message, row)
     saved["client_id"] = client_id

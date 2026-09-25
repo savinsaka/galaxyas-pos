@@ -156,7 +156,41 @@ with TestClient(app) as client:
             last = b.receive_json()
         check("rate limit 30 pesan/menit", last["type"] == "error" and "Terlalu banyak" in last["message"])
 
-    # 15. Halaman admin butuh login.
+    # 15. Centang ala WA: ✓ terkirim → ✓✓ diterima → ✓✓ biru dibaca.
+    chat._send_hits.clear()
+    with client.websocket_connect("/api/v1/chat/ws", headers=hdr("toko-001", k1b)) as a:
+        a.receive_json()
+        a.send_json({"type": "send", "to": "toko-003", "body": "cek centang"})
+        sent = a.receive_json()["message"]
+        check("✓ terkirim: tujuan offline belum diterima", sent["delivered_at"] is None and sent["read_at"] is None)
+
+        with client.websocket_connect("/api/v1/chat/ws", headers=hdr("toko-003", k3)) as c:
+            c.receive_json()
+            r = a.receive_json()
+            check("✓✓ diterima saat tujuan tersambung", r["type"] == "receipt" and sent["id"] in r["ids"]
+                  and r["delivered_at"] and not r["read_at"])
+
+            c.send_json({"type": "read", "peer": "toko-001", "up_to": sent["id"]})
+            r = a.receive_json()
+            check("✓✓ biru dibaca dikabarkan ke pengirim", sent["id"] in r["ids"] and r["read_at"])
+            r2 = c.receive_json()
+            check("PC toko pembaca ikut dikabari (angka belum dibaca hilang)", sent["id"] in r2["ids"])
+
+            # Tujuan online saat dikirim → langsung ✓✓.
+            a.send_json({"type": "send", "to": "toko-003", "body": "langsung diterima"})
+            c.receive_json()
+            m = a.receive_json()["message"]
+            check("tujuan online → langsung diterima", m["delivered_at"] is not None and m["read_at"] is None)
+
+    hist = client.get("/api/v1/chat/messages", headers=hdr("toko-001", k1b)).json()["messages"]
+    cek = next(m for m in hist if m["body"] == "cek centang")
+    check("riwayat memuat status dibaca", cek["read_at"] is not None)
+
+    # 16. Migrasi kolom aman dijalankan berulang.
+    chat.ensure_chat_columns()
+    check("migrasi kolom idempoten", True)
+
+    # 17. Halaman admin butuh login.
     r = client.get("/admin/toko-chat", follow_redirects=False)
     check("halaman Toko Chat butuh login", r.status_code in (302, 303, 307))
 

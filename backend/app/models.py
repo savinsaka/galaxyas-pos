@@ -115,3 +115,7 @@ class ChatMessage(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False, index=True
     )
+    # Centang ala WA: diterima = minimal satu PC toko tujuan menerima pesan;
+    # dibaca = percakapan dibuka di salah satu PC toko tujuan.
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

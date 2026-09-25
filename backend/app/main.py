@@ -8,12 +8,14 @@ from app.admin import ensure_admin_user, setup_admin
 from app.config import settings
 from app.database import Base, engine
 from app.routers import chat, sync
+from app.routers.chat import ensure_chat_columns
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Untuk produksi sebaiknya pakai migrasi (Alembic). Untuk scaffold: auto-create.
     Base.metadata.create_all(bind=engine)
+    ensure_chat_columns()  # create_all tidak menambah kolom ke tabel yang sudah ada
     ensure_admin_user()  # akun panel pertama dari .env, sekali saja
     yield
 
