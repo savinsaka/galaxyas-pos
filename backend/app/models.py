@@ -107,7 +107,7 @@ class ChatMessage(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     from_code: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     to_code: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
-    kind: Mapped[str] = mapped_column(String(8), nullable=False)  # "text" | "file"
+    kind: Mapped[str] = mapped_column(String(8), nullable=False)  # "text" | "file" | "voice"
     body: Mapped[str] = mapped_column(Text, default="", nullable=False)
     file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -115,6 +115,7 @@ class ChatMessage(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False, index=True
     )
+    # Untuk kind="voice": body = durasi rekaman dalam detik.
     # Centang ala WA: diterima = minimal satu PC toko tujuan menerima pesan;
     # dibaca = percakapan dibuka di salah satu PC toko tujuan.
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

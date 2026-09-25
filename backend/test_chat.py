@@ -186,11 +186,37 @@ with TestClient(app) as client:
     cek = next(m for m in hist if m["body"] == "cek centang")
     check("riwayat memuat status dibaca", cek["read_at"] is not None)
 
-    # 16. Migrasi kolom aman dijalankan berulang.
+    # 16. Voice note: diteruskan seperti file, kind "voice", body = durasi.
+    chat._send_hits.clear()
+    with client.websocket_connect("/api/v1/chat/ws", headers=hdr("toko-001", k1b)) as a, \
+         client.websocket_connect("/api/v1/chat/ws", headers=hdr("toko-002", k2)) as b:
+        a.receive_json(); b.receive_json()
+        a.send_json({"type": "file", "voice": True, "to": "toko-002", "name": "vn.webm", "duration": 12.4})
+        a.send_bytes(b"OPUS" * 100)
+        head = b.receive_json()["message"]
+        data = b.receive_bytes()
+        check("voice note sampai", head["kind"] == "voice" and head["body"] == "12" and len(data) == 400)
+        a.receive_json()
+
+        a.send_json({"type": "file", "to": "toko-002", "name": "diam-diam.webm", "client_id": "w1"})
+        a.send_bytes(b"x")
+        m = a.receive_json()
+        check("webm sebagai file biasa ditolak", m["type"] == "error" and m["client_id"] == "w1")
+
+        a.send_json({"type": "file", "voice": True, "to": "toko-002", "name": "vn.exe", "client_id": "w2"})
+        a.send_bytes(b"x")
+        check("voice note bukan webm/ogg ditolak", a.receive_json()["type"] == "error")
+
+        a.send_json({"type": "file", "voice": True, "to": "toko-002", "name": "vn.webm", "client_id": "w3"})
+        a.send_bytes(b"x" * (chat.MAX_VOICE + 1))
+        m = a.receive_json()
+        check("voice note terlalu besar ditolak", m["type"] == "error" and "terlalu panjang" in m["message"])
+
+    # 17. Migrasi kolom aman dijalankan berulang.
     chat.ensure_chat_columns()
     check("migrasi kolom idempoten", True)
 
-    # 17. Halaman admin butuh login.
+    # 18. Halaman admin butuh login.
     r = client.get("/admin/toko-chat", follow_redirects=False)
     check("halaman Toko Chat butuh login", r.status_code in (302, 303, 307))
 

@@ -35,6 +35,10 @@ router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 RETENTION = timedelta(days=7)
 MAX_TEXT = 2000
 MAX_FILE = 10 * 1024 * 1024
+# Voice note: rekaman opus dari GPOS (MediaRecorder), maks 2 menit.
+MAX_VOICE = 2 * 1024 * 1024
+MAX_VOICE_S = 120
+VOICE_EXT = {"webm", "ogg"}
 SEND_LIMIT = (30, 60.0)  # 30 pesan per 60 detik per toko
 FILE_WAIT_S = 60.0
 
@@ -412,6 +416,7 @@ async def _handle_file(me: Conn, msg: dict[str, Any], websocket: WebSocket) -> N
     client_id = msg.get("client_id")
     to = str(msg.get("to", "")).strip()
     name = safe_file_name(str(msg.get("name", "")))
+    voice = bool(msg.get("voice"))
     try:
         raw = await asyncio.wait_for(websocket.receive(), timeout=FILE_WAIT_S)
     except asyncio.TimeoutError:
@@ -423,22 +428,42 @@ async def _handle_file(me: Conn, msg: dict[str, Any], websocket: WebSocket) -> N
     if data is None:
         await _reject(me, client_id, "Isi file tidak diterima.")
         return
-    if not file_ext_allowed(name):
-        await _reject(me, client_id, "Jenis file tidak diizinkan. Hanya gambar, Word, Excel, dan PDF.")
-        return
-    if len(data) > MAX_FILE:
-        await _reject(me, client_id, "File terlalu besar (maks 10 MB).")
-        return
+    if voice:
+        # webm/ogg HANYA boleh lewat jalur voice note, tidak sebagai file biasa.
+        ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+        if ext not in VOICE_EXT:
+            await _reject(me, client_id, "Format voice note tidak dikenal.")
+            return
+        if len(data) > MAX_VOICE:
+            await _reject(me, client_id, "Voice note terlalu panjang.")
+            return
+    else:
+        if not file_ext_allowed(name):
+            await _reject(me, client_id, "Jenis file tidak diizinkan. Hanya gambar, Word, Excel, dan PDF.")
+            return
+        if len(data) > MAX_FILE:
+            await _reject(me, client_id, "File terlalu besar (maks 10 MB).")
+            return
     if not await _check_target(me, client_id, to):
         return
     if not online(to):
-        await _reject(me, client_id, "Toko tujuan sedang offline, file tidak terkirim.")
+        what = "voice note" if voice else "file"
+        await _reject(me, client_id, f"Toko tujuan sedang offline, {what} tidak terkirim.")
         return
+    if voice:
+        # Untuk voice note, `body` berisi durasi dalam detik (tampil "0:12").
+        try:
+            seconds = max(0, min(MAX_VOICE_S, int(float(msg.get("duration", 0)))))
+        except (TypeError, ValueError):
+            seconds = 0
+        body = str(seconds)
+    else:
+        body = str(msg.get("body", "")).strip()[:MAX_TEXT]
     row = ChatMessage(
         from_code=me.code,
         to_code=to,
-        kind="file",
-        body=str(msg.get("body", "")).strip()[:MAX_TEXT],
+        kind="voice" if voice else "file",
+        body=body,
         file_name=name,
         file_size=len(data),
         push=bool(msg.get("push")),
