@@ -16,7 +16,8 @@ from sqladmin.authentication import AuthenticationBackend
 
 from app.config import settings
 from app.database import SessionLocal, engine
-from app.models import AdminUser, Product, SyncLog, utcnow
+from app.models import AdminUser, ChatStore, Product, SyncLog, utcnow
+from app.routers import chat as chat_router
 from app.security import MIN_PASSWORD_LENGTH, hash_password, verify_password
 
 _TEMPLATES_DIR = str(Path(__file__).resolve().parent / "templates")
@@ -231,6 +232,118 @@ class SyncLogAdmin(ModelView, model=SyncLog):
     can_export = False
 
 
+def _daftar_toko_chat() -> tuple[list[dict], list[str]]:
+    with SessionLocal() as db:
+        stores = [
+            {
+                "code": s.code,
+                "name": s.name,
+                "has_key": bool(s.key_hash),
+                "key_set_at": s.key_set_at,
+                "online": chat_router.online(s.code),
+            }
+            for s in db.query(ChatStore).order_by(ChatStore.code).all()
+        ]
+        terdaftar = {s["code"] for s in stores}
+        # Saran kode: store_id yang sudah pernah sync ke server ini.
+        saran = sorted(
+            {
+                code
+                for (code,) in db.query(SyncLog.store_id).distinct().all()
+                if code and code not in terdaftar and chat_router.CODE_RE.match(code)
+            }
+        )
+    return stores, saran
+
+
+def _simpan_toko_chat(code: str, name: str) -> tuple[str | None, str | None]:
+    if not chat_router.CODE_RE.match(code):
+        return None, "Kode toko hanya boleh huruf, angka, titik, strip, garis bawah (maks 64)."
+    if not name:
+        return None, "Nama toko wajib diisi."
+    with SessionLocal() as db:
+        store = db.get(ChatStore, code)
+        if store is None:
+            db.add(ChatStore(code=code, name=name[:120]))
+            pesan = f"Toko {code} ditambahkan. Buat Kunci Chat supaya toko ini bisa login."
+        else:
+            store.name = name[:120]
+            pesan = f"Nama toko {code} diperbarui."
+        db.commit()
+    return pesan, None
+
+
+def _kunci_baru(code: str) -> str | None:
+    with SessionLocal() as db:
+        store = db.get(ChatStore, code)
+        if store is None:
+            return None
+        key = chat_router.generate_key()
+        store.key_hash = chat_router.hash_key(key)
+        store.key_set_at = utcnow()
+        db.commit()
+        return key
+
+
+def _hapus_toko_chat(code: str) -> bool:
+    with SessionLocal() as db:
+        store = db.get(ChatStore, code)
+        if store is None:
+            return False
+        db.delete(store)
+        db.commit()
+        return True
+
+
+class TokoChatView(BaseView):
+    """Daftar toko yang boleh ikut Chat antar toko + pembuatan Kunci Chat."""
+
+    name = "Toko Chat"
+    identity = "toko-chat"
+    icon = "fa-solid fa-comments"
+
+    @expose("/toko-chat", methods=["GET", "POST"], identity="toko-chat")
+    async def toko_chat(self, request: Request) -> Response:
+        pesan: str | None = None
+        galat: str | None = None
+        kunci: dict | None = None
+
+        if request.method == "POST":
+            form = await request.form()
+            aksi = form.get("aksi")
+            code = str(form.get("code") or "").strip()
+            if aksi == "simpan":
+                pesan, galat = await run_sync(_simpan_toko_chat, code, str(form.get("name") or "").strip())
+            elif aksi == "kunci":
+                key = await run_sync(_kunci_baru, code)
+                if key is None:
+                    galat = "Toko tidak ditemukan."
+                else:
+                    # PC yang masih memakai kunci lama langsung terputus.
+                    await chat_router.kick_store(code)
+                    kunci = {"code": code, "key": key}
+            elif aksi == "hapus":
+                if await run_sync(_hapus_toko_chat, code):
+                    await chat_router.kick_store(code)
+                    pesan = f"Toko {code} dihapus dari chat."
+                else:
+                    galat = "Toko tidak ditemukan."
+
+        stores, saran = await run_sync(_daftar_toko_chat)
+        return await self.templates.TemplateResponse(
+            request,
+            "chat_stores.html",
+            {
+                "title": "Toko Chat",
+                "stores": stores,
+                "saran": saran,
+                "pesan": pesan,
+                "galat": galat,
+                "kunci": kunci,
+            },
+        )
+
+
 def setup_admin(app) -> None:
     admin = Admin(
         app,
@@ -243,4 +356,5 @@ def setup_admin(app) -> None:
     )
     admin.add_view(ProductAdmin)
     admin.add_view(SyncLogAdmin)
+    admin.add_view(TokoChatView)
     admin.add_view(ProfilView)

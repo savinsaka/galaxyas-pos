@@ -77,3 +77,41 @@ class SyncLog(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False, index=True
     )
+
+
+class ChatStore(Base):
+    """Toko yang boleh ikut Chat antar toko.
+
+    `code` = kode toko yang sama dengan `store_id` sync (ibarat nomor HP,
+    boleh diketahui toko lain). `key_hash` = hash Kunci Chat (ibarat kartu
+    SIM) yang dibuat dari panel admin dan hanya ditampilkan sekali.
+    """
+
+    __tablename__ = "chat_stores"
+
+    code: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    key_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    key_set_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
+class ChatMessage(Base):
+    """Pesan chat, disimpan 7 hari. Untuk file hanya nama & ukurannya —
+    isi file tidak pernah ditulis ke server."""
+
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    from_code: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    to_code: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    kind: Mapped[str] = mapped_column(String(8), nullable=False)  # "text" | "file"
+    body: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    push: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False, index=True
+    )

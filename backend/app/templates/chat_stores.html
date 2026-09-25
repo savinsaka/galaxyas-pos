@@ -1,0 +1,107 @@
+{% extends "sqladmin/layout.html" %}
+{% block content %}
+<!-- row-deck milik sqladmin membuat kolom jadi flex horizontal; susun ke bawah. -->
+<div class="col-12 col-xl-9" style="flex-direction:column;">
+  {% if pesan %}
+  <div class="alert alert-success" role="alert">{{ pesan }}</div>
+  {% endif %}
+  {% if galat %}
+  <div class="alert alert-danger" role="alert">{{ galat }}</div>
+  {% endif %}
+  {% if kunci %}
+  <div class="alert alert-warning" role="alert">
+    <div><b>Kunci Chat baru untuk {{ kunci.code }}</b> — salin sekarang, kunci ini <b>tidak akan ditampilkan lagi</b>.</div>
+    <div style="font-family:monospace; font-size:1.6rem; letter-spacing:0.08em; margin:0.4rem 0;">{{ kunci.key }}</div>
+    <div class="text-muted">Tempel di GPOS setiap PC toko ini: menu <b>Chat</b> → Kunci Chat. PC yang memakai kunci lama sudah otomatis terputus.</div>
+  </div>
+  {% endif %}
+
+  <div class="card mb-3">
+    <div class="card-header">
+      <h3 class="card-title">Toko yang ikut Chat</h3>
+    </div>
+    <div class="card-body">
+      <p class="text-muted">
+        <b>Kode toko</b> ibarat nomor HP: boleh diberitahukan ke toko lain supaya disimpan sebagai kontak.
+        <b>Kunci Chat</b> ibarat kartu SIM: hanya untuk PC toko itu sendiri. Server hanya menyimpan hash-nya.
+      </p>
+      <div class="table-responsive">
+        <table class="table table-vcenter">
+          <thead>
+            <tr><th>Kode</th><th>Nama</th><th>Kunci</th><th>Status</th><th></th></tr>
+          </thead>
+          <tbody>
+            {% for s in stores %}
+            <tr>
+              <td style="font-family:monospace;">{{ s.code }}</td>
+              <td>
+                <form method="POST" class="d-flex gap-2">
+                  <input type="hidden" name="aksi" value="simpan" />
+                  <input type="hidden" name="code" value="{{ s.code }}" />
+                  <input class="form-control form-control-sm" name="name" value="{{ s.name }}" required />
+                  <button class="btn btn-sm">Simpan</button>
+                </form>
+              </td>
+              <td>
+                {% if s.has_key %}
+                Ada <span class="text-muted">({{ s.key_set_at.strftime("%d-%m-%Y") if s.key_set_at else "" }})</span>
+                {% else %}
+                <span class="text-danger">Belum ada</span>
+                {% endif %}
+              </td>
+              <td>{% if s.online %}<span class="text-success">● Online</span>{% else %}<span class="text-muted">○ Offline</span>{% endif %}</td>
+              <td class="text-end">
+                <form method="POST" class="d-inline"
+                      onsubmit="return {{ 'confirm(\'Ganti kunci? Semua PC toko ini harus memasukkan kunci baru.\')' if s.has_key else 'true' }};">
+                  <input type="hidden" name="aksi" value="kunci" />
+                  <input type="hidden" name="code" value="{{ s.code }}" />
+                  <button class="btn btn-sm btn-primary">{{ "Ganti Kunci" if s.has_key else "Buat Kunci" }}</button>
+                </form>
+                <form method="POST" class="d-inline" onsubmit="return confirm('Hapus toko {{ s.code }} dari chat?');">
+                  <input type="hidden" name="aksi" value="hapus" />
+                  <input type="hidden" name="code" value="{{ s.code }}" />
+                  <button class="btn btn-sm btn-outline-danger">Hapus</button>
+                </form>
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" class="text-muted">Belum ada toko yang ikut chat.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Tambah Toko</h3>
+    </div>
+    <div class="card-body">
+      <form method="POST">
+        <input type="hidden" name="aksi" value="simpan" />
+        <div class="row g-2">
+          <div class="col-md-4">
+            <label class="form-label" for="code">Kode toko</label>
+            <input class="form-control" id="code" name="code" list="saran-kode" placeholder="toko-001" required />
+            <datalist id="saran-kode">
+              {% for c in saran %}<option value="{{ c }}"></option>{% endfor %}
+            </datalist>
+            <small class="form-hint">Sama dengan Store ID di Pengaturan Server Sinkronisasi GPOS.</small>
+          </div>
+          <div class="col-md-5">
+            <label class="form-label" for="name">Nama toko</label>
+            <input class="form-control" id="name" name="name" placeholder="Toko Depan" required />
+          </div>
+          <div class="col-md-3 d-flex align-items-end">
+            <button type="submit" class="btn btn-primary w-100">Tambah</button>
+          </div>
+        </div>
+        {% if saran %}
+        <div class="text-muted mt-2">Kode yang pernah sync tapi belum ikut chat: {{ saran | join(", ") }}</div>
+        {% endif %}
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

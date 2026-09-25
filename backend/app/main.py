@@ -7,7 +7,7 @@ from fastapi.responses import RedirectResponse
 from app.admin import ensure_admin_user, setup_admin
 from app.config import settings
 from app.database import Base, engine
-from app.routers import sync
+from app.routers import chat, sync
 
 
 @asynccontextmanager
@@ -34,6 +34,7 @@ app.add_middleware(
 )
 
 app.include_router(sync.router)
+app.include_router(chat.router)
 setup_admin(app)
 
 
