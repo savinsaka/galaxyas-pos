@@ -141,6 +141,20 @@ export const RIBBON: RibbonCategory[] = [
     ],
   },
   {
+    // Remote GPOS (eksperimental): diremote / meremote PC GPOS lain.
+    key: "remote",
+    label: "Remote",
+    perm: "remote",
+    groups: [
+      {
+        label: "Remote GPOS",
+        actions: [
+          { key: "remote-gpos", label: "Remote", icon: "🖥️", viewKey: "remote-gpos", title: "Remote GPOS", singleton: true },
+        ],
+      },
+    ],
+  },
+  {
     key: "pengaturan",
     label: "Pengaturan",
     perm: "pengaturan",

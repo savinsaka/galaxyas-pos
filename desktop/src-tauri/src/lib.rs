@@ -6,6 +6,7 @@ mod migrasi;
 mod models;
 mod pull;
 mod relay;
+mod remote_gpos;
 mod servers;
 mod stores;
 mod sync;
@@ -98,6 +99,15 @@ pub fn run() {
                 relay_status: Arc::new(Mutex::new(relay::RelayStatus::default())),
             });
             app.manage(PrintPayloadState::default());
+            {
+                // Remote GPOS selalu mati saat app dibuka; hanya pilihan
+                // kontrol/lihat yang diingat.
+                let remote_gpos = remote_gpos::RemoteGposState::default();
+                if let Ok(guard) = conn.lock() {
+                    remote_gpos::load_preferences(&remote_gpos, &guard);
+                }
+                app.manage(remote_gpos);
+            }
 
             // Bila server aktif tersimpan di registry adalah "remote", set
             // AppState.remote supaya command yang di-proxy langsung memanggil
@@ -258,6 +268,12 @@ pub fn run() {
             commands::list_mobile_devices,
             commands::revoke_mobile_device,
             commands::relay_status,
+            remote_gpos::remote_gpos_status,
+            remote_gpos::remote_gpos_set_host,
+            remote_gpos::remote_gpos_set_control,
+            remote_gpos::remote_gpos_connect,
+            remote_gpos::remote_gpos_send,
+            remote_gpos::remote_gpos_disconnect,
             commands::save_relay_settings,
             commands::set_relay_enabled,
         ])

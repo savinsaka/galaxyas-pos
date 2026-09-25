@@ -70,6 +70,17 @@ def init_schema() -> None:
             )
             """
         )
+        # Remote GPOS: ID 9 digit dikunci ke rahasia per-PC saat pertama kali
+        # dipakai, supaya PC lain tidak bisa mengaku ID yang sama.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS remote_ids (
+                remote_id   TEXT PRIMARY KEY,
+                secret_hash TEXT NOT NULL,
+                created_at  TEXT NOT NULL
+            )
+            """
+        )
         conn.commit()
 
 
@@ -189,7 +200,12 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 @app.get("/health")
 def health() -> dict[str, Any]:
     """Liveness relay itu sendiri (bukan status PC kasir)."""
-    return {"status": "ok", "stores_online": len(AGENTS)}
+    return {
+        "status": "ok",
+        "stores_online": len(AGENTS),
+        "remote_hosts": len(REMOTE_HOSTS),
+        "remote_sessions": active_remote_sessions(),
+    }
 
 
 @app.websocket("/agent/ws")
@@ -377,3 +393,213 @@ async def store_rpc(store_id: str, command: str, request: Request) -> JSONRespon
         return JSONResponse({"error": f"JSON tidak valid: {exc}"}, status_code=400)
 
     return await forward(store_id, {"kind": "rpc", "cmd": command, "args": args, "auth": token})
+
+
+# ---------- Remote GPOS (eksperimental) ----------
+#
+# PC yang mau dibantu ("host") menyalakan Remote di GPOS: ia menyambung ke
+# /remote/host membawa ID 9 digit, rahasia per-PC, dan hash OTP sesi. PC yang
+# membantu ("viewer") menyambung ke /remote/view dengan ID + OTP. Relay hanya
+# memasangkan dua socket itu lalu meneruskan pesan apa adanya (JSON input dan
+# frame JPEG) — tidak ada yang disimpan, tidak ada yang diantre. Laju frame
+# diatur ujung-ke-ujung (host menunggu `ack` viewer sebelum kirim frame
+# berikutnya), jadi relay tidak pernah menumpuk frame di RAM.
+
+REMOTE_MAX_SESSIONS = int(os.environ.get("RELAY_REMOTE_MAX_SESSIONS", "2"))
+REMOTE_MAX_HOSTS = 50
+REMOTE_WAIT_S = 15 * 60
+REMOTE_MAX_MSG = 2 * 1024 * 1024
+
+
+class RemoteHost:
+    def __init__(self, remote_id: str, ws: WebSocket, otp_hash: str) -> None:
+        self.remote_id = remote_id
+        self.ws = ws
+        # Dikosongkan begitu viewer masuk — OTP sekali pakai.
+        self.otp_hash: str | None = otp_hash
+        self.viewer: WebSocket | None = None
+        self.done = asyncio.Event()
+
+
+REMOTE_HOSTS: dict[str, RemoteHost] = {}
+
+
+def active_remote_sessions() -> int:
+    return sum(1 for h in REMOTE_HOSTS.values() if h.viewer is not None)
+
+
+def _ws_ip(websocket: WebSocket) -> str:
+    forwarded = websocket.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return websocket.client.host if websocket.client else "?"
+
+
+async def _ws_reject(websocket: WebSocket, code: int, message: str) -> None:
+    """Terima dulu lalu kirim alasan, supaya GPOS bisa menampilkan pesan yang
+    jelas (close sebelum accept hanya jadi HTTP 403 tanpa keterangan)."""
+    try:
+        await websocket.accept()
+        await websocket.send_text(json.dumps({"type": "error", "message": message}))
+        await websocket.close(code=code)
+    except Exception:
+        pass
+
+
+def _claim_remote_id(remote_id: str, secret: str) -> bool:
+    with closing(db()) as conn:
+        row = conn.execute(
+            "SELECT secret_hash FROM remote_ids WHERE remote_id = ?", (remote_id,)
+        ).fetchone()
+        if row is None:
+            conn.execute(
+                "INSERT INTO remote_ids (remote_id, secret_hash, created_at) VALUES (?, ?, ?)",
+                (remote_id, sha256_hex(secret), _now_iso()),
+            )
+            conn.commit()
+            return True
+    return secrets.compare_digest(row["secret_hash"], sha256_hex(secret))
+
+
+async def _pipe(src: WebSocket, dst: WebSocket) -> None:
+    """Teruskan pesan src → dst sampai salah satu putus."""
+    while True:
+        msg = await src.receive()
+        if msg["type"] == "websocket.disconnect":
+            return
+        data_bytes = msg.get("bytes")
+        data_text = msg.get("text")
+        if data_bytes is not None:
+            if len(data_bytes) <= REMOTE_MAX_MSG:
+                await dst.send_bytes(data_bytes)
+        elif data_text is not None:
+            if len(data_text) <= REMOTE_MAX_MSG:
+                await dst.send_text(data_text)
+
+
+async def _close_quietly(ws: WebSocket | None, code: int) -> None:
+    if ws is None:
+        return
+    try:
+        await ws.close(code=code)
+    except Exception:
+        pass
+
+
+@app.websocket("/remote/host")
+async def remote_host_ws(websocket: WebSocket) -> None:
+    remote_id = websocket.headers.get("x-remote-id", "")
+    secret = websocket.headers.get("x-remote-secret", "")
+    otp_hash = websocket.headers.get("x-remote-otp-hash", "").lower()
+
+    if not rate_limit(f"remote-host:{_ws_ip(websocket)}", limit=60, window_s=600):
+        await _ws_reject(websocket, 4429, "Terlalu banyak percobaan. Coba lagi nanti.")
+        return
+    if not (remote_id.isdigit() and len(remote_id) == 9 and len(secret) >= 32 and len(otp_hash) == 64):
+        await _ws_reject(websocket, 4400, "Data sesi remote tidak valid.")
+        return
+    if not _claim_remote_id(remote_id, secret):
+        await _ws_reject(websocket, 4401, "ID remote ini sudah dipakai PC lain.")
+        return
+    if remote_id not in REMOTE_HOSTS and len(REMOTE_HOSTS) >= REMOTE_MAX_HOSTS:
+        await _ws_reject(websocket, 4429, "Relay sedang penuh. Coba lagi nanti.")
+        return
+
+    await websocket.accept()
+
+    # Satu ID = satu host. Yang baru (mis. switch dimatikan-nyalakan) menendang yang lama.
+    previous = REMOTE_HOSTS.get(remote_id)
+    if previous is not None:
+        previous.done.set()
+        await _close_quietly(previous.viewer, 4409)
+        await _close_quietly(previous.ws, 4409)
+
+    host = RemoteHost(remote_id, websocket, otp_hash)
+    REMOTE_HOSTS[remote_id] = host
+
+    # Satu-satunya pembaca socket host ada di sini (arah host → viewer). Arah
+    # sebaliknya dibaca di remote_view_ws. Dua pembaca pada satu socket ASGI
+    # akan saling merebut pesan.
+    try:
+        await websocket.send_text(json.dumps({"type": "ready"}))
+        deadline = time.time() + REMOTE_WAIT_S
+        while not host.done.is_set():
+            if host.viewer is None:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    await websocket.send_text(
+                        json.dumps({"type": "error", "message": "Sesi kedaluwarsa (15 menit tanpa penyambung)."})
+                    )
+                    await websocket.close(code=4408)
+                    return
+                timeout = min(remaining, 5.0)
+            else:
+                timeout = None
+            try:
+                msg = await asyncio.wait_for(websocket.receive(), timeout=timeout)
+            except asyncio.TimeoutError:
+                continue
+            if msg["type"] == "websocket.disconnect":
+                return
+            viewer = host.viewer
+            if viewer is None:
+                continue  # denyut selama menunggu
+            data_bytes = msg.get("bytes")
+            data_text = msg.get("text")
+            if data_bytes is not None and len(data_bytes) <= REMOTE_MAX_MSG:
+                await viewer.send_bytes(data_bytes)
+            elif data_text is not None and len(data_text) <= REMOTE_MAX_MSG:
+                await viewer.send_text(data_text)
+    except Exception:
+        pass
+    finally:
+        if REMOTE_HOSTS.get(remote_id) is host:
+            del REMOTE_HOSTS[remote_id]
+        host.done.set()
+        await _close_quietly(host.viewer, 4410)
+
+
+@app.websocket("/remote/view")
+async def remote_view_ws(websocket: WebSocket) -> None:
+    remote_id = websocket.headers.get("x-remote-id", "").replace(" ", "")
+    otp = websocket.headers.get("x-remote-otp", "").strip()
+
+    # Ketat: OTP 6 digit hanya aman kalau tebakan dibatasi.
+    if not rate_limit(f"remote-view:{_ws_ip(websocket)}", limit=15, window_s=600):
+        await _ws_reject(websocket, 4429, "Terlalu banyak percobaan. Coba lagi 10 menit lagi.")
+        return
+    host = REMOTE_HOSTS.get(remote_id)
+    if host is None or host.done.is_set():
+        await _ws_reject(websocket, 4404, "PC tujuan tidak sedang membuka remote.")
+        return
+    if host.viewer is not None or host.otp_hash is None:
+        await _ws_reject(websocket, 4409, "PC tujuan sedang diremote orang lain.")
+        return
+    if not secrets.compare_digest(host.otp_hash, sha256_hex(otp)):
+        await _ws_reject(websocket, 4401, "ID atau OTP salah.")
+        return
+    if active_remote_sessions() >= REMOTE_MAX_SESSIONS:
+        await _ws_reject(websocket, 4429, "Relay sedang penuh (batas sesi remote). Coba lagi nanti.")
+        return
+
+    await websocket.accept()
+    host.viewer = websocket
+    host.otp_hash = None
+
+    tasks: list[asyncio.Task] = []
+    try:
+        await websocket.send_text(json.dumps({"type": "joined"}))
+        await host.ws.send_text(json.dumps({"type": "viewer_joined"}))
+        tasks = [
+            asyncio.create_task(_pipe(websocket, host.ws)),
+            asyncio.create_task(host.done.wait()),
+        ]
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    except Exception:
+        pass
+    finally:
+        for t in tasks:
+            t.cancel()
+        host.done.set()
+        await _close_quietly(websocket, 4410)
+        await _close_quietly(host.ws, 4410)

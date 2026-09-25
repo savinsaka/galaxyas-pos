@@ -1,6 +1,6 @@
 [package]
 name = "desktop"
-version = "1.4.1"
+version = "1.5.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -59,6 +59,11 @@ hkdf = "0.12"
 flate2 = "1"
 
 [target.'cfg(windows)'.dependencies]
+# Remote GPOS (src/remote_gpos.rs): DevTools Protocol milik WebView2 untuk
+# tangkap layar & input — versinya sengaja sama dengan yang dibawa wry/tauri,
+# supaya tipe `ICoreWebView2Controller` dari `with_webview` cocok.
+webview2-com = "0.38"
+windows-core = "0.61"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Graphics_Printing",

@@ -346,7 +346,7 @@ fn read_stock(conn: &Connection, product_id: &str) -> AppResult<f64> {
 /// Isi data awal (kasir & setting default) bila kosong.
 pub fn seed_defaults(conn: &Connection) -> AppResult<()> {
     const ALL_PERMS: &str =
-        r#"["master","penjualan","persediaan","laporan","pengaturan","cek-harga"]"#;
+        r#"["master","penjualan","persediaan","laporan","pengaturan","cek-harga","remote"]"#;
     let user_count: i64 = conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))?;
     if user_count == 0 {
         conn.execute(

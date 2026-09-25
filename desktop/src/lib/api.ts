@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, Channel } from "@tauri-apps/api/core";
 import type {
   ActiveServer,
   Brand,
@@ -26,6 +26,8 @@ import type {
   Product,
   ProductInput,
   PullItem,
+  RemoteHostStatus,
+  RemoteViewerStatus,
   ProductPage,
   ProductSalesRow,
   ProductWithStock,
@@ -283,4 +285,13 @@ export const api = {
   saveRelaySettings: (input: { url: string; store_id: string; agent_key: string }) =>
     invoke<RelayStatus>("save_relay_settings", { input }),
   setRelayEnabled: (enabled: boolean) => invoke<RelayStatus>("set_relay_enabled", { enabled }),
+
+  // ---- Remote GPOS (eksperimental) ----
+  remoteGposStatus: () => invoke<[RemoteHostStatus, RemoteViewerStatus]>("remote_gpos_status"),
+  remoteGposSetHost: (enabled: boolean) => invoke<RemoteHostStatus>("remote_gpos_set_host", { enabled }),
+  remoteGposSetControl: (allow: boolean) => invoke<void>("remote_gpos_set_control", { allow }),
+  remoteGposConnect: (remoteId: string, otp: string, frames: Channel<ArrayBuffer>) =>
+    invoke<void>("remote_gpos_connect", { remoteId, otp, frames }),
+  remoteGposSend: (message: unknown) => invoke<void>("remote_gpos_send", { message }),
+  remoteGposDisconnect: () => invoke<void>("remote_gpos_disconnect"),
 };

@@ -240,7 +240,32 @@ export type ModuleKey =
   | "persediaan"
   | "laporan"
   | "pengaturan"
-  | "cek-harga";
+  | "cek-harga"
+  | "remote";
+
+/** Remote GPOS — status PC ini sebagai yang diremote. */
+export interface RemoteHostStatus {
+  enabled: boolean;
+  phase: "off" | "connecting" | "waiting" | "connected" | "error";
+  remote_id: string;
+  otp: string;
+  allow_control: boolean;
+  error: string | null;
+}
+
+/** Remote GPOS — status PC ini sebagai yang meremote. */
+export interface RemoteViewerStatus {
+  phase: "off" | "connecting" | "connected" | "closed";
+  remote_id: string;
+  error: string | null;
+}
+
+export interface RemoteMeta {
+  type: "meta";
+  width: number;
+  height: number;
+  control: boolean;
+}
 
 export interface User {
   id: string;

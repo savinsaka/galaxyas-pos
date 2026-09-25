@@ -14,6 +14,7 @@
   import Ribbon from "$lib/components/Ribbon.svelte";
   import TabBar from "$lib/components/TabBar.svelte";
   import Workspace from "$lib/components/Workspace.svelte";
+  import RemoteBanner from "$lib/components/RemoteBanner.svelte";
 
   let ready = $state(false);
   let showServerPicker = $state(false);
@@ -103,6 +104,8 @@
     <Workspace />
   </div>
 {/if}
+
+<RemoteBanner />
 
 <style>
   .boot-loading {
