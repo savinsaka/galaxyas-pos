@@ -95,6 +95,9 @@
   const thread = $derived($chatMessages.filter((m) => peerOf(m, me) === selected));
   const outgoing = $derived($chatOutbox.filter((x) => x.to === selected));
   const online = $derived($chatStatus?.connected ?? false);
+  // Kunci salah / diganti dari admin web: menyambung ulang sendiri tidak akan
+  // berhasil, jadi tampilkan tombol untuk memasukkan kunci baru.
+  const keyProblem = $derived(!online && /kunci|toko dihapus/i.test($chatStatus?.error ?? ""));
 
   // Satu linimasa: pesan dari server + pesan keluar yang belum/tidak terkirim,
   // lengkap dengan pemisah tanggal ala aplikasi chat.
@@ -392,6 +395,17 @@
       </div>
     </div>
   {:else}
+    {#if !online}
+      <div class="offline-bar">
+        {#if keyProblem}
+          🔑 <b>Chat terputus:</b> {$chatStatus?.error}
+          <button class="btn-primary" onclick={() => (showSetup = true)}>Masukkan kunci baru</button>
+        {:else}
+          ⚠️ <b>PC ini offline</b>{$chatStatus?.error ? ` — ${$chatStatus.error}` : " — menyambung…"}.
+          Pesan yang dikirim langsung ditandai ✕ dan harus dikirim ulang manual.
+        {/if}
+      </div>
+    {/if}
     <div class="app-shell">
       <!-- ===== Kolom kiri: daftar chat ===== -->
       <aside class="side">
@@ -470,12 +484,6 @@
               {#if current.saved}<button class="icon-btn" title="Hapus kontak" onclick={deleteCurrent}>🗑️</button>{/if}
             {/if}
           </header>
-
-          {#if !online}
-            <div class="offline-bar">
-              ⚠️ <b>PC ini offline</b> — pesan yang dikirim langsung ditandai ✕ dan harus dikirim ulang manual.
-            </div>
-          {/if}
 
           <div class="messages" bind:this={scroller}>
             {#each items as it (it.key)}
@@ -605,11 +613,36 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    /* Seperti WhatsApp: kita (kanan) hijau muda, lawan bicara (kiri) putih. */
-    --bubble-mine: #d9fdd3;
-    --bubble-theirs: #ffffff;
-    --conv-bg: #efeae2;
-    --muted: #667781;
+    /* Semua warna chat diturunkan dari variabel tema di app.css, jadi ikut
+       Baby Blue / Dark / Forest / Sunset / Grape / Kontras Tinggi. Tata
+       letak tetap seperti WhatsApp: kita di kanan (diwarnai warna tema),
+       lawan bicara di kiri (warna panel). */
+    color: var(--text);
+    --c-panel: var(--panel);
+    --c-head: var(--baby-blue-bg);
+    --c-hover: color-mix(in srgb, var(--text) 5%, var(--panel));
+    --c-active: var(--baby-blue-soft);
+    --c-soft: color-mix(in srgb, var(--text) 8%, transparent);
+    /* Varian gelap warna tema supaya teks putih di atasnya tetap terbaca
+       (mis. oranye Sunset); Dark Mode memakai --primary, lihat di bawah. */
+    --c-accent: var(--primary-dark);
+    /* --white = warna panel tema: putih di tema terang, gelap di Dark Mode —
+       selalu kontras di atas warna aksen. */
+    --c-on-accent: var(--white);
+    --c-warn-soft: color-mix(in srgb, var(--warning) 22%, var(--panel));
+    --c-danger-soft: color-mix(in srgb, var(--danger) 14%, var(--panel));
+    --c-bubble-shadow: 0 1px 0.5px color-mix(in srgb, var(--text) 20%, transparent);
+    --c-read: #34b7f1;
+    --bubble-mine: color-mix(in srgb, var(--primary) 22%, var(--panel));
+    --bubble-theirs: var(--panel);
+    --conv-bg: color-mix(in srgb, var(--primary) 6%, var(--bg));
+    /* --text-dim tema dipekatkan sedikit: jam & cuplikan berukuran kecil. */
+    --muted: color-mix(in srgb, var(--text-dim) 55%, var(--text));
+  }
+  /* Dark Mode: teks di atas aksen memakai --white (gelap), jadi aksennya
+     justru harus yang terang. */
+  :global(:root[data-theme="dark"]) .chat {
+    --c-accent: var(--primary);
   }
   .setup {
     max-width: 460px;
@@ -627,10 +660,10 @@
     min-height: 0;
     display: grid;
     grid-template-columns: 320px 1fr;
-    border: 1px solid var(--border, #d1d7db);
+    border: 1px solid var(--border);
     border-radius: 10px;
     overflow: hidden;
-    background: #fff;
+    background: var(--c-panel);
   }
 
   /* ----- Kiri ----- */
@@ -638,8 +671,8 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
-    border-right: 1px solid var(--border, #d1d7db);
-    background: #fff;
+    border-right: 1px solid var(--border);
+    background: var(--c-panel);
   }
   .side-head,
   .conv-head {
@@ -647,7 +680,7 @@
     align-items: center;
     gap: 0.6rem;
     padding: 0.55rem 0.8rem;
-    background: #f0f2f5;
+    background: var(--c-head);
     min-height: 56px;
   }
   .me-info,
@@ -672,12 +705,12 @@
     width: 7px;
     height: 7px;
     border-radius: 50%;
-    background: #9ca3af;
+    background: var(--text-dim);
     margin-right: 4px;
     vertical-align: middle;
   }
   .dot.on {
-    background: #22c55e;
+    background: var(--success);
   }
   .icon-btn {
     border: none;
@@ -689,13 +722,13 @@
     line-height: 1;
   }
   .icon-btn:hover:not(:disabled) {
-    background: rgba(0, 0, 0, 0.06);
+    background: var(--c-soft);
   }
   .add {
     display: flex;
     gap: 0.4rem;
     padding: 0.6rem 0.8rem;
-    border-bottom: 1px solid var(--border, #e5e7eb);
+    border-bottom: 1px solid var(--border);
     flex-wrap: wrap;
   }
   .add input {
@@ -713,17 +746,18 @@
     width: 100%;
     padding: 0.6rem 0.8rem;
     border: none;
-    border-bottom: 1px solid #f0f2f5;
+    border-bottom: 1px solid var(--border);
     border-radius: 0;
-    background: #fff;
+    background: var(--c-panel);
+    color: var(--text);
     text-align: left;
     cursor: pointer;
   }
   .chat-row:hover {
-    background: #f5f6f6;
+    background: var(--c-hover);
   }
   .chat-row.active {
-    background: #f0f2f5;
+    background: var(--c-active);
   }
   .row-main {
     flex: 1;
@@ -747,7 +781,7 @@
     color: var(--muted);
   }
   .row-time.hot {
-    color: #16a34a;
+    color: var(--success);
     font-weight: 600;
   }
   .row-preview {
@@ -760,15 +794,15 @@
   }
   .new-tag {
     font-size: 0.65rem;
-    background: #fef3c7;
-    color: #92400e;
+    background: var(--c-warn-soft);
+    color: var(--text);
     border-radius: 4px;
     padding: 0 0.3rem;
     margin-right: 0.3rem;
   }
   .badge-unread {
-    background: #22c55e;
-    color: #fff;
+    background: var(--c-accent);
+    color: var(--c-on-accent);
     border-radius: 999px;
     font-size: 0.7rem;
     font-weight: 700;
@@ -812,7 +846,7 @@
     margin-bottom: 0.5rem;
   }
   .conv-empty.small {
-    background: rgba(255, 255, 255, 0.8);
+    background: var(--c-panel);
     border-radius: 8px;
     padding: 0.5rem 0.9rem;
     font-size: 0.82rem;
@@ -821,11 +855,17 @@
     flex: 1;
   }
   .offline-bar {
-    background: #fee2e2;
-    color: #991b1b;
-    padding: 0.4rem 0.8rem;
-    font-size: 0.8rem;
-    border-bottom: 1px solid #fecaca;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.5rem;
+    border-radius: 8px;
+    background: var(--c-danger-soft);
+    color: color-mix(in srgb, var(--danger) 65%, var(--text));
+    padding: 0.45rem 0.8rem;
+    font-size: 0.82rem;
+    border-bottom: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
   }
   .messages {
     flex: 1;
@@ -841,12 +881,12 @@
     margin: 0.7rem 0 0.4rem;
   }
   .day-sep span {
-    background: #fff;
+    background: var(--c-panel);
     color: var(--muted);
     font-size: 0.72rem;
     padding: 0.2rem 0.7rem;
     border-radius: 7px;
-    box-shadow: 0 1px 0.5px rgba(0, 0, 0, 0.13);
+    box-shadow: var(--c-bubble-shadow);
   }
   /* Seperti WhatsApp: kita di KANAN, lawan bicara di KIRI. */
   .msg-row {
@@ -863,7 +903,8 @@
     padding: 0.35rem 0.55rem 0.3rem;
     border-radius: 8px;
     background: var(--bubble-theirs);
-    box-shadow: 0 1px 0.5px rgba(0, 0, 0, 0.13);
+    color: var(--text);
+    box-shadow: var(--c-bubble-shadow);
     font-size: 0.9rem;
     line-height: 1.35;
   }
@@ -875,10 +916,10 @@
     border-top-right-radius: 0;
   }
   .bubble.alert {
-    box-shadow: 0 0 0 2px #f59e0b inset, 0 1px 0.5px rgba(0, 0, 0, 0.13);
+    box-shadow: 0 0 0 2px var(--warning) inset, var(--c-bubble-shadow);
   }
   .bubble.failed {
-    box-shadow: 0 0 0 1.5px #ef4444 inset;
+    box-shadow: 0 0 0 1.5px var(--danger) inset;
   }
   .body {
     white-space: pre-wrap;
@@ -898,23 +939,23 @@
     font-weight: 700;
   }
   .ticks.read {
-    color: #53bdeb;
+    color: var(--c-read);
   }
   .ticks.fail {
-    color: #dc2626;
+    color: var(--danger);
     letter-spacing: 0;
   }
   .alert-tag {
     font-size: 0.7rem;
     font-weight: 700;
-    color: #b45309;
+    color: var(--warning);
     margin-bottom: 0.1rem;
   }
   .file-card {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    background: rgba(0, 0, 0, 0.05);
+    background: var(--c-soft);
     border-radius: 6px;
     padding: 0.45rem 0.6rem;
     min-width: 200px;
@@ -956,7 +997,7 @@
     flex-wrap: wrap;
     padding-top: 0.3rem;
     font-size: 0.72rem;
-    color: #dc2626;
+    color: var(--danger);
   }
 
   /* ----- Kolom ketik ----- */
@@ -965,19 +1006,19 @@
     align-items: flex-end;
     gap: 0.5rem;
     padding: 0.5rem 0.8rem;
-    background: #f0f2f5;
+    background: var(--c-head);
   }
   .input-wrap {
     flex: 1;
     display: flex;
     align-items: flex-end;
-    background: #fff;
+    background: var(--c-panel);
     border-radius: 20px;
     padding: 0.3rem 0.4rem 0.3rem 0.9rem;
     border: 2px solid transparent;
   }
   .input-wrap.alerting {
-    border-color: #f59e0b;
+    border-color: var(--warning);
   }
   .input-wrap textarea {
     flex: 1;
@@ -985,6 +1026,7 @@
     outline: none;
     resize: none;
     background: transparent;
+    color: var(--text);
     /* app.css memberi semua textarea min-height 60px; kolom chat mulai 1 baris. */
     min-height: 0;
     max-height: 120px;
@@ -1005,7 +1047,7 @@
   .alert-btn.on {
     filter: none;
     opacity: 1;
-    background: #fef3c7;
+    background: var(--c-warn-soft);
   }
   .attach {
     align-self: center;
@@ -1016,8 +1058,8 @@
     flex: 0 0 42px;
     border-radius: 50%;
     border: none;
-    background: #00a884;
-    color: #fff;
+    background: var(--c-accent);
+    color: var(--c-on-accent);
     font-size: 1.05rem;
     cursor: pointer;
   }
@@ -1026,19 +1068,19 @@
     display: flex;
     align-items: center;
     gap: 0.6rem;
-    background: #fff;
+    background: var(--c-panel);
     border-radius: 20px;
     padding: 0.55rem 0.9rem;
     border: 2px solid transparent;
   }
   .rec-bar.alerting {
-    border-color: #f59e0b;
+    border-color: var(--warning);
   }
   .rec-dot {
     width: 10px;
     height: 10px;
     border-radius: 50%;
-    background: #ef4444;
+    background: var(--danger);
     animation: rec-blink 1s infinite;
   }
   @keyframes rec-blink {
@@ -1055,7 +1097,7 @@
     color: var(--muted);
   }
   .send-btn:disabled {
-    background: #9ca3af;
+    background: var(--text-dim);
     cursor: default;
   }
 </style>

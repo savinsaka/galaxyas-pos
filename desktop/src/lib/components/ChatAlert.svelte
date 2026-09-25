@@ -67,8 +67,9 @@
   .chat-alert {
     width: 440px;
     max-width: 92vw;
-    background: var(--white, #fff);
-    border: 2px solid #f59e0b;
+    background: var(--white);
+    color: var(--text);
+    border: 2px solid var(--warning);
     border-radius: 12px;
     padding: 1rem 1.1rem;
     box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
@@ -80,7 +81,7 @@
   .msg {
     white-space: pre-wrap;
     word-break: break-word;
-    background: rgba(245, 158, 11, 0.1);
+    background: color-mix(in srgb, var(--warning) 16%, var(--white));
     border-radius: 8px;
     padding: 0.6rem 0.7rem;
   }

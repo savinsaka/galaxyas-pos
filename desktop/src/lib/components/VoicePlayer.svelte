@@ -100,8 +100,9 @@
     flex: 0 0 34px;
     border-radius: 50%;
     border: none;
-    background: #00a884;
-    color: #fff;
+    /* Ikut token aksen layar Chat bila ada (kontras terjaga di semua tema). */
+    background: var(--c-accent, var(--primary));
+    color: var(--c-on-accent, var(--white));
     font-size: 0.85rem;
     cursor: pointer;
     padding: 0;
@@ -111,14 +112,14 @@
     flex: 1;
     height: 4px;
     border-radius: 2px;
-    background: rgba(0, 0, 0, 0.18);
+    background: color-mix(in srgb, var(--text) 22%, transparent);
     cursor: pointer;
   }
   .fill {
     position: absolute;
     inset: 0 auto 0 0;
     border-radius: 2px;
-    background: #00a884;
+    background: var(--c-accent, var(--primary));
   }
   .knob {
     position: absolute;
@@ -127,12 +128,12 @@
     height: 11px;
     margin-left: -5.5px;
     border-radius: 50%;
-    background: #00a884;
+    background: var(--c-accent, var(--primary));
     transform: translateY(-50%);
   }
   .dur {
     font-size: 0.72rem;
-    color: #667781;
+    color: var(--muted, var(--text-dim));
     min-width: 2.2rem;
     text-align: right;
   }
