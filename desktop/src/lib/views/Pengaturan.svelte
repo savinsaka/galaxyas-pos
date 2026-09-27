@@ -13,8 +13,9 @@
     currentServer, currentPath, isRemoteClient, pathIcon, pathLabel,
   } from "$lib/stores/activeServer";
   import Receipt from "$lib/components/Receipt.svelte";
+  import { parseClosingSop, saveClosingSop } from "$lib/stores/closingSop";
 
-  type PTab = "toko" | "server" | "lan" | "struk" | "tema" | "kasir" | "lanjutan";
+  type PTab = "toko" | "server" | "lan" | "struk" | "tema" | "kasir" | "closing" | "lanjutan";
   let { section }: { section: PTab; tabId?: string } = $props();
   const SECTION_TITLES: Record<PTab, string> = {
     toko: "Informasi Toko",
@@ -23,6 +24,7 @@
     struk: "Struk & Printer",
     tema: "Tema Tampilan",
     kasir: "Preferensi Kasir",
+    closing: "Closing SOP",
     lanjutan: "Lanjutan",
   };
   let activeTheme = $state("baby-blue");
@@ -276,6 +278,9 @@
       settings.theme ??= "baby-blue";
       activeTheme = settings.theme;
       settings.kasir_scan_mode ??= "scan_first";
+      const sop = parseClosingSop(settings);
+      sopEnabled = sop.enabled;
+      sopItems = sop.items;
       for (const { setting } of RECEIPT_SHOW_KEYS) settings[setting] ??= "1";
     } catch (e) { toastError(e); }
   }
@@ -292,6 +297,44 @@
       if (relayTimer) clearInterval(relayTimer);
     };
   });
+
+  // ── Closing SOP ──
+  let sopEnabled = $state(false);
+  let sopItems = $state<string[]>([]);
+  let sopNew = $state("");
+  let savingSop = $state(false);
+  function sopAdd() {
+    const t = sopNew.trim();
+    if (!t) return;
+    sopItems = [...sopItems, t];
+    sopNew = "";
+  }
+  function sopRemove(i: number) {
+    sopItems = sopItems.filter((_, j) => j !== i);
+  }
+  function sopMove(i: number, d: -1 | 1) {
+    const j = i + d;
+    if (j < 0 || j >= sopItems.length) return;
+    const next = [...sopItems];
+    [next[i], next[j]] = [next[j], next[i]];
+    sopItems = next;
+  }
+  async function doSaveSop() {
+    if (sopEnabled && !sopItems.some((x) => x.trim())) {
+      showToast("Isi minimal satu tugas dulu sebelum mengaktifkan Closing SOP.", "error");
+      return;
+    }
+    savingSop = true;
+    try {
+      await saveClosingSop({ enabled: sopEnabled, items: sopItems });
+      sopItems = sopItems.map((x) => x.trim()).filter(Boolean);
+      showToast("Closing SOP tersimpan.", "success");
+    } catch (e) {
+      toastError(e);
+    } finally {
+      savingSop = false;
+    }
+  }
 
   let savingScanMode = $state(false);
   async function pickScanMode(mode: "scan_first" | "jumlah_first") {
@@ -829,6 +872,53 @@
   </div>
 {/if}
 
+<!-- ── Tab: Closing SOP ── -->
+{#if section === "closing"}
+  <div class="card" style="max-width:640px;">
+    <h2>📋 Closing SOP</h2>
+    <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
+      Kalau aktif, setiap kali aplikasi mau ditutup akan muncul daftar tugas di bawah ini
+      yang wajib diceklis semua dulu — baru aplikasi bisa ditutup. Berlaku untuk PC ini.
+    </p>
+    <label class="row sop-toggle">
+      <input type="checkbox" bind:checked={sopEnabled} />
+      <span><b>Aktifkan Closing SOP</b></span>
+    </label>
+
+    <label for="sop-new" style="margin-top:0.8rem;">Things to do saat closing</label>
+    {#if sopItems.length === 0}
+      <p class="text-dim" style="font-size:0.83rem; margin:0.3rem 0;">Belum ada tugas. Tambahkan di bawah.</p>
+    {:else}
+      <div class="sop-edit-list">
+        {#each sopItems as _, i (i)}
+          <div class="row sop-edit-row">
+            <span class="text-dim sop-no">{i + 1}.</span>
+            <input bind:value={sopItems[i]} style="flex:1;" />
+            <button title="Naik" disabled={i === 0} onclick={() => sopMove(i, -1)}>▲</button>
+            <button title="Turun" disabled={i === sopItems.length - 1} onclick={() => sopMove(i, 1)}>▼</button>
+            <button class="btn-danger" title="Hapus" onclick={() => sopRemove(i)}>✕</button>
+          </div>
+        {/each}
+      </div>
+    {/if}
+    <div class="row" style="gap:0.4rem; margin-top:0.5rem;">
+      <input
+        id="sop-new"
+        bind:value={sopNew}
+        placeholder="mis. Hitung uang laci, matikan printer, kunci pintu…"
+        style="flex:1;"
+        onkeydown={(e) => { if (e.key === "Enter") { e.preventDefault(); sopAdd(); } }}
+      />
+      <button onclick={sopAdd} disabled={!sopNew.trim()}>+ Tambah</button>
+    </div>
+    <div class="row" style="justify-content:flex-end; margin-top:1rem;">
+      <button class="btn-primary" disabled={savingSop} onclick={doSaveSop}>
+        {savingSop ? "Menyimpan…" : "💾 Simpan"}
+      </button>
+    </div>
+  </div>
+{/if}
+
 <!-- ── Tab: Lanjutan (Zona Berbahaya) ── -->
 {#if section === "lanjutan"}
   <div class="card danger-zone" style="max-width:560px;">
@@ -884,6 +974,10 @@
     color: var(--primary); font-weight: 700;
   }
 
+  .sop-toggle { gap: 0.5rem; align-items: center; margin: 0.4rem 0 0; font-weight: 400; cursor: pointer; }
+  .sop-edit-list { display: flex; flex-direction: column; gap: 0.35rem; margin-top: 0.3rem; }
+  .sop-edit-row { gap: 0.35rem; align-items: center; }
+  .sop-no { width: 1.6rem; text-align: right; font-size: 0.85rem; }
   .scanmode-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px,1fr)); gap: 0.8rem; margin-top: 0.8rem; }
   .scanmode-card {
     position: relative;

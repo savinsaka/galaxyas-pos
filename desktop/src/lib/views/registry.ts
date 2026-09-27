@@ -68,6 +68,7 @@ export const VIEW_REGISTRY: Record<string, Component<any>> = {
   "pengaturan-struk": Pengaturan,
   "pengaturan-tema": Pengaturan,
   "pengaturan-kasir": Pengaturan,
+  "pengaturan-closing": Pengaturan,
   "pengaturan-lanjutan": Pengaturan,
   "hak-akses": HakAkses,
   "daftar-pelanggan": DaftarPelanggan,

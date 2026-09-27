@@ -183,6 +183,7 @@ export const RIBBON: RibbonCategory[] = [
           { key: "pengaturan-struk", label: "Struk & Printer", icon: "🖨️", viewKey: "pengaturan-struk", title: "Struk & Printer", singleton: true, props: { section: "struk" } },
           { key: "pengaturan-tema", label: "Tema", icon: "🎨", viewKey: "pengaturan-tema", title: "Tema", singleton: true, props: { section: "tema" } },
           { key: "pengaturan-kasir", label: "Preferensi Kasir", icon: "🧮", viewKey: "pengaturan-kasir", title: "Preferensi Kasir", singleton: true, props: { section: "kasir" } },
+          { key: "pengaturan-closing", label: "Closing SOP", icon: "📋", viewKey: "pengaturan-closing", title: "Closing SOP", singleton: true, props: { section: "closing" } },
           { key: "pengaturan-lanjutan", label: "Lanjutan", icon: "⚠️", viewKey: "pengaturan-lanjutan", title: "Lanjutan", singleton: true, props: { section: "lanjutan" } },
           { key: "editor-laporan", label: "Editor Laporan", icon: "🎨", viewKey: "editor-laporan", title: "Editor Laporan", singleton: true },
           { key: "hak-akses", label: "Hak Akses", icon: "🔐", viewKey: "hak-akses", title: "Hak Akses & Pengguna", singleton: true },

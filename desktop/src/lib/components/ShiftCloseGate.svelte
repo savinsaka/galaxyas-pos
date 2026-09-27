@@ -5,9 +5,22 @@
   import { api } from "$lib/api";
   import { toastError, showToast } from "$lib/toast";
   import { activeShiftStore } from "$lib/stores/shift";
+  import { closingSopStore, loadClosingSop, sopActive } from "$lib/stores/closingSop";
 
   let showGate = $state(false);
   let step = $state<"form" | "confirm-quit">("form");
+  // Tiga mode gate (dikunci saat gate dibuka):
+  //  - SOP off + ada shift → form Tutup Shift biasa, lalu konfirmasi keluar.
+  //  - SOP on  + ada shift → SATU popup: ceklis SOP + nominal tutup shift,
+  //    satu tombol yang menutup shift lalu langsung menutup aplikasi.
+  //  - SOP on  + tanpa shift → hanya ceklis SOP.
+  let gateShift = $state(false);
+  let gateSop = $state(false);
+  // Snapshot daftar SOP saat gate dibuka supaya perubahan pengaturan di
+  // tengah jalan tidak mengacak ceklis.
+  let sopItems = $state<string[]>([]);
+  let sopChecked = $state<boolean[]>([]);
+  let sopDone = $derived(sopChecked.length > 0 && sopChecked.every(Boolean));
   let closingCash = $state(0);
   let closeNote = $state("");
   let busy = $state(false);
@@ -17,6 +30,7 @@
     // walau tab Kasir/Shift belum pernah dibuka sesi ini. Ini IPC call biasa
     // di titik mount, BUKAN di dalam handler onCloseRequested (lihat di bawah).
     api.getActiveShift().then((s) => activeShiftStore.set(s)).catch(() => {});
+    loadClosingSop().catch(() => {});
 
     let unlisten: (() => void) | undefined;
     const win = getCurrentWindow();
@@ -29,10 +43,16 @@
         // bahkan setelah shift sudah ditutup dari sisi lain. Makanya status
         // shift dibaca SINKRON dari store lokal (activeShiftStore), bukan
         // panggil api.getActiveShift() lagi di titik ini.
-        if (get(activeShiftStore)) {
+        const hasShift = !!get(activeShiftStore);
+        const sop = get(closingSopStore);
+        if (hasShift || sopActive(sop)) {
           event.preventDefault();
           closingCash = 0;
           closeNote = "";
+          gateShift = hasShift;
+          gateSop = sopActive(sop);
+          sopItems = [...sop.items];
+          sopChecked = sop.items.map(() => false);
           step = "form";
           showGate = true;
         }
@@ -42,14 +62,18 @@
   });
 
   async function doCloseShift() {
+    if (gateSop && !sopDone) return;
     const shift = get(activeShiftStore);
-    if (!shift) return;
     busy = true;
     try {
-      await api.closeShift({ id: shift.id, closing_cash: closingCash, note: closeNote || null });
-      activeShiftStore.set(null);
-      showToast("Shift ditutup.", "success");
-      step = "confirm-quit";
+      if (shift) {
+        await api.closeShift({ id: shift.id, closing_cash: closingCash, note: closeNote || null });
+        activeShiftStore.set(null);
+        showToast("Shift ditutup.", "success");
+      }
+      // Dengan Closing SOP semuanya sudah dikonfirmasi lewat ceklis — langsung keluar.
+      if (gateSop) await quitNow();
+      else step = "confirm-quit";
     } catch (e) {
       toastError(e);
     } finally {
@@ -74,17 +98,44 @@
   <div class="modal-backdrop" role="presentation">
     <div class="modal shift-gate-modal" role="presentation">
       {#if step === "form"}
-        <h2>🔒 Tutup Shift Dulu</h2>
-        <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
-          Ada shift yang masih berjalan. Tutup shift dulu sebelum menutup aplikasi.
-        </p>
-        <label>Uang Fisik di Laci Sekarang (Rp)</label>
-        <input type="number" min="0" bind:value={closingCash} />
-        <label style="margin-top:0.6rem;">Catatan</label>
-        <input bind:value={closeNote} placeholder="opsional" />
+        {#if gateSop}
+          <h2>📋 Closing SOP</h2>
+          <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
+            Ceklis semua tugas penutupan{gateShift ? " dan isi uang laci" : ""} sebelum menutup aplikasi.
+          </p>
+          <div class="sop-list">
+            {#each sopItems as item, i (i)}
+              <label class="sop-item" class:done={sopChecked[i]}>
+                <input type="checkbox" bind:checked={sopChecked[i]} />
+                <span>{item}</span>
+              </label>
+            {/each}
+          </div>
+          <p class="text-dim" style="font-size:0.8rem; margin:0.4rem 0 0;">
+            {sopChecked.filter(Boolean).length} / {sopItems.length} selesai
+          </p>
+        {:else}
+          <h2>🔒 Tutup Shift Dulu</h2>
+          <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
+            Ada shift yang masih berjalan. Tutup shift dulu sebelum menutup aplikasi.
+          </p>
+        {/if}
+        {#if gateShift}
+          {#if gateSop}<h3 class="shift-sub">🔒 Tutup Shift</h3>{/if}
+          <label>Uang Fisik di Laci Sekarang (Rp)</label>
+          <input type="number" min="0" bind:value={closingCash} />
+          <label style="margin-top:0.6rem;">Catatan</label>
+          <input bind:value={closeNote} placeholder="opsional" />
+        {/if}
         <div class="row" style="justify-content:flex-end; margin-top:1rem; gap:0.5rem;">
           <button disabled={busy} onclick={keepUsing}>Batal, Lanjut Pakai</button>
-          <button class="btn-danger" disabled={busy} onclick={doCloseShift}>🔒 Tutup Shift</button>
+          {#if !gateSop}
+            <button class="btn-danger" disabled={busy} onclick={doCloseShift}>🔒 Tutup Shift</button>
+          {:else}
+            <button class="btn-primary" disabled={busy || !sopDone} onclick={doCloseShift}>
+              {gateShift ? "🔒 Tutup Shift & Aplikasi" : "✅ Tutup Aplikasi"}
+            </button>
+          {/if}
         </div>
       {:else}
         <h2>✅ Shift Ditutup</h2>
@@ -100,4 +151,14 @@
 
 <style>
   .shift-gate-modal { max-width: 380px; }
+  .shift-sub { font-size: 0.95rem; margin: 1rem 0 0.2rem; padding-top: 0.7rem; border-top: 1px solid var(--border); }
+  .sop-list { display: flex; flex-direction: column; gap: 0.35rem; max-height: 50vh; overflow-y: auto; }
+  .sop-item {
+    display: flex; align-items: flex-start; gap: 0.5rem; margin: 0;
+    padding: 0.45rem 0.6rem; border: 1px solid var(--border); border-radius: var(--radius);
+    font-weight: 400; font-size: 0.88rem; cursor: pointer;
+  }
+  .sop-item input { margin-top: 0.15rem; }
+  .sop-item.done { border-color: var(--success, var(--primary)); background: color-mix(in srgb, var(--success, var(--primary)) 8%, transparent); }
+  .sop-item.done span { text-decoration: line-through; opacity: 0.7; }
 </style>
