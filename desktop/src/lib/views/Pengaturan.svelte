@@ -880,9 +880,13 @@
       Kalau aktif, setiap kali aplikasi mau ditutup akan muncul daftar tugas di bawah ini
       yang wajib diceklis semua dulu — baru aplikasi bisa ditutup. Berlaku untuk PC ini.
     </p>
-    <label class="row sop-toggle">
-      <input type="checkbox" bind:checked={sopEnabled} />
-      <span><b>Aktifkan Closing SOP</b></span>
+    <label class="sop-toggle">
+      <input type="checkbox" role="switch" bind:checked={sopEnabled} />
+      <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+      <span class="sop-toggle-text">
+        <b>Aktifkan Closing SOP</b>
+        <span class="text-dim">{sopEnabled ? "Aktif — ceklis muncul saat aplikasi ditutup" : "Nonaktif"}</span>
+      </span>
     </label>
 
     <label for="sop-new" style="margin-top:0.8rem;">Things to do saat closing</label>
@@ -974,7 +978,25 @@
     color: var(--primary); font-weight: 700;
   }
 
-  .sop-toggle { gap: 0.5rem; align-items: center; margin: 0.4rem 0 0; font-weight: 400; cursor: pointer; }
+  .sop-toggle {
+    display: inline-flex; align-items: center; gap: 0.7rem; margin: 0.5rem 0 0;
+    font-size: 0.9rem; color: var(--text); font-weight: 400; cursor: pointer; position: relative;
+  }
+  /* Checkbox asli disembunyikan tapi tetap fokusable (Tab + Space). */
+  .sop-toggle input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; pointer-events: none; }
+  .switch-track {
+    position: relative; flex: none; width: 44px; height: 24px; border-radius: 999px;
+    background: var(--border-strong); transition: background 0.18s;
+  }
+  .switch-thumb {
+    position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%;
+    background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.3); transition: transform 0.18s;
+  }
+  .sop-toggle input:checked + .switch-track { background: var(--success); }
+  .sop-toggle input:checked + .switch-track .switch-thumb { transform: translateX(20px); }
+  .sop-toggle input:focus-visible + .switch-track { box-shadow: 0 0 0 3px rgba(74, 144, 217, 0.35); }
+  .sop-toggle-text { display: flex; flex-direction: column; line-height: 1.3; }
+  .sop-toggle-text .text-dim { font-size: 0.78rem; }
   .sop-edit-list { display: flex; flex-direction: column; gap: 0.35rem; margin-top: 0.3rem; }
   .sop-edit-row { gap: 0.35rem; align-items: center; }
   .sop-no { width: 1.6rem; text-align: right; font-size: 0.85rem; }

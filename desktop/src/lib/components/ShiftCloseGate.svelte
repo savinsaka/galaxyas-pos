@@ -107,7 +107,7 @@
             {#each sopItems as item, i (i)}
               <label class="sop-item" class:done={sopChecked[i]}>
                 <input type="checkbox" bind:checked={sopChecked[i]} />
-                <span>{item}</span>
+                <span class="sop-text">{item}</span>
               </label>
             {/each}
           </div>
@@ -150,15 +150,22 @@
 {/if}
 
 <style>
-  .shift-gate-modal { max-width: 380px; }
-  .shift-sub { font-size: 0.95rem; margin: 1rem 0 0.2rem; padding-top: 0.7rem; border-top: 1px solid var(--border); }
-  .sop-list { display: flex; flex-direction: column; gap: 0.35rem; max-height: 50vh; overflow-y: auto; }
+  .shift-gate-modal { max-width: 420px; }
+  .shift-sub { font-size: 0.95rem; margin: 1rem 0 0.4rem; padding-top: 0.8rem; border-top: 1px solid var(--border); }
+  .sop-list { display: flex; flex-direction: column; gap: 0.4rem; max-height: 50vh; overflow-y: auto; }
   .sop-item {
-    display: flex; align-items: flex-start; gap: 0.5rem; margin: 0;
-    padding: 0.45rem 0.6rem; border: 1px solid var(--border); border-radius: var(--radius);
-    font-weight: 400; font-size: 0.88rem; cursor: pointer;
+    display: flex; align-items: center; gap: 0.65rem; margin: 0;
+    padding: 0.55rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius);
+    font-size: 0.9rem; font-weight: 600; color: var(--text); cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
   }
-  .sop-item input { margin-top: 0.15rem; }
-  .sop-item.done { border-color: var(--success, var(--primary)); background: color-mix(in srgb, var(--success, var(--primary)) 8%, transparent); }
-  .sop-item.done span { text-decoration: line-through; opacity: 0.7; }
+  .sop-item:hover { border-color: var(--primary); }
+  /* Global `input { width:100% }` ikut kena checkbox — kembalikan ke ukuran kotak. */
+  .sop-item input[type="checkbox"] {
+    width: 18px; height: 18px; flex: none; margin: 0; padding: 0;
+    accent-color: var(--success); cursor: pointer; box-shadow: none;
+  }
+  .sop-text { flex: 1; text-align: left; line-height: 1.3; }
+  .sop-item.done { border-color: var(--success); background: color-mix(in srgb, var(--success) 10%, var(--white)); }
+  .sop-item.done .sop-text { text-decoration: line-through; color: var(--text-dim); }
 </style>
