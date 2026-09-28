@@ -16,7 +16,7 @@
   import { setTabDirty, clearTabDirty } from "$lib/stores/tabGuard";
   import { activeShiftStore } from "$lib/stores/shift";
   import { parseReceiptConfig, saleNeedsDrawer, type ReceiptConfig } from "$lib/receipt";
-  import { buildDrawerKick, withDrawerKick } from "$lib/escpos";
+  import { buildDrawerKick } from "$lib/escpos";
   import { receiptEscPos } from "$lib/report/print";
   import { formatMoneyInput, onMoneyInput } from "$lib/moneyInput";
   import ShortcutBar from "$lib/components/ShortcutBar.svelte";
@@ -214,8 +214,13 @@
    * Edit Kasir tidak ada "transaksi baru" — tab edit langsung ditutup.
    */
   function finishAfterSave() {
+    // Laci dibuka di sini (klik "Transaksi Baru"), bukan bareng job cetak:
+    // struk keluar dulu sampai selesai, baru laci terbuka waktu kasir lanjut.
+    // Sama seperti sebelumnya, hanya kalau struknya dicetak dan ada uang tunai.
+    const kickDrawer = !isEdit && printDone && !!lastReceipt && saleNeedsDrawer(lastReceipt);
     showPrintConfirm = false;
     printDone = false;
+    if (kickDrawer) openDrawer(false);
     if (isEdit && tabId) {
       clearTabDirty(tabId);
       closeTab(tabId);
@@ -861,14 +866,12 @@
     if (!lastReceipt || !receiptCfg || printBusy) return;
     printBusy = true;
     try {
-      // Perintah buka laci disatukan ke job cetak yang sama (bukan kirim
-      // terpisah) supaya laci membuka begitu struk selesai keluar. Byte struk
-      // lewat template aktif bila dipilih user, jika tidak jalur bawaan.
+      // Struk saja — laci TIDAK ikut job cetak ini (dulu disatukan, tapi laci
+      // jadi terbuka bareng kertas keluar). Laci dibuka terpisah saat kasir
+      // menekan "Transaksi Baru", lihat finishAfterSave(). Byte struk lewat
+      // template aktif bila dipilih user, jika tidak jalur bawaan.
       const bytes = await receiptEscPos(lastReceipt, await api.getSettings());
-      await api.printEscposTo(
-        receiptCfg.printer,
-        saleNeedsDrawer(lastReceipt) ? withDrawerKick(bytes, receiptCfg.cashDrawer) : bytes,
-      );
+      await api.printEscposTo(receiptCfg.printer, bytes);
       showToast("Struk dikirim ke printer.", "success");
     } catch (e) {
       toastError(e);
@@ -882,15 +885,19 @@
     newTxBtnEl?.focus();
   }
 
-  /** Buka laci tanpa transaksi (tukar uang, ambil kembalian) — F8. */
-  async function openDrawer() {
+  /**
+   * Buka laci: manual lewat F8 (tukar uang, ambil kembalian) atau otomatis
+   * setelah transaksi tunai (`manual = false` — diam saja kalau laci dimatikan).
+   */
+  async function openDrawer(manual = true) {
     if (!receiptCfg) return;
     if (receiptCfg.cashDrawer === "off") {
-      return showToast("Laci kasir dimatikan di Pengaturan → Struk & Printer.", "info");
+      if (manual) showToast("Laci kasir dimatikan di Pengaturan → Struk & Printer.", "info");
+      return;
     }
     try {
       await api.printEscposTo(receiptCfg.printer, buildDrawerKick(receiptCfg.cashDrawer));
-      showToast("Laci kasir dibuka.", "success");
+      if (manual) showToast("Laci kasir dibuka.", "success");
     } catch (e) {
       toastError(e);
     }
