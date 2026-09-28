@@ -82,17 +82,20 @@ export function buildDrawerKick(drawer: CashDrawerPin): Uint8Array {
 }
 
 /**
- * Sisipkan perintah buka laci di AKHIR job cetak (sesudah feed + potong), jadi
- * satu kali kirim ke printer. Sengaja di akhir, bukan di awal: struk diawali
- * `ESC @` (reset printer), dan menaruh perintah laci sebelum reset itu
- * mengandalkan perilaku printer yang tidak seragam antar merek.
+ * Sisipkan perintah buka laci di AWAL job cetak, supaya laci terbuka
+ * bersamaan dengan struk mulai keluar (bukan menunggu kertas selesai —
+ * permintaan pemilik toko). Kalau struk diawali `ESC @` (reset printer),
+ * perintah laci ditaruh SESUDAH reset itu, jadi tidak ikut terhapus oleh reset
+ * di printer merek mana pun.
  */
-export function withDrawerKick(bytes: Uint8Array, drawer: CashDrawerPin): Uint8Array {
+export function withDrawerKickFirst(bytes: Uint8Array, drawer: CashDrawerPin): Uint8Array {
   const kick = buildDrawerKick(drawer);
   if (kick.length === 0) return bytes;
+  const skip = bytes.length >= 2 && bytes[0] === ESC && bytes[1] === 0x40 ? 2 : 0;
   const out = new Uint8Array(bytes.length + kick.length);
-  out.set(bytes, 0);
-  out.set(kick, bytes.length);
+  out.set(bytes.subarray(0, skip), 0);
+  out.set(kick, skip);
+  out.set(bytes.subarray(skip), skip + kick.length);
   return out;
 }
 
