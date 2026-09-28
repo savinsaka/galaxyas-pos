@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from "svelte";
+  import { confirmDialog } from "$lib/dialog";
   import { api } from "$lib/api";
   import { formatQty, formatTime } from "$lib/format";
   import { showToast, toastError } from "$lib/toast";
@@ -100,7 +101,7 @@
   let loadedBrand = $state("");
 
   async function onBrandChange() {
-    if (filledRows.length && !confirm("Ganti merek akan mengosongkan tabel opname yang sudah diisi. Lanjut?")) {
+    if (filledRows.length && !(await confirmDialog("Ganti merek akan mengosongkan tabel opname yang sudah diisi. Lanjut?", { title: "Ganti Merek?", okText: "Ganti Merek", danger: true }))) {
       selectedBrand = loadedBrand;
       return;
     }

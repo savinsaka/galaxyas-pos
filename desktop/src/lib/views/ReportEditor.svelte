@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { confirmDialog as askConfirm } from "$lib/dialog";
   import { showToast, toastError } from "$lib/toast";
   import { currentUser } from "$lib/stores/auth";
   import CanvasEditor from "$lib/components/CanvasEditor.svelte";
@@ -91,7 +92,7 @@
   }
 
   async function removeOne(name: string) {
-    if (!confirm(`Hapus template "${name}"? Tidak bisa dibatalkan.`)) return;
+    if (!(await askConfirm(`Hapus template "${name}"? Tidak bisa dibatalkan.`, { title: "Hapus Template?", okText: "Hapus", danger: true }))) return;
     try {
       await deleteTemplate(kindId, name);
       await refresh();

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { confirmDialog } from "$lib/dialog";
   import { api } from "$lib/api";
   import { formatIDR, formatDateTime } from "$lib/format";
   import { showToast, toastError } from "$lib/toast";
@@ -49,7 +50,7 @@
   }
 
   async function remove(e: Expense) {
-    if (!confirm(`Hapus pengeluaran "${e.category}" (${formatIDR(e.amount)})?`)) return;
+    if (!(await confirmDialog(`Hapus pengeluaran "${e.category}" (${formatIDR(e.amount)})?`, { title: "Hapus Pengeluaran?", okText: "Hapus", danger: true }))) return;
     try {
       await api.deleteExpense(e.id);
       await load();

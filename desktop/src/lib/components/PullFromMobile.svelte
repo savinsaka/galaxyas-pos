@@ -1,5 +1,6 @@
 <script lang="ts">
   import { api } from "$lib/api";
+  import { confirmDialog } from "$lib/dialog";
   import { showToast, toastError } from "$lib/toast";
   import { currentUser } from "$lib/stores/auth";
   import { markStockBatchesDirty } from "$lib/stores/stockBatchSignal";
@@ -55,11 +56,10 @@
 
     if (unmatched.length > 0) {
       const list = unmatched.map((it) => `- ${it.barcode} (${it.name ?? "tanpa nama"})`).join("\n");
-      const ok = confirm(
+      const ok = (await confirmDialog(
         `Barang berikut tidak ditemukan di database barang toko ini:\n${list}\n\n` +
           "Lanjutkan akan MENGHAPUS barang ini dari daftar Pull — tidak masuk stok, tidak masuk sistem. " +
-          "Klik Batal dulu kalau mau perbaiki barcode-nya."
-      );
+          "Klik Batal dulu kalau mau perbaiki barcode-nya.", { title: "Barang Tidak Dikenal", okText: "Lanjutkan & Hapus", danger: true }));
       if (!ok) return;
     }
 
@@ -88,7 +88,7 @@
   }
 
   async function rejectRow(item: PullItem) {
-    if (!confirm(`Tolak "${item.name ?? item.barcode}"? Tidak masuk ke stok.`)) return;
+    if (!(await confirmDialog(`Tolak "${item.name ?? item.barcode}"? Tidak masuk ke stok.`, { title: "Tolak Barang?", okText: "Tolak", danger: true }))) return;
     busy = true;
     try {
       await api.bridgeRejectPull(item.id);

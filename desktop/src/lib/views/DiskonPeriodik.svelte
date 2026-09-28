@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { confirmDialog } from "$lib/dialog";
   import { api } from "$lib/api";
   import { formatIDR } from "$lib/format";
   import { showToast, toastError } from "$lib/toast";
@@ -116,7 +117,7 @@
 
   // ── Hapus seluruh grup ─────────────────────────────────────────────────────
   async function removeGroup(code: string) {
-    if (!confirm(`Hapus semua diskon dengan kode "${code}"?`)) return;
+    if (!(await confirmDialog(`Hapus semua diskon dengan kode "${code}"?`, { title: "Hapus Diskon?", okText: "Hapus", danger: true }))) return;
     const members = list.filter((d) => d.code === code);
     for (const d of members) {
       try { await api.deleteDiscount(d.id); } catch (e) { toastError(e); }

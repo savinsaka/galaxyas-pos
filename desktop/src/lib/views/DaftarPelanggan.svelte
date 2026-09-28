@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { confirmDialog } from "$lib/dialog";
   import { api } from "$lib/api";
   import { showToast, toastError } from "$lib/toast";
   import type { Customer, CustomerInput } from "$lib/types";
@@ -46,7 +47,7 @@
   }
 
   async function remove(c: Customer) {
-    if (!confirm(`Nonaktifkan pelanggan "${c.name}"?`)) return;
+    if (!(await confirmDialog(`Nonaktifkan pelanggan "${c.name}"?`, { title: "Nonaktifkan Pelanggan?", okText: "Nonaktifkan", danger: true }))) return;
     try {
       await api.deleteCustomer(c.id);
       showToast("Pelanggan dinonaktifkan.", "success");

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { confirmDialog } from "$lib/dialog";
   import { api } from "$lib/api";
   import { showToast, toastError } from "$lib/toast";
   import { currentUser } from "$lib/stores/auth";
@@ -55,7 +56,7 @@
   }
   async function remove(u: User) {
     if (u.id === $currentUser?.id) return showToast("Tidak bisa menghapus diri sendiri.", "error");
-    if (!confirm(`Hapus pengguna ${u.username}?`)) return;
+    if (!(await confirmDialog(`Hapus pengguna ${u.username}?`, { title: "Hapus Pengguna?", okText: "Hapus", danger: true }))) return;
     try {
       await api.deleteUser(u.id);
       await load();

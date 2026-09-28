@@ -3,6 +3,7 @@
   // penerima baru tahu saat membuka menu ini. Pesan yang dicentang "alert"
   // memunculkan popup di GPOS toko tujuan (ChatAlert.svelte).
   import { onMount, onDestroy, tick } from "svelte";
+  import { confirmDialog } from "$lib/dialog";
   import { api } from "$lib/api";
   import { showToast, toastError } from "$lib/toast";
   import {
@@ -243,7 +244,7 @@
   }
 
   async function logout() {
-    if (!confirm("Keluar dari chat di PC ini? Kunci Chat perlu dimasukkan lagi untuk masuk.")) return;
+    if (!(await confirmDialog("Keluar dari chat di PC ini? Kunci Chat perlu dimasukkan lagi untuk masuk.", { title: "Keluar Chat?", okText: "Keluar", danger: true }))) return;
     await api.chatLogout().catch(toastError);
     chatMessages.set([]);
   }
@@ -322,7 +323,7 @@
   }
 
   async function deleteCurrent() {
-    if (!current || !confirm(`Hapus kontak ${current.name}? Riwayat pesan tetap ada.`)) return;
+    if (!current || !(await confirmDialog(`Hapus kontak ${current.name}? Riwayat pesan tetap ada.`, { title: "Hapus Kontak?", okText: "Hapus", danger: true }))) return;
     chatContacts.set(await api.chatDeleteContact(current.code).catch((e) => (toastError(e), $chatContacts)));
   }
 

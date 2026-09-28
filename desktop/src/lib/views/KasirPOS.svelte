@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from "svelte";
+  import CashInput from "$lib/components/CashInput.svelte";
+  import { confirmDialog } from "$lib/dialog";
   import { api } from "$lib/api";
   import { formatIDR, formatQty, formatTime } from "$lib/format";
   import { showToast, toastError, errorMessage } from "$lib/toast";
@@ -10,7 +12,7 @@
   import { todayIso, combineDateAndTime } from "$lib/dateTime";
   import { pendingSales, addPending, removePending } from "$lib/stores/pendingSales";
   import { markTransactionsDirty } from "$lib/stores/txSignal";
-  import { activeTabId } from "$lib/stores/tabs";
+  import { activeTabId, closeTab } from "$lib/stores/tabs";
   import { setTabDirty, clearTabDirty } from "$lib/stores/tabGuard";
   import { activeShiftStore } from "$lib/stores/shift";
   import { parseReceiptConfig, saleNeedsDrawer, type ReceiptConfig } from "$lib/receipt";
@@ -20,7 +22,15 @@
   import ShortcutBar from "$lib/components/ShortcutBar.svelte";
   import type { Customer, DiscountPeriod, PaymentMethod, ProductWithStock, SaleInput, Shift, TransactionDetail } from "$lib/types";
 
-  let { tabId }: { tabId?: string } = $props();
+  /**
+   * `editTransactionId` diisi = layar ini dipakai sebagai "Edit Kasir" (dibuka
+   * dari Daftar Kasir). Tampilannya sengaja sama persis dengan Kasir biasa;
+   * bedanya data struk (No. Struk, Kasir, Tanggal, Jam) dikunci ke transaksi
+   * asli, tidak perlu shift aktif, dan "Bayar & Simpan" menyimpan perubahan
+   * ke transaksi yang sama (update_transaction), bukan membuat transaksi baru.
+   */
+  let { tabId, editTransactionId }: { tabId?: string; editTransactionId?: string } = $props();
+  const isEdit = $derived(!!editTransactionId);
 
   const clock = createLiveClock();
   onDestroy(() => clock.stop());
@@ -102,6 +112,20 @@
   let receiptCfg = $state<ReceiptConfig | null>(null);
   let lastReceipt = $state<TransactionDetail | null>(null);
   let showPrintConfirm = $state(false);
+  /** Struk sudah dikirim ke printer dari popup ini → tombol berganti ke "Transaksi Baru". */
+  let printDone = $state(false);
+  let printBusy = $state(false);
+  let newTxBtnEl = $state<HTMLButtonElement>();
+
+  // ── Mode Edit Kasir ────────────────────────────────────────────────────────
+  let editDetail = $state<TransactionDetail | null>(null);
+  let editLoading = $state(false);
+  /** Nama kasir asli transaksi yang diedit (fallback username). */
+  let editCashierName = $state("");
+  /** Potret keranjang+pembayaran saat dimuat/disimpan — pembanding "ada perubahan?". */
+  let editBaseline = $state("");
+  /** Jumlah per barang di transaksi asli — ikut dihitung sebagai stok tersedia saat edit. */
+  let editOrigQty: Record<string, number> = {};
   let busy = $state(false);
 
   let activeShift = $state<Shift | null>(null);
@@ -140,8 +164,22 @@
   const total = $derived(Math.max(subtotal - totalDiscount, 0));
   const change = $derived(Math.max(paid - total, 0));
 
+  const editSnapshot = $derived(
+    JSON.stringify({
+      c: cart.map((l) => [l.product_id, l.qty, l.price, l.discount]),
+      m: paymentMethod,
+      p: paid,
+      pc: paidCash,
+      pq: paidQris,
+      cu: selectedCustomer?.id ?? null,
+    }),
+  );
+
   $effect(() => {
-    if (tabId) setTabDirty(tabId, cart.length > 0);
+    if (!tabId) return;
+    // Mode edit: "belum disimpan" = berbeda dari transaksi aslinya, bukan
+    // sekadar keranjang terisi (keranjang edit selalu terisi sejak dimuat).
+    setTabDirty(tabId, isEdit ? !!editDetail && editSnapshot !== editBaseline : cart.length > 0);
   });
 
   // Balik fokus ke scan-input begitu popup konfirmasi cetak struk ditutup
@@ -158,11 +196,38 @@
   function onPrintConfirmKey(e: KeyboardEvent) {
     if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
       e.preventDefault();
-      (e.key === "ArrowLeft" ? printNoBtnEl : printYesBtnEl)?.focus();
+      if (printDone) {
+        (e.key === "ArrowLeft" ? printYesBtnEl : newTxBtnEl)?.focus();
+      } else {
+        (e.key === "ArrowLeft" ? printNoBtnEl : printYesBtnEl)?.focus();
+      }
     } else if (e.key === "Escape") {
       e.preventDefault();
-      showPrintConfirm = false;
+      // Jangan sampai Esc yang sama ikut menutup tab (handler global di +page).
+      e.stopPropagation();
+      finishAfterSave();
     }
+  }
+
+  /**
+   * Tutup popup "Transaksi Tersimpan" dan siap melayani berikutnya. Di mode
+   * Edit Kasir tidak ada "transaksi baru" — tab edit langsung ditutup.
+   */
+  function finishAfterSave() {
+    showPrintConfirm = false;
+    printDone = false;
+    if (isEdit && tabId) {
+      clearTabDirty(tabId);
+      closeTab(tabId);
+    }
+  }
+
+  /** Label jenis pembayaran di popup; Kombinasi dirinci tunai + QRIS-nya. */
+  function paymentLabel(tx: TransactionDetail): string {
+    if (tx.payment_method === "Kombinasi") {
+      return `Kombinasi (Tunai ${formatIDR(tx.paid_cash ?? 0)} + QRIS ${formatIDR(tx.paid_qris ?? 0)})`;
+    }
+    return tx.payment_method;
   }
 
   async function loadSettings() {
@@ -208,9 +273,81 @@
   onMount(() => {
     loadSettings();
     loadDiscounts();
-    loadShift();
-    loadCustomers();
+    // Edit Kasir tidak butuh shift aktif — transaksinya sudah punya shift sendiri.
+    if (!editTransactionId) {
+      loadShift();
+      loadCustomers();
+    }
   });
+
+  // Muat ulang tiap kali transaksi yang diedit berganti (tab Edit Kasir itu
+  // singleton, props-nya diganti saat user mengedit transaksi lain).
+  $effect(() => {
+    const id = editTransactionId;
+    if (id) loadEditTransaction(id);
+  });
+
+  async function loadEditTransaction(id: string) {
+    editLoading = true;
+    try {
+      const [d, custs, users] = await Promise.all([
+        api.getTransaction(id),
+        api.listCustomers(),
+        api.listUsers().catch(() => []),
+      ]);
+      customers = custs;
+      editDetail = d;
+      if (!d) return;
+      editOrigQty = {};
+      for (const it of d.items) editOrigQty[it.product_id] = (editOrigQty[it.product_id] ?? 0) + it.qty;
+      editCashierName = users.find((u) => u.username === d.cashier_id)?.name ?? d.cashier_id;
+      // Data barang terkini (barcode, merek, stok) untuk tiap baris. Stok yang
+      // boleh dipakai = stok sekarang + jumlah di transaksi ini sendiri,
+      // karena saat disimpan jumlah lamanya dikembalikan dulu ke stok.
+      const products = await Promise.all(
+        d.items.map((it) =>
+          api
+            .listProducts(it.name, true, 50)
+            .then((list) => list.find((p) => p.id === it.product_id) ?? null)
+            .catch(() => null),
+        ),
+      );
+      cart = d.items.map((it, i) => {
+        const p = products[i];
+        return {
+          product_id: it.product_id,
+          name: it.name,
+          barcode: p?.barcode ?? null,
+          price: it.price,
+          qty: it.qty,
+          discount: it.discount,
+          brand: p?.brand ?? null,
+          default_discount: p?.default_discount ?? 0,
+          periodic: false,
+          // Diskon transaksi asli dipertahankan apa adanya, tidak dihitung
+          // ulang dari diskon periodik hari ini.
+          manualOverride: true,
+          manualPercent: null,
+          // Barang tak ketemu (mis. sudah dihapus): jangan dibatasi di sini,
+          // server tetap memeriksa kecukupan stok saat menyimpan.
+          stock_qty: p ? p.stock_qty + it.qty : Number.MAX_SAFE_INTEGER,
+        };
+      });
+      paymentMethod = (d.payment_method as PaymentMethod) ?? "Tunai";
+      paid = d.paid;
+      paidCash = d.paid_cash ?? 0;
+      paidQris = d.paid_qris ?? 0;
+      selectedCustomer = d.customer_id ? custs.find((c) => c.id === d.customer_id) ?? null : null;
+      customerSearch = "";
+      editBaseline = editSnapshot;
+    } catch (e) {
+      toastError(e);
+    } finally {
+      editLoading = false;
+    }
+    await tick();
+    scanInputEl?.focus();
+  }
 
   async function doOpenShift() {
     if (!$currentUser) return;
@@ -275,16 +412,24 @@
     line.discount = Math.min(Math.max(discount, 0), line.price * qty);
   }
 
+  /**
+   * Stok yang boleh dipakai keranjang ini. Saat Edit Kasir, jumlah barang di
+   * transaksi asli ikut dihitung — waktu disimpan jumlah lama itu dikembalikan
+   * dulu ke stok sebelum dikurangi lagi.
+   */
+  const availableStock = (p: ProductWithStock) => p.stock_qty + (isEdit ? editOrigQty[p.id] ?? 0 : 0);
+
   function addToCart(p: ProductWithStock, addQty = 1) {
     const ex = cart.find((l) => l.product_id === p.id);
     const currentQty = ex?.qty ?? 0;
-    if (currentQty + addQty > p.stock_qty) {
-      stockAlert = { name: p.name, available: p.stock_qty };
+    const available = availableStock(p);
+    if (currentQty + addQty > available) {
+      stockAlert = { name: p.name, available };
       return;
     }
     if (ex) {
       ex.qty += addQty;
-      ex.stock_qty = p.stock_qty;
+      ex.stock_qty = available;
       if (!ex.manualOverride) applyDiscount(ex, ex.qty);
       cart = [...cart];
     } else {
@@ -300,7 +445,7 @@
         periodic: false,
         manualOverride: false,
         manualPercent: null,
-        stock_qty: p.stock_qty,
+        stock_qty: available,
       };
       applyDiscount(line, addQty);
       cart = [...cart, line];
@@ -577,10 +722,10 @@
     showToast("Transaksi disimpan sebagai pending.", "success");
   }
 
-  function resumePending(id: string) {
+  async function resumePending(id: string) {
     const p = $pendingSales.find((x) => x.id === id);
     if (!p) return;
-    if (cart.length > 0 && !confirm("Keranjang saat ini belum kosong. Timpa dengan transaksi pending ini?")) return;
+    if (cart.length > 0 && !(await confirmDialog("Keranjang saat ini belum kosong. Timpa dengan transaksi pending ini?", { title: "Timpa Keranjang?", okText: "Timpa" }))) return;
     cart = p.cart.map((l) => ({ ...l }));
     checkoutRef = null; // keranjang baru = percobaan checkout baru
     selectedCustomer = p.customerId ? customers.find((c) => c.id === p.customerId) ?? null : null;
@@ -605,6 +750,7 @@
   }
 
   async function doCheckout() {
+    if (isEdit) return doSaveEdit();
     if (cart.length === 0) return showWarning("Keranjang kosong.");
     if (paid < total) return showWarning("Pembayaran kurang dari total.");
     if (!activeShift) return showWarning("Buka shift terlebih dahulu sebelum bertransaksi.");
@@ -635,6 +781,7 @@
       const tersimpan = total;
       const tx = await api.checkout(sale);
       lastReceipt = tx;
+      printDone = false;
       showPrintConfirm = true;
       showToast(`Transaksi ${tx.invoice_no} tersimpan.`, "success");
       markTransactionsDirty();
@@ -673,8 +820,46 @@
     }
   }
 
+  /** Simpan perubahan Edit Kasir ke transaksi yang sama. */
+  async function doSaveEdit() {
+    if (!editDetail) return;
+    if (cart.length === 0) return showWarning("Transaksi tidak boleh kosong.", "Belum Bisa Disimpan");
+    if (paid < total) return showWarning("Pembayaran kurang dari total.", "Belum Bisa Disimpan");
+    busy = true;
+    try {
+      const sale: SaleInput = {
+        cashier_id: editDetail.cashier_id,
+        payment_method: paymentMethod,
+        paid,
+        items: cart.map((l) => ({
+          product_id: l.product_id,
+          name: l.name,
+          price: l.price,
+          qty: l.qty,
+          discount: l.discount,
+        })),
+        customer_id: selectedCustomer?.id ?? null,
+        shift_id: editDetail.shift_id,
+        ...(paymentMethod === "Kombinasi" ? { paid_cash: paidCash, paid_qris: paidQris } : {}),
+      };
+      const tx = await api.updateTransaction(editDetail.id, sale);
+      editDetail = tx;
+      editBaseline = editSnapshot;
+      lastReceipt = tx;
+      printDone = false;
+      showPrintConfirm = true;
+      showToast(`Transaksi ${tx.invoice_no} diperbarui.`, "success");
+      markTransactionsDirty();
+    } catch (e) {
+      toastError(e);
+    } finally {
+      busy = false;
+    }
+  }
+
   async function doPrintReceipt() {
-    if (!lastReceipt || !receiptCfg) return;
+    if (!lastReceipt || !receiptCfg || printBusy) return;
+    printBusy = true;
     try {
       // Perintah buka laci disatukan ke job cetak yang sama (bukan kirim
       // terpisah) supaya laci membuka begitu struk selesai keluar. Byte struk
@@ -688,8 +873,13 @@
     } catch (e) {
       toastError(e);
     } finally {
-      showPrintConfirm = false;
+      printBusy = false;
     }
+    // Popup tetap terbuka: satu langkah lagi "Transaksi Baru" (Enter), supaya
+    // kasir masih bisa membaca kembalian / cetak ulang kalau kertas macet.
+    printDone = true;
+    await tick();
+    newTxBtnEl?.focus();
   }
 
   /** Buka laci tanpa transaksi (tukar uang, ambil kembalian) — F8. */
@@ -712,7 +902,9 @@
   // tiap rumpun dikelompokkan, tidak dipencar (poin 1).
   function onGlobalKey(e: KeyboardEvent) {
     if (tabId && $activeTabId !== tabId) return;
-    if (!activeShift) return;
+    if (isEdit ? !editDetail : !activeShift) return;
+    // Popup hasil simpan sedang terbuka — F-key jangan mengubah keranjang di belakangnya.
+    if (showPrintConfirm) return;
     if (e.key === "F1") {
       e.preventDefault();
       scanQtyEl?.focus();
@@ -731,7 +923,7 @@
       openSearchPopup(search.trim());
     } else if (e.key === "F6") {
       e.preventDefault();
-      if (cart.length > 0) holdCurrentCart();
+      if (!isEdit && cart.length > 0) holdCurrentCart();
     } else if (e.key === "F7") {
       e.preventDefault();
       if (cart.length > 0) clearCart();
@@ -762,15 +954,27 @@
   <div class="pos-meta-grid">
   <div class="pos-meta">
     <span class="meta-label">No. Struk</span>
-    <span class="meta-val mono">{lastReceipt ? lastReceipt.invoice_no : "— (auto)"}</span>
+    {#if isEdit}
+      <span class="meta-val mono locked" title="Terkunci — data struk asli">🔒 {editDetail?.invoice_no ?? "—"}</span>
+    {:else}
+      <span class="meta-val mono">{lastReceipt ? lastReceipt.invoice_no : "— (auto)"}</span>
+    {/if}
   </div>
   <div class="pos-meta">
     <span class="meta-label">Kasir</span>
-    <span class="meta-val">{$currentUser?.name ?? $currentUser?.username ?? "—"}</span>
+    {#if isEdit}
+      <span class="meta-val locked" title="Terkunci — data struk asli">🔒 {editCashierName || "—"}</span>
+    {:else}
+      <span class="meta-val">{$currentUser?.name ?? $currentUser?.username ?? "—"}</span>
+    {/if}
   </div>
   <div class="pos-meta">
     <span class="meta-label">Tanggal</span>
-    {#if isAdmin}
+    {#if isEdit}
+      <span class="meta-val mono locked" title="Terkunci — data struk asli">
+        🔒 {editDetail ? new Date(editDetail.created_at).toLocaleDateString("id-ID", { day:"2-digit", month:"short", year:"numeric" }) : "—"}
+      </span>
+    {:else if isAdmin}
       <input class="mono tanggal-input" type="date" max={todayIso()} bind:value={tanggal} title="Admin bisa mundurkan tanggal untuk transaksi yang terlewat" />
     {:else}
       <span class="meta-val mono">{new Date(tanggal).toLocaleDateString("id-ID", { day:"2-digit", month:"short", year:"numeric" })}</span>
@@ -778,7 +982,11 @@
   </div>
   <div class="pos-meta">
     <span class="meta-label">Jam</span>
-    <span class="meta-val mono">{formatTime(clock.now)}</span>
+    {#if isEdit}
+      <span class="meta-val mono locked" title="Terkunci — data struk asli">🔒 {editDetail ? formatTime(new Date(editDetail.created_at)) : "—"}</span>
+    {:else}
+      <span class="meta-val mono">{formatTime(clock.now)}</span>
+    {/if}
   </div>
   <div class="pos-meta pos-customer">
     <span class="meta-label">Pelanggan</span>
@@ -810,16 +1018,20 @@
   </div>
 </div>
 
-{#if !shiftChecked}
+{#if isEdit && (editLoading || !editDetail)}
+  <div class="card text-dim" style="text-align:center; padding:2rem;">
+    {editLoading ? "Memuat…" : "Transaksi tidak ditemukan."}
+  </div>
+{:else if !isEdit && !shiftChecked}
   <div class="card text-dim" style="text-align:center; padding:2rem;">Memuat…</div>
-{:else if !activeShift}
+{:else if !isEdit && !activeShift}
   <div class="card shift-gate">
     <h2>🟢 Buka Shift Dulu</h2>
     <p class="text-dim" style="margin-top:0;">
       Masukkan modal awal (uang tunai di laci) sebelum mulai melayani transaksi.
     </p>
-    <label>Modal Awal (Rp)</label>
-    <input type="number" min="0" bind:value={openingCash} />
+    <label>Modal Awal</label>
+    <CashInput bind:value={openingCash} onkeydown={(e) => e.key === "Enter" && !openingBusy && doOpenShift()} />
     <button class="btn-primary" style="margin-top:1rem; width:100%;" disabled={openingBusy} onclick={doOpenShift}>
       Buka Shift &amp; Mulai Jualan
     </button>
@@ -1000,7 +1212,9 @@
           <button onclick={() => (paid = 100000)}>100rb</button>
         </div>
       {/if}
-      <button class="btn-primary checkout" disabled={busy || cart.length === 0} onclick={doCheckout} title="Bayar & Simpan (F9)">Bayar &amp; Simpan (F9)</button>
+      <button class="btn-primary checkout" disabled={busy || cart.length === 0} onclick={doCheckout} title="{isEdit ? 'Simpan Perubahan' : 'Bayar & Simpan'} (F9)">
+        {isEdit ? "💾 Simpan Perubahan (F9)" : "Bayar & Simpan (F9)"}
+      </button>
     </div>
   </section>
 </div>
@@ -1011,16 +1225,18 @@
   { key: "F3", label: "Pilih Kombinasi", action: () => selectPaymentMethod("Kombinasi") },
   { key: "F4", label: "Pilih Kartu", action: () => selectPaymentMethod("Kartu") },
   { key: "F5", label: "Cari Barang", action: () => openSearchPopup(search.trim()) },
-  { key: "F6", label: "Pending", action: holdCurrentCart, disabled: cart.length === 0 },
+  ...(isEdit ? [] : [{ key: "F6", label: "Pending", action: holdCurrentCart, disabled: cart.length === 0 }]),
   { key: "F7", label: "Kosongkan", action: clearCart, disabled: cart.length === 0 },
   { key: "F8", label: "Buka Laci", action: openDrawer, disabled: receiptCfg?.cashDrawer === "off" },
-  { key: "F9", label: "Bayar & Simpan", action: doCheckout, disabled: busy || cart.length === 0 },
+  { key: "F9", label: isEdit ? "Simpan Perubahan" : "Bayar & Simpan", action: doCheckout, disabled: busy || cart.length === 0 },
   { key: "F10", label: "Uang Pas", action: () => (paid = total) },
   { key: "F11", label: "50rb", action: () => (paid = 50000) },
   { key: "F12", label: "100rb", action: () => (paid = 100000) },
 ]}>
   {#snippet children()}
-    {#if $pendingSales.length > 0}
+    {#if isEdit}
+      <button class="shortcut-item" onclick={() => tabId && closeTab(tabId)}>✕ Batal Edit (Esc)</button>
+    {:else if $pendingSales.length > 0}
       <button class="shortcut-item" onclick={() => (showPendingList = true)}>📋 Lihat Pending ({$pendingSales.length})</button>
     {/if}
   {/snippet}
@@ -1029,15 +1245,32 @@
 </div>
 
 {#if showPrintConfirm && lastReceipt}
-  <div class="modal-backdrop" onclick={() => (showPrintConfirm = false)} role="presentation">
+  <div class="modal-backdrop" onclick={finishAfterSave} role="presentation">
     <div class="modal print-confirm" onclick={(e) => e.stopPropagation()} onkeydown={onPrintConfirmKey} role="presentation">
       <div class="stock-alert-icon">✅</div>
-      <h2>Transaksi Tersimpan</h2>
-      <p class="text-dim mono" style="margin:0.3rem 0 1rem;">{lastReceipt.invoice_no} · {formatIDR(lastReceipt.total)}</p>
-      <div class="row" style="gap:0.5rem;">
-        <button class="btn-ghost" style="flex:1;" bind:this={printNoBtnEl} onclick={() => (showPrintConfirm = false)}>Tidak</button>
-        <button class="btn-primary" style="flex:1;" bind:this={printYesBtnEl} onclick={doPrintReceipt}>🖨️ Cetak Struk</button>
-      </div>
+      <h2>{isEdit ? "Perubahan Tersimpan" : "Transaksi Tersimpan"}</h2>
+      <dl class="tx-summary">
+        <dt>No. Struk</dt><dd class="mono">{lastReceipt.invoice_no}</dd>
+        <dt>Total Transaksi</dt><dd class="mono tx-total">{formatIDR(lastReceipt.total)}</dd>
+        <dt>Jenis Pembayaran</dt><dd>{paymentLabel(lastReceipt)}</dd>
+        <dt>Uang Bayar</dt><dd class="mono">{formatIDR(lastReceipt.paid)}</dd>
+        <dt>Kembalian</dt><dd class="mono tx-change">{formatIDR(lastReceipt.change)}</dd>
+      </dl>
+      {#if printDone}
+        <div class="row" style="gap:0.5rem;">
+          <button class="btn-ghost" style="flex:1;" bind:this={printYesBtnEl} disabled={printBusy} onclick={doPrintReceipt}>🖨️ Cetak Ulang</button>
+          <button class="btn-primary" style="flex:1;" bind:this={newTxBtnEl} onclick={finishAfterSave}>
+            {isEdit ? "Selesai" : "Transaksi Baru"} <span class="enter-hint">⏎</span>
+          </button>
+        </div>
+      {:else}
+        <div class="row" style="gap:0.5rem;">
+          <button class="btn-ghost" style="flex:1;" bind:this={printNoBtnEl} onclick={finishAfterSave}>Tidak</button>
+          <button class="btn-primary" style="flex:1;" bind:this={printYesBtnEl} disabled={printBusy} onclick={doPrintReceipt}>
+            {printBusy ? "Mencetak…" : "🖨️ Cetak Struk"}
+          </button>
+        </div>
+      {/if}
     </div>
   </div>
 {/if}
@@ -1196,7 +1429,26 @@
   /* Bar shortcut keyboard di bawah — komponen ShortcutBar.svelte reusable. */
 
   /* Popup konfirmasi cetak struk setelah transaksi tersimpan */
-  .print-confirm { max-width: 340px; text-align: center; }
+  .print-confirm { max-width: 380px; text-align: center; }
+  .print-confirm h2 { margin: 0; }
+  .tx-summary {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.35rem 1rem;
+    margin: 0.8rem 0 1rem;
+    padding: 0.7rem 0.9rem;
+    text-align: left;
+    background: var(--baby-blue-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+  .tx-summary dt { color: var(--text-dim); font-size: 0.85rem; margin: 0; }
+  .tx-summary dd { margin: 0; text-align: right; font-weight: 600; }
+  .tx-summary .tx-total { font-size: 1.1rem; font-weight: 800; }
+  .tx-summary .tx-change { font-size: 1.25rem; font-weight: 800; color: var(--primary-dark); }
+  .enter-hint { opacity: 0.75; font-size: 0.85em; margin-left: 0.2rem; }
+  /* Data struk Edit Kasir yang dikunci ke transaksi asli. */
+  .locked { color: var(--text-dim); }
 
   /* Baris scan */
   .scan-row { display:flex; align-items:center; gap:0.6rem; }

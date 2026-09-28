@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { confirmDialog } from "$lib/dialog";
   import { api } from "$lib/api";
   import { showToast, toastError } from "$lib/toast";
   import { parseReceiptConfig, RECEIPT_SHOW_KEYS, maxFontSizeForPaper } from "$lib/receipt";
@@ -218,9 +219,8 @@
 
   async function revokeDevice(d: MobileDevice) {
     if (
-      !confirm(
-        `Cabut akses "${d.name}"? Perangkat itu harus pairing ulang untuk bisa dipakai lagi.`,
-      )
+      !(await confirmDialog(
+        `Cabut akses "${d.name}"? Perangkat itu harus pairing ulang untuk bisa dipakai lagi.`, { title: "Cabut Akses Perangkat?", okText: "Cabut", danger: true }))
     )
       return;
     try {
@@ -238,7 +238,7 @@
   }
 
   async function disconnectServer() {
-    if (!confirm("Putuskan koneksi dari Server Pusat dan kembali ke mode lokal?")) return;
+    if (!(await confirmDialog("Putuskan koneksi dari Server Pusat dan kembali ke mode lokal?", { title: "Putuskan Server Pusat?", okText: "Putuskan", danger: true }))) return;
     lanBusy = true;
     try {
       await api.selectServer("local");
@@ -447,7 +447,7 @@
 
   async function doResetData() {
     if (resetConfirmText.trim() !== RESET_PHRASE) return;
-    if (!confirm("Ini akan menghapus SEMUA data barang, stok, transaksi, diskon, dan merek secara permanen. Lanjutkan?")) return;
+    if (!(await confirmDialog("Ini akan menghapus SEMUA data barang, stok, transaksi, diskon, dan merek secara permanen. Lanjutkan?", { title: "Hapus Semua Data?", okText: "Hapus Semua", danger: true }))) return;
     resetting = true;
     try {
       await api.resetData(resetConfirmText.trim());

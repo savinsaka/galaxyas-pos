@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { confirmDialog } from "$lib/dialog";
   import { api } from "$lib/api";
   import { formatQty, formatDateTime } from "$lib/format";
   import { showToast, toastError } from "$lib/toast";
@@ -90,7 +91,7 @@
   }
   async function hapus() {
     if (!selected) return showToast("Pilih baris dulu.", "info");
-    if (!confirm(`Hapus batch ${selected.no}? Stok akan dikoreksi untuk semua barang di dalamnya.`)) return;
+    if (!(await confirmDialog(`Hapus batch ${selected.no}? Stok akan dikoreksi untuk semua barang di dalamnya.`, { title: "Hapus Batch?", okText: "Hapus", danger: true }))) return;
     try {
       await api.deleteStockMovementBatch(selected.id);
       showToast("Batch dihapus, stok dikoreksi.", "success");

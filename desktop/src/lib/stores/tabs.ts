@@ -43,8 +43,8 @@ export function openTab(opts: OpenTabOptions): string {
   return id;
 }
 
-export function closeTab(id: string) {
-  if (!confirmCloseTab(id)) return;
+export async function closeTab(id: string) {
+  if (!(await confirmCloseTab(id))) return;
   const list = get(tabs);
   const idx = list.findIndex((t) => t.id === id);
   const next = list.filter((t) => t.id !== id);

@@ -8,6 +8,19 @@ export function formatMoneyInput(n: number | null | undefined): string {
   return n.toLocaleString("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+/** Rupiah bulat tanpa desimal untuk input uang laci/modal — 100000 -> "100.000".
+ * Kosong kalau 0 supaya placeholder kelihatan. */
+export function formatCashInput(n: number | null | undefined): string {
+  if (!n) return "";
+  return Math.round(n).toLocaleString("id-ID", { maximumFractionDigits: 0 });
+}
+
+/** Kebalikan formatCashInput: ambil digitnya saja ("100.000" -> 100000). */
+export function parseCashInput(raw: string): number {
+  const n = parseInt(raw.replace(/\D/g, ""), 10);
+  return Number.isFinite(n) ? n : 0;
+}
+
 /** Kebalikan formatMoneyInput — baca string hasil ketikan user (titik ribuan,
  * koma desimal) jadi number. "50.000,43" -> 50000.43. */
 export function parseMoneyInput(raw: string): number {
@@ -23,11 +36,15 @@ export function parseMoneyInput(raw: string): number {
  * sebelum koma. Ini penting supaya edit satu digit di tengah angka (mis.
  * "40.000,00" -> "41.000,00") tidak bikin kursor loncat ke belakang setelah
  * setiap keystroke — cukup ganti satu digit, lanjut ketik di posisi yang sama. */
-export function onMoneyInput(e: Event, setValue: (n: number) => void) {
+export function onMoneyInput(
+  e: Event,
+  setValue: (n: number) => void,
+  parse: (raw: string) => number = parseMoneyInput,
+) {
   const input = e.currentTarget as HTMLInputElement;
   const caret = input.selectionStart ?? input.value.length;
   const digitsBeforeCaret = (input.value.slice(0, caret).match(/\d/g) ?? []).length;
-  setValue(parseMoneyInput(input.value));
+  setValue(parse(input.value));
   tick().then(() => {
     const val = input.value;
     if (digitsBeforeCaret === 0) {

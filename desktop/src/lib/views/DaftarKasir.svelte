@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { confirmDialog } from "$lib/dialog";
   import { get } from "svelte/store";
   import { api } from "$lib/api";
   import { formatIDR, formatDateTime } from "$lib/format";
@@ -138,7 +139,7 @@
   }
   async function hapus() {
     if (!selected) return showToast("Pilih transaksi dulu.", "info");
-    if (!confirm(`Hapus transaksi ${selected.invoice_no}? Stok akan dikembalikan.`)) return;
+    if (!(await confirmDialog(`Hapus transaksi ${selected.invoice_no}? Stok akan dikembalikan.`, { title: "Hapus Transaksi?", okText: "Hapus", danger: true }))) return;
     try {
       await api.deleteTransaction(selected.id);
       showToast("Transaksi dihapus, stok dikembalikan.", "success");

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { confirmDialog } from "$lib/dialog";
   import { api } from "$lib/api";
   import { formatDateTime } from "$lib/format";
   import { showToast, toastError } from "$lib/toast";
@@ -35,7 +36,7 @@
     name = b.name;
   }
   async function remove(b: Brand) {
-    if (!confirm(`Hapus merek "${b.name}"?`)) return;
+    if (!(await confirmDialog(`Hapus merek "${b.name}"?`, { title: "Hapus Merek?", okText: "Hapus", danger: true }))) return;
     try {
       await api.deleteBrand(b.id);
       await load();

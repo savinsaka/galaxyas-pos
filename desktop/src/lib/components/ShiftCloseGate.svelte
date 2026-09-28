@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import CashInput from "$lib/components/CashInput.svelte";
   import { get } from "svelte/store";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { api } from "$lib/api";
@@ -122,8 +123,8 @@
         {/if}
         {#if gateShift}
           {#if gateSop}<h3 class="shift-sub">🔒 Tutup Shift</h3>{/if}
-          <label>Uang Fisik di Laci Sekarang (Rp)</label>
-          <input type="number" min="0" bind:value={closingCash} />
+          <label>Uang Fisik di Laci Sekarang</label>
+          <CashInput bind:value={closingCash} />
           <label style="margin-top:0.6rem;">Catatan</label>
           <input bind:value={closeNote} placeholder="opsional" />
         {/if}

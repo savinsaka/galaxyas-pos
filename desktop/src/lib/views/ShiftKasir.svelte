@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import CashInput from "$lib/components/CashInput.svelte";
+  import { confirmDialog } from "$lib/dialog";
   import { api } from "$lib/api";
   import { formatIDR, formatDateTime } from "$lib/format";
   import { showToast, toastError } from "$lib/toast";
@@ -52,7 +54,7 @@
 
   async function doClose() {
     if (!active) return;
-    if (!confirm("Tutup shift sekarang? Pastikan uang di laci sudah dihitung.")) return;
+    if (!(await confirmDialog("Tutup shift sekarang? Pastikan uang di laci sudah dihitung.", { title: "Tutup Shift?", okText: "Tutup Shift" }))) return;
     busy = true;
     try {
       closedResult = await api.closeShift({ id: active.id, closing_cash: closingCash, note: closeNote });
@@ -85,8 +87,8 @@
     <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
       Masukkan modal awal (uang tunai) di laci sebelum mulai melayani transaksi.
     </p>
-    <label>Modal Awal (Rp)</label>
-    <input type="number" min="0" bind:value={openingCash} />
+    <label>Modal Awal</label>
+    <CashInput bind:value={openingCash} onkeydown={(e) => e.key === "Enter" && !busy && doOpen()} />
     <div class="row" style="justify-content:flex-end; margin-top:1rem;">
       <button class="btn-primary" disabled={busy} onclick={doOpen}>Buka Shift</button>
     </div>
@@ -98,8 +100,8 @@
     <div class="trow"><span>Dibuka</span><span class="mono">{formatDateTime(active.opened_at)}</span></div>
     <div class="trow"><span>Modal Awal</span><span class="mono">{formatIDR(active.opening_cash)}</span></div>
 
-    <label style="margin-top:0.9rem;">Uang Fisik di Laci Sekarang (Rp)</label>
-    <input type="number" min="0" bind:value={closingCash} />
+    <label style="margin-top:0.9rem;">Uang Fisik di Laci Sekarang</label>
+    <CashInput bind:value={closingCash} />
     <label style="margin-top:0.6rem;">Catatan</label>
     <input bind:value={closeNote} placeholder="opsional" />
     <div class="row" style="justify-content:flex-end; margin-top:1rem;">

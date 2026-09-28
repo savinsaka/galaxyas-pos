@@ -1,4 +1,5 @@
 import { writable, get } from "svelte/store";
+import { confirmDialog } from "$lib/dialog";
 
 /** Set tab id yang sedang punya data belum disimpan (kasir, tambah item
  * masuk/keluar, tambah barang, opname) — dipakai closeTab() untuk minta
@@ -18,8 +19,12 @@ export function clearTabDirty(id: string) {
   setTabDirty(id, false);
 }
 
-/** Return true kalau boleh lanjut menutup (tidak dirty, atau user konfirmasi). */
-export function confirmCloseTab(id: string): boolean {
+/** Resolve true kalau boleh lanjut menutup (tidak dirty, atau user konfirmasi). */
+export async function confirmCloseTab(id: string): Promise<boolean> {
   if (!get(dirtyTabs).has(id)) return true;
-  return confirm("Ada transaksi yang belum disimpan di tab ini. Yakin mau menutup?");
+  return confirmDialog("Ada transaksi yang belum disimpan di tab ini. Yakin mau menutup?", {
+    title: "Tutup Tab?",
+    okText: "Tutup Tab",
+    danger: true,
+  });
 }

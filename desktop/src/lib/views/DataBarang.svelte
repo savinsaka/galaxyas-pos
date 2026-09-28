@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { confirmDialog } from "$lib/dialog";
   import { api } from "$lib/api";
   import { formatIDR, formatQty } from "$lib/format";
   import { showToast, toastError } from "$lib/toast";
@@ -118,7 +119,7 @@
   }
   async function hapus() {
     if (!selected) return showToast("Pilih barang dulu.", "info");
-    if (!confirm(`Hapus barang "${selected.name}"?`)) return;
+    if (!(await confirmDialog(`Hapus barang "${selected.name}"?`, { title: "Hapus Barang?", okText: "Hapus", danger: true }))) return;
     try {
       await api.deleteProduct(selected.id);
       showToast("Barang dihapus.", "success");

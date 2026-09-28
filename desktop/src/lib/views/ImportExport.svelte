@@ -1,5 +1,6 @@
 <script lang="ts">
   import * as XLSX from "xlsx";
+  import { confirmDialog } from "$lib/dialog";
   import { openPath } from "@tauri-apps/plugin-opener";
   import { api } from "$lib/api";
   import { showToast, toastError } from "$lib/toast";
@@ -140,7 +141,7 @@
   }
 
   async function runDedupe() {
-    if (!confirm("Cari barang dengan barcode kembar dan non-aktifkan yang lama (data terbaru dipertahankan)?")) return;
+    if (!(await confirmDialog("Cari barang dengan barcode kembar dan non-aktifkan yang lama (data terbaru dipertahankan)?", { title: "Bersihkan Barcode Kembar?", okText: "Lanjutkan" }))) return;
     deduping = true;
     try {
       dedupeResult = await api.dedupeProducts();
