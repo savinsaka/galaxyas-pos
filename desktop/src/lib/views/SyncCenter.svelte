@@ -3,12 +3,14 @@
   import { api } from "$lib/api";
   import { formatDateTime } from "$lib/format";
   import { showToast, toastError } from "$lib/toast";
-  import type { Brand, SyncResult } from "$lib/types";
+  import { confirmDialog } from "$lib/dialog";
+  import type { Brand, SyncResult, SyncUndoInfo } from "$lib/types";
   import BrandMultiSelect from "$lib/components/BrandMultiSelect.svelte";
 
   let settings = $state<Record<string, string>>({});
   let syncing = $state(false);
   let lastResult = $state<SyncResult | null>(null);
+  let undoInfo = $state<SyncUndoInfo | null>(null);
 
   // Merek yang dikecualikan dari Hard Push / Hard Pull (setting JSON array).
   let allBrands = $state<Brand[]>([]);
@@ -18,6 +20,7 @@
 
   async function load() {
     try {
+      undoInfo = await api.syncUndoInfo();
       settings = await api.getSettings();
       if (!excludeLoaded) {
         try {
@@ -72,6 +75,46 @@
     hard_pull: api.syncHardPull,
   };
 
+  const kindLabel: Record<Kind, string> = {
+    push: "Sync Out",
+    pull: "Sync In",
+    all: "Sync Semua",
+    hard_push: "Hard Push",
+    hard_pull: "Hard Pull",
+  };
+
+  function undoScope(u: SyncUndoInfo): string {
+    const parts: string[] = [];
+    if (u.local_count > 0) parts.push(`${u.local_count} barang di PC ini`);
+    if (u.server_count > 0) parts.push(`${u.server_count} barang di server (SSoT)`);
+    return parts.join(" dan ");
+  }
+
+  async function undo() {
+    const u = undoInfo;
+    if (!u) return;
+    const ok = await confirmDialog(
+      `${kindLabel[u.kind]} tanggal ${formatDateTime(u.created_at)} akan dibatalkan: ` +
+        `${undoScope(u)} dikembalikan ke data sebelum sync. ` +
+        `Barang yang sudah diubah lagi sesudah sync tidak disentuh. ` +
+        `Undo hanya bisa sekali.`,
+      { title: "Undo sync terakhir?", okText: "Ya, Undo", danger: true, icon: "↶" },
+    );
+    if (!ok) return;
+    syncing = true;
+    lastResult = null;
+    try {
+      lastResult = await api.syncUndo();
+      showToast(lastResult.message, "success", 6000);
+      await load();
+    } catch (e) {
+      toastError(e);
+      await load();
+    } finally {
+      syncing = false;
+    }
+  }
+
   async function run(kind: Kind) {
     hardConfirm = null;
     syncing = true;
@@ -119,6 +162,17 @@
       <button class="btn-success" style="padding:0.8rem;" disabled={syncing} onclick={() => run("all")}>⇅ Sync Semua</button>
     </div>
 
+    <div class="undo-box">
+      <button class="btn-ghost undo-btn" disabled={syncing || !undoInfo} onclick={undo}>↶ Undo Sync Terakhir</button>
+      <div class="text-dim undo-info">
+        {#if undoInfo}
+          {kindLabel[undoInfo.kind]} · {formatDateTime(undoInfo.created_at)} · {undoScope(undoInfo)}
+        {:else}
+          Belum ada sync yang bisa di-undo.
+        {/if}
+      </div>
+    </div>
+
     <div class="hard-box">
       <div class="hard-head">⚠ Hard Sync</div>
       <p class="text-dim" style="margin:0 0 0.6rem; font-size:0.8rem;">
@@ -146,7 +200,7 @@
           <div class="sync-log-head">📋 Detail barang ({lastResult.log.length})</div>
           <div class="sync-log">
             {#each lastResult.log as l}
-              <div class="log-row log-{l.action === 'Diterapkan' ? 'applied' : l.action === 'Dikirim' ? 'sent' : l.action === 'Dikecualikan' ? 'excluded' : 'skipped'}">
+              <div class="log-row log-{l.action === 'Diterapkan' || l.action.startsWith('Dikembalikan') ? 'applied' : l.action === 'Dikirim' ? 'sent' : l.action === 'Dikecualikan' || l.action.startsWith('Dihapus') ? 'excluded' : 'skipped'}">
                 <span>{l.name}</span>
                 <span class="log-action">{l.action}</span>
               </div>
@@ -184,7 +238,7 @@
           <br />Tidak ada merek yang dikecualikan.
         {/if}
       </p>
-      <p class="hard-warn">Tindakan ini tidak bisa dibatalkan.</p>
+      <p class="hard-warn">Bisa dibatalkan sekali lewat tombol "Undo Sync Terakhir".</p>
       <div class="row" style="gap:0.5rem;">
         <button class="btn-ghost" style="flex:1;" onclick={() => (hardConfirm = null)}>Batal</button>
         <button class="btn-danger" style="flex:1;" onclick={() => hardConfirm && run(hardConfirm)}>
@@ -196,6 +250,9 @@
 {/if}
 
 <style>
+  .undo-box { display: flex; align-items: center; gap: 0.7rem; margin: -0.3rem 0 1rem; }
+  .undo-btn { padding: 0.55rem 0.9rem; white-space: nowrap; }
+  .undo-info { font-size: 0.78rem; }
   .hard-box { border: 1px dashed var(--danger); border-radius: 8px; padding: 0.8rem; margin-bottom: 1rem; }
   .hard-head { font-weight: 700; color: var(--danger); margin-bottom: 0.3rem; }
   .hard-confirm { max-width: 460px; text-align: center; }

@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::models::{
-    MobileDevice, Product, ProductInput, ProductWithStock, SaleInput, SyncLogEntry, Transaction,
-    TransactionDetail, TransactionItem,
+    LocalUndoItem, MobileDevice, Product, ProductInput, ProductRow, ProductWithStock, SaleInput,
+    SyncLogEntry, SyncUndoSnapshot, Transaction, TransactionDetail, TransactionItem,
 };
 
 /// Buat semua tabel lokal bila belum ada. Stok & transaksi 100% lokal (tidak di-sync).
@@ -187,6 +187,14 @@ pub fn init_schema(conn: &Connection) -> AppResult<()> {
             revoked      INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_mobile_devices_hash ON mobile_devices(token_hash);
+
+        -- Cadangan untuk "Undo Sync Terakhir" (JSON SyncUndoSnapshot). Maks 1 baris.
+        CREATE TABLE IF NOT EXISTS sync_undo (
+            id         INTEGER PRIMARY KEY CHECK (id = 1),
+            kind       TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            data       TEXT NOT NULL
+        );
         "#,
     )?;
 
@@ -1188,7 +1196,7 @@ pub fn mark_products_synced(conn: &Connection, ids: &[String]) -> AppResult<()> 
 pub fn apply_pulled_products(
     conn: &Connection,
     incoming: &[Product],
-) -> AppResult<(i64, i64, Vec<SyncLogEntry>)> {
+) -> AppResult<AppliedPull> {
     apply_products(conn, incoming, false, &[])
 }
 
@@ -1200,7 +1208,7 @@ pub fn apply_pulled_products_forced(
     conn: &Connection,
     incoming: &[Product],
     exclude_brands: &[String],
-) -> AppResult<(i64, i64, Vec<SyncLogEntry>)> {
+) -> AppResult<AppliedPull> {
     apply_products(conn, incoming, true, exclude_brands)
 }
 
@@ -1209,12 +1217,15 @@ pub fn brand_key(brand: Option<&str>) -> String {
     brand.unwrap_or("").trim().to_lowercase()
 }
 
+/// Hasil pull yang diterapkan ke lokal: (diterapkan, dilewati, log, cadangan undo).
+pub type AppliedPull = (i64, i64, Vec<SyncLogEntry>, Vec<LocalUndoItem>);
+
 fn apply_products(
     conn: &Connection,
     incoming: &[Product],
     force: bool,
     exclude_brands: &[String],
-) -> AppResult<(i64, i64, Vec<SyncLogEntry>)> {
+) -> AppResult<AppliedPull> {
     let excluded: std::collections::HashSet<String> = exclude_brands
         .iter()
         .map(|b| brand_key(Some(b)))
@@ -1225,6 +1236,7 @@ fn apply_products(
     let mut applied = 0i64;
     let mut skipped = 0i64;
     let mut log: Vec<SyncLogEntry> = Vec::with_capacity(incoming.len());
+    let mut undo: Vec<LocalUndoItem> = Vec::new();
     for p in incoming {
         let local: Option<(String, bool, Option<String>)> = conn
             .query_row(
@@ -1255,6 +1267,15 @@ fn apply_products(
             };
 
         if should_apply {
+            // Cadangan undo: cuma baris yang memang berubah (hard pull menerapkan
+            // ribuan baris yang sebagian besar isinya sudah sama persis).
+            let before = get_product_row(conn, &p.id)?;
+            let unchanged = before.as_ref().is_some_and(|b| {
+                same_content(&b.product, p) && b.product.updated_at == p.updated_at && !b.dirty && b.ever_synced
+            });
+            if !unchanged {
+                undo.push(LocalUndoItem { before, after: p.clone() });
+            }
             conn.execute(
                 "INSERT INTO products
                     (id, name, barcode, category, brand, unit, sell_price, cost_price,
@@ -1289,7 +1310,167 @@ fn apply_products(
         }
     }
     tx.commit()?;
-    Ok((applied, skipped, log))
+    Ok((applied, skipped, log, undo))
+}
+
+// ---------- Undo sync terakhir ----------
+
+/// Isi master data sama persis (tanpa melihat `updated_at`).
+pub fn same_content(a: &Product, b: &Product) -> bool {
+    a.name == b.name
+        && a.barcode == b.barcode
+        && a.category == b.category
+        && a.brand == b.brand
+        && a.unit == b.unit
+        && a.sell_price == b.sell_price
+        && a.cost_price == b.cost_price
+        && a.default_discount == b.default_discount
+        && a.is_active == b.is_active
+        && a.is_deleted == b.is_deleted
+}
+
+pub fn get_product_row(conn: &Connection, id: &str) -> AppResult<Option<ProductRow>> {
+    Ok(conn
+        .query_row("SELECT * FROM products WHERE id = ?1", params![id], |r| {
+            Ok(ProductRow {
+                product: map_product(r)?,
+                dirty: r.get::<_, i64>("dirty")? != 0,
+                ever_synced: r.get::<_, i64>("ever_synced")? != 0,
+            })
+        })
+        .optional()?)
+}
+
+/// Simpan cadangan sync terakhir, menggantikan cadangan sebelumnya.
+pub fn save_sync_undo(conn: &Connection, snap: &SyncUndoSnapshot) -> AppResult<()> {
+    let data = serde_json::to_string(snap).map_err(|e| AppError::Other(e.to_string()))?;
+    conn.execute(
+        "INSERT INTO sync_undo (id, kind, created_at, data) VALUES (1, ?1, ?2, ?3)
+         ON CONFLICT(id) DO UPDATE SET kind = excluded.kind, created_at = excluded.created_at, data = excluded.data",
+        params![snap.kind, snap.created_at, data],
+    )?;
+    Ok(())
+}
+
+pub fn load_sync_undo(conn: &Connection) -> AppResult<Option<SyncUndoSnapshot>> {
+    let raw: Option<String> = conn
+        .query_row("SELECT data FROM sync_undo WHERE id = 1", [], |r| r.get(0))
+        .optional()?;
+    match raw {
+        None => Ok(None),
+        Some(s) => serde_json::from_str(&s)
+            .map(Some)
+            .map_err(|e| AppError::Other(format!("cadangan undo rusak: {e}"))),
+    }
+}
+
+pub fn clear_sync_undo(conn: &Connection) -> AppResult<()> {
+    conn.execute("DELETE FROM sync_undo", [])?;
+    Ok(())
+}
+
+/// Kembalikan produk lokal ke isi sebelum pull. Produk yang sudah diubah lagi
+/// sesudah sync tidak disentuh (dilaporkan sebagai konflik). Produk yang baru
+/// masuk lewat pull dihapus — kecuali sudah punya stok/mutasi/transaksi.
+pub fn undo_local_pull(
+    conn: &Connection,
+    items: &[LocalUndoItem],
+    last_pull_before: Option<&str>,
+) -> AppResult<(i64, i64, Vec<SyncLogEntry>)> {
+    let tx = conn.unchecked_transaction()?;
+    let conn: &Connection = &tx;
+    let mut restored = 0i64;
+    let mut skipped = 0i64;
+    let mut log = Vec::with_capacity(items.len());
+    for it in items {
+        let a = &it.after;
+        let entry = |action: &str| SyncLogEntry { id: a.id.clone(), name: a.name.clone(), action: action.into() };
+        let current = get_product_row(conn, &a.id)?;
+        let untouched = current
+            .as_ref()
+            .is_some_and(|c| same_content(&c.product, a) && c.product.updated_at == a.updated_at);
+        if !untouched {
+            skipped += 1;
+            log.push(entry("Konflik"));
+            continue;
+        }
+        match &it.before {
+            Some(b) => {
+                let p = &b.product;
+                conn.execute(
+                    "UPDATE products SET name=?2, barcode=?3, category=?4, brand=?5, unit=?6,
+                        sell_price=?7, cost_price=?8, default_discount=?9, is_active=?10,
+                        is_deleted=?11, updated_at=?12, dirty=?13, ever_synced=?14
+                     WHERE id=?1",
+                    params![
+                        p.id, p.name, p.barcode, p.category, p.brand, p.unit, p.sell_price,
+                        p.cost_price, p.default_discount, p.is_active as i64, p.is_deleted as i64,
+                        p.updated_at, b.dirty as i64, b.ever_synced as i64,
+                    ],
+                )?;
+                restored += 1;
+                log.push(SyncLogEntry { id: p.id.clone(), name: p.name.clone(), action: "Dikembalikan".into() });
+            }
+            None => {
+                let used: bool = conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM stock_movements WHERE product_id = ?1)
+                         OR EXISTS(SELECT 1 FROM transaction_items WHERE product_id = ?1)
+                         OR EXISTS(SELECT 1 FROM stock WHERE product_id = ?1 AND qty <> 0)",
+                    params![a.id],
+                    |r| r.get(0),
+                )?;
+                if used {
+                    skipped += 1;
+                    log.push(entry("Konflik"));
+                    continue;
+                }
+                conn.execute("DELETE FROM stock WHERE product_id = ?1", params![a.id])?;
+                conn.execute("DELETE FROM products WHERE id = ?1", params![a.id])?;
+                restored += 1;
+                log.push(entry("Dihapus"));
+            }
+        }
+    }
+    if let Some(lp) = last_pull_before {
+        set_setting(conn, "last_pull_at", lp)?;
+    }
+    tx.commit()?;
+    Ok((restored, skipped, log))
+}
+
+/// Setelah SSoT dikembalikan (undo push), kembalikan status lokal produk itu.
+/// Yang tadinya "belum dikirim" diberi `updated_at` sedikit di atas waktu
+/// server, supaya pull berikutnya tidak menimpa pekerjaan lokal dengan versi
+/// lama SSoT, dan push berikutnya tetap menang. Yang tadinya bersih diberi
+/// `updated_at` lamanya, jadi pull berikutnya menarik versi SSoT seperti semula.
+pub fn mark_products_server_restored(
+    conn: &Connection,
+    items: &[(String, bool, String)],
+    server_time: &str,
+) -> AppResult<()> {
+    let bumped = chrono::DateTime::parse_from_rfc3339(server_time)
+        .map(|t| {
+            (t.with_timezone(&Utc) + chrono::Duration::milliseconds(1))
+                .to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+        })
+        .map_err(|e| AppError::Other(format!("waktu server tidak valid: {e}")))?;
+    let tx = conn.unchecked_transaction()?;
+    for (id, was_dirty, old_updated_at) in items {
+        if *was_dirty {
+            tx.execute(
+                "UPDATE products SET dirty = 1, ever_synced = 1, updated_at = ?2 WHERE id = ?1",
+                params![id, bumped],
+            )?;
+        } else {
+            tx.execute(
+                // Sudah diubah lagi sesudah sync (dirty) → jangan dibersihkan.
+                "UPDATE products SET ever_synced = 1, updated_at = ?2 WHERE id = ?1 AND dirty = 0",
+                params![id, old_updated_at],
+            )?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 // ---------- Pengguna / hak akses ----------
@@ -3396,5 +3577,126 @@ mod tests {
         };
         assert!(create_time_opname(&mut conn, kosong).is_err());
         assert_eq!(stok(&conn, &id), 5.0, "tidak boleh ada yang tergeser");
+    }
+
+    fn server_produk(id: &str, name: &str, price: f64, updated_at: &str) -> Product {
+        Product {
+            id: id.into(),
+            name: name.into(),
+            barcode: None,
+            category: None,
+            brand: Some("OMG".into()),
+            unit: None,
+            sell_price: price,
+            cost_price: 0.0,
+            default_discount: 0.0,
+            is_active: true,
+            is_deleted: false,
+            updated_at: updated_at.into(),
+        }
+    }
+
+    #[test]
+    fn undo_pull_mengembalikan_isi_lama_menghapus_produk_baru_dan_melewati_konflik() {
+        let conn = test_db();
+        let a = produk(&conn, "OMG A", "OMG", 0.0, true);
+        let b = produk(&conn, "OMG B", "OMG", 0.0, true);
+        conn.execute("UPDATE products SET sell_price = 24000, dirty = 0, ever_synced = 1, updated_at = '2026-08-01T00:00:00Z'", [])
+            .unwrap();
+        set_setting(&conn, "last_pull_at", "2026-09-28T00:00:00Z").unwrap();
+        let sebelum_a = get_product_row(&conn, &a).unwrap().unwrap();
+
+        let masuk = vec![
+            server_produk(&a, "OMG A", 21000.0, "2026-09-29T03:00:00Z"),
+            server_produk(&b, "OMG B", 21000.0, "2026-09-29T03:00:00Z"),
+            server_produk("baru-1", "MORRIS", 18000.0, "2026-09-29T03:00:00Z"),
+        ];
+        let (applied, _, _, undo) = apply_pulled_products(&conn, &masuk).unwrap();
+        assert_eq!(applied, 3);
+        assert_eq!(undo.len(), 3);
+        set_setting(&conn, "last_pull_at", "2026-09-29T08:00:00Z").unwrap();
+
+        // B diedit lagi sesudah sync → tidak boleh ditimpa undo.
+        conn.execute("UPDATE products SET sell_price = 22000, dirty = 1, updated_at = '2026-09-29T09:00:00Z' WHERE id = ?1", params![b])
+            .unwrap();
+
+        let (restored, skipped, log) = undo_local_pull(&conn, &undo, Some("2026-09-28T00:00:00Z")).unwrap();
+        assert_eq!((restored, skipped), (2, 1));
+        assert!(log.iter().any(|l| l.id == b && l.action == "Konflik"));
+
+        let sesudah_a = get_product_row(&conn, &a).unwrap().unwrap();
+        assert_eq!(sesudah_a.product.sell_price, 24000.0);
+        assert_eq!(sesudah_a.product.updated_at, sebelum_a.product.updated_at);
+        assert_eq!((sesudah_a.dirty, sesudah_a.ever_synced), (sebelum_a.dirty, sebelum_a.ever_synced));
+        assert_eq!(get_product_row(&conn, &b).unwrap().unwrap().product.sell_price, 22000.0);
+        assert!(get_product_row(&conn, "baru-1").unwrap().is_none(), "produk baru dari pull dihapus");
+        assert_eq!(get_setting(&conn, "last_pull_at").unwrap().as_deref(), Some("2026-09-28T00:00:00Z"));
+    }
+
+    #[test]
+    fn hard_pull_hanya_mencadangkan_baris_yang_berubah() {
+        let conn = test_db();
+        let a = produk(&conn, "OMG A", "OMG", 0.0, true);
+        conn.execute("UPDATE products SET dirty = 0, ever_synced = 1, updated_at = '2026-08-01T00:00:00Z'", []).unwrap();
+        let sama = get_product_row(&conn, &a).unwrap().unwrap().product;
+        let (applied, _, _, undo) = apply_pulled_products_forced(&conn, &[sama], &[]).unwrap();
+        assert_eq!(applied, 1);
+        assert!(undo.is_empty());
+    }
+
+    #[test]
+    fn cadangan_undo_tersimpan_dan_bisa_dibaca_lagi() {
+        let conn = test_db();
+        assert!(load_sync_undo(&conn).unwrap().is_none());
+        let snap = SyncUndoSnapshot {
+            kind: "pull".into(),
+            created_at: "2026-09-29T08:10:56Z".into(),
+            last_pull_before: Some("x".into()),
+            local: vec![LocalUndoItem { before: None, after: server_produk("p", "P", 1.0, "t") }],
+            server: vec![],
+        };
+        save_sync_undo(&conn, &snap).unwrap();
+        save_sync_undo(&conn, &snap).unwrap();
+        let back = load_sync_undo(&conn).unwrap().unwrap();
+        assert_eq!(back.local.len(), 1);
+        clear_sync_undo(&conn).unwrap();
+        assert!(load_sync_undo(&conn).unwrap().is_none());
+    }
+
+    #[test]
+    fn server_restored_menjaga_pekerjaan_lokal_yang_belum_dikirim() {
+        let conn = test_db();
+        let a = produk(&conn, "A", "OMG", 0.0, true);
+        let b = produk(&conn, "B", "OMG", 0.0, true);
+        conn.execute("UPDATE products SET dirty = 0, ever_synced = 1, updated_at = '2026-09-29T08:00:00Z'", []).unwrap();
+        mark_products_server_restored(
+            &conn,
+            &[(a.clone(), true, "2026-09-29T07:00:00Z".into()), (b.clone(), false, "2026-08-01T00:00:00Z".into())],
+            "2026-09-29T10:00:00.000000Z",
+        )
+        .unwrap();
+        let ra = get_product_row(&conn, &a).unwrap().unwrap();
+        assert!(ra.dirty);
+        assert!(ra.product.updated_at.as_str() > "2026-09-29T10:00:00.000000Z", "{}", ra.product.updated_at);
+        let rb = get_product_row(&conn, &b).unwrap().unwrap();
+        assert!(!rb.dirty);
+        assert_eq!(rb.product.updated_at, "2026-08-01T00:00:00Z");
+    }
+
+    /// Uji ke salinan DB asli + cadangan hasil rekonstruksi WAL:
+    /// `UNDO_DB=... UNDO_SNAP=... cargo test undo_salinan_db_asli -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn undo_salinan_db_asli() {
+        let conn = Connection::open(std::env::var("UNDO_DB").unwrap()).unwrap();
+        init_schema(&conn).unwrap();
+        let snap: SyncUndoSnapshot =
+            serde_json::from_str(&std::fs::read_to_string(std::env::var("UNDO_SNAP").unwrap()).unwrap()).unwrap();
+        let (restored, skipped, log) =
+            undo_local_pull(&conn, &snap.local, snap.last_pull_before.as_deref()).unwrap();
+        for l in &log {
+            println!("{:<14} {}", l.action, l.name);
+        }
+        println!("dikembalikan={restored} dilewati={skipped}");
     }
 }

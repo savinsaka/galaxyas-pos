@@ -11,8 +11,9 @@ use crate::error::{AppError, AppResult};
 use crate::models::{
     BrandSalesRow, CloseShiftInput, Customer, CustomerInput, DiscountPeriod, DiscountPeriodInput,
     Expense, ExpenseInput, OpenShiftInput, Product, ProductInput, ProductSalesRow,
-    ProductWithStock, SaleInput, Shift, StockMovement, StockMovementInput, StoreInfo, SyncLogEntry,
-    SyncResult, TransactionDetail, User, UserInput,
+    LocalUndoItem, ProductWithStock, SaleInput, ServerUndoItem, Shift, StockMovement,
+    StockMovementInput, StoreInfo, SyncLogEntry, SyncResult, SyncUndoInfo, SyncUndoSnapshot,
+    TransactionDetail, User, UserInput,
 };
 use crate::stores;
 use crate::sync;
@@ -1223,10 +1224,66 @@ fn read_sync_config(state: &State<'_, AppState>) -> AppResult<(String, String, S
     Ok((server_url, store_id, last_pull))
 }
 
-/// Kirim Data ke Server (Upload): kirim perubahan master data lokal.
-#[tauri::command]
-pub async fn sync_push(state: State<'_, AppState>) -> AppResult<SyncResult> {
-    let (server_url, store_id, _) = read_sync_config(&state)?;
+/// Isi SSoT sekarang (full pull), per ID — cadangan sebelum push & cek konflik saat undo.
+async fn fetch_server_products(server_url: &str, store_id: &str) -> AppResult<HashMap<String, Product>> {
+    let resp = sync::pull(server_url, store_id, None).await?;
+    Ok(resp.products.into_iter().map(|p| (p.id.clone(), p)).collect())
+}
+
+/// Produk yang benar-benar diubah push di SSoT, beserta isi SSoT sebelumnya.
+fn server_undo_items(
+    sent: &[Product],
+    resp: &sync::PushResponse,
+    server_before: &HashMap<String, Product>,
+    dirty_ids: &std::collections::HashSet<String>,
+) -> Vec<ServerUndoItem> {
+    let status: HashMap<&str, &str> =
+        resp.results.iter().map(|r| (r.id.as_str(), r.status.as_str())).collect();
+    sent.iter()
+        .filter(|p| {
+            // Server lama tanpa `results`: anggap semua diterapkan.
+            status.is_empty() || matches!(status.get(p.id.as_str()), Some(&"created") | Some(&"applied"))
+        })
+        .filter_map(|p| {
+            let before = server_before.get(&p.id).cloned();
+            if before.as_ref().is_some_and(|b| db::same_content(b, p)) {
+                return None;
+            }
+            Some(ServerUndoItem {
+                before,
+                after: p.clone(),
+                local_dirty: dirty_ids.contains(&p.id),
+                local_updated_at: p.updated_at.clone(),
+            })
+        })
+        .collect()
+}
+
+/// Simpan cadangan undo — hanya kalau sync ini memang mengubah sesuatu, supaya
+/// sync ulang yang "tidak ada perubahan" tidak menghapus kesempatan undo.
+fn store_sync_undo(
+    state: &State<'_, AppState>,
+    kind: &str,
+    local: Vec<LocalUndoItem>,
+    last_pull_before: Option<String>,
+    server: Vec<ServerUndoItem>,
+) -> AppResult<()> {
+    if local.is_empty() && server.is_empty() {
+        return Ok(());
+    }
+    let snap = SyncUndoSnapshot {
+        kind: kind.into(),
+        created_at: Utc::now().to_rfc3339(),
+        last_pull_before: if local.is_empty() { None } else { last_pull_before },
+        local,
+        server,
+    };
+    let conn = state.lock()?;
+    db::save_sync_undo(&conn, &snap)
+}
+
+async fn push_part(state: &State<'_, AppState>) -> AppResult<(SyncResult, Vec<ServerUndoItem>)> {
+    let (server_url, store_id, _) = read_sync_config(state)?;
 
     let dirty: Vec<Product> = {
         let conn = state.lock()?;
@@ -1234,12 +1291,13 @@ pub async fn sync_push(state: State<'_, AppState>) -> AppResult<SyncResult> {
     };
 
     if dirty.is_empty() {
-        return Ok(SyncResult {
-            message: "Tidak ada perubahan untuk dikirim.".into(),
-            ..Default::default()
-        });
+        return Ok((
+            SyncResult { message: "Tidak ada perubahan untuk dikirim.".into(), ..Default::default() },
+            Vec::new(),
+        ));
     }
 
+    let server_before = fetch_server_products(&server_url, &store_id).await?;
     let resp = sync::push(&server_url, &store_id, &dirty).await?;
 
     // Server tidak mengembalikan breakdown per-ID (cuma agregat applied/skipped),
@@ -1250,32 +1308,36 @@ pub async fn sync_push(state: State<'_, AppState>) -> AppResult<SyncResult> {
         .collect();
 
     let ids: Vec<String> = dirty.iter().map(|p| p.id.clone()).collect();
+    let undo = server_undo_items(&dirty, &resp, &server_before, &ids.iter().cloned().collect());
     {
         let conn = state.lock()?;
         db::mark_products_synced(&conn, &ids)?;
     }
 
-    Ok(SyncResult {
-        pushed: resp.applied,
-        skipped: resp.skipped,
-        pulled: 0,
-        message: format!(
-            "Upload selesai: {} diterapkan, {} dilewati (server lebih baru).",
-            resp.applied, resp.skipped
-        ),
-        log,
-    })
+    Ok((
+        SyncResult {
+            pushed: resp.applied,
+            skipped: resp.skipped,
+            pulled: 0,
+            message: format!(
+                "Upload selesai: {} diterapkan, {} dilewati (server lebih baru).",
+                resp.applied, resp.skipped
+            ),
+            log,
+        },
+        undo,
+    ))
 }
 
-/// Ambil Update dari Server (Download): tarik master data terbaru (Delta Sync).
-#[tauri::command]
-pub async fn sync_pull(state: State<'_, AppState>) -> AppResult<SyncResult> {
-    let (server_url, store_id, last_pull) = read_sync_config(&state)?;
+async fn pull_part(
+    state: &State<'_, AppState>,
+) -> AppResult<(SyncResult, Vec<LocalUndoItem>, String)> {
+    let (server_url, store_id, last_pull) = read_sync_config(state)?;
 
     let since = if last_pull.is_empty() { None } else { Some(last_pull.as_str()) };
     let resp = sync::pull(&server_url, &store_id, since).await?;
 
-    let (applied, skipped, log) = {
+    let (applied, skipped, log, undo) = {
         let conn = state.lock()?;
         let res = db::apply_pulled_products(&conn, &resp.products)?;
         // Catat waktu klien sebagai watermark pull berikutnya.
@@ -1283,23 +1345,51 @@ pub async fn sync_pull(state: State<'_, AppState>) -> AppResult<SyncResult> {
         res
     };
 
-    Ok(SyncResult {
-        pulled: applied,
-        skipped,
-        pushed: 0,
-        message: format!(
-            "Download selesai: {} diperbarui, {} dilewati (lokal lebih baru).",
-            applied, skipped
-        ),
-        log,
-    })
+    Ok((
+        SyncResult {
+            pulled: applied,
+            skipped,
+            pushed: 0,
+            message: format!(
+                "Download selesai: {} diperbarui, {} dilewati (lokal lebih baru).",
+                applied, skipped
+            ),
+            log,
+        },
+        undo,
+        last_pull,
+    ))
+}
+
+/// Kirim Data ke Server (Upload): kirim perubahan master data lokal.
+#[tauri::command]
+pub async fn sync_push(state: State<'_, AppState>) -> AppResult<SyncResult> {
+    let (res, server_undo) = push_part(&state).await?;
+    store_sync_undo(&state, "push", Vec::new(), None, server_undo)?;
+    Ok(res)
+}
+
+/// Ambil Update dari Server (Download): tarik master data terbaru (Delta Sync).
+#[tauri::command]
+pub async fn sync_pull(state: State<'_, AppState>) -> AppResult<SyncResult> {
+    let (res, local_undo, last_pull) = pull_part(&state).await?;
+    store_sync_undo(&state, "pull", local_undo, Some(last_pull), Vec::new())?;
+    Ok(res)
 }
 
 /// Sinkronisasi penuh: upload dulu, lalu download.
 #[tauri::command]
 pub async fn sync_all(state: State<'_, AppState>) -> AppResult<SyncResult> {
-    let push_res = sync_push(state.clone()).await?;
-    let pull_res = sync_pull(state).await?;
+    let (push_res, server_undo) = push_part(&state).await?;
+    // Kalau download gagal, cadangan bagian upload tetap disimpan.
+    let (pull_res, local_undo, last_pull) = match pull_part(&state).await {
+        Ok(v) => v,
+        Err(e) => {
+            store_sync_undo(&state, "all", Vec::new(), None, server_undo)?;
+            return Err(e);
+        }
+    };
+    store_sync_undo(&state, "all", local_undo, Some(last_pull), server_undo)?;
     let mut log = push_res.log;
     log.extend(pull_res.log);
     Ok(SyncResult {
@@ -1331,9 +1421,10 @@ pub async fn sync_hard_push(state: State<'_, AppState>) -> AppResult<SyncResult>
     let excluded: std::collections::HashSet<String> =
         excludes.iter().map(|b| db::brand_key(Some(b))).filter(|b| !b.is_empty()).collect();
 
-    let all: Vec<Product> = {
+    let (all, dirty_ids): (Vec<Product>, std::collections::HashSet<String>) = {
         let conn = state.lock()?;
-        db::get_all_products_for_sync(&conn)?
+        let dirty = db::get_dirty_products(&conn)?.into_iter().map(|p| p.id).collect();
+        (db::get_all_products_for_sync(&conn)?, dirty)
     };
     let (to_send, local_excluded): (Vec<Product>, Vec<Product>) =
         all.into_iter().partition(|p| !excluded.contains(&db::brand_key(p.brand.as_deref())));
@@ -1346,7 +1437,9 @@ pub async fn sync_hard_push(state: State<'_, AppState>) -> AppResult<SyncResult>
         });
     }
 
+    let server_before = fetch_server_products(&server_url, &store_id).await?;
     let resp = sync::hard_push(&server_url, &store_id, &to_send, &excludes).await?;
+    let server_undo = server_undo_items(&to_send, &resp, &server_before, &dirty_ids);
 
     let names: std::collections::HashMap<&str, &str> =
         to_send.iter().map(|p| (p.id.as_str(), p.name.as_str())).collect();
@@ -1374,6 +1467,7 @@ pub async fn sync_hard_push(state: State<'_, AppState>) -> AppResult<SyncResult>
         let conn = state.lock()?;
         db::mark_products_hard_pushed(&conn, &done_ids, &resp.server_time)?;
     }
+    store_sync_undo(&state, "hard_push", Vec::new(), None, server_undo)?;
 
     let skipped = resp.skipped + local_excluded.len() as i64;
     Ok(SyncResult {
@@ -1390,18 +1484,19 @@ pub async fn sync_hard_push(state: State<'_, AppState>) -> AppResult<SyncResult>
 
 #[tauri::command]
 pub async fn sync_hard_pull(state: State<'_, AppState>) -> AppResult<SyncResult> {
-    let (server_url, store_id, _) = read_sync_config(&state)?;
+    let (server_url, store_id, last_pull) = read_sync_config(&state)?;
     let excludes = read_hard_sync_excludes(&state)?;
 
     // Full pull (tanpa `since`) — semua produk SSoT.
     let resp = sync::pull(&server_url, &store_id, None).await?;
 
-    let (applied, skipped, log) = {
+    let (applied, skipped, log, local_undo) = {
         let conn = state.lock()?;
         let res = db::apply_pulled_products_forced(&conn, &resp.products, &excludes)?;
         db::set_setting(&conn, "last_pull_at", &Utc::now().to_rfc3339())?;
         res
     };
+    store_sync_undo(&state, "hard_pull", local_undo, Some(last_pull), Vec::new())?;
 
     Ok(SyncResult {
         pulled: applied,
@@ -1413,6 +1508,91 @@ pub async fn sync_hard_pull(state: State<'_, AppState>) -> AppResult<SyncResult>
         ),
         log,
     })
+}
+
+// ---------- Undo sync terakhir ----------
+
+#[tauri::command]
+pub fn sync_undo_info(state: State<'_, AppState>) -> AppResult<Option<SyncUndoInfo>> {
+    let conn = state.lock()?;
+    Ok(db::load_sync_undo(&conn)?.map(|s| SyncUndoInfo {
+        kind: s.kind,
+        created_at: s.created_at,
+        local_count: s.local.len(),
+        server_count: s.server.len(),
+    }))
+}
+
+/// Kembalikan data ke kondisi sebelum sync terakhir (sekali pakai). Produk yang
+/// sudah diubah lagi sesudah sync dilewati sebagai "Konflik", tidak ditimpa.
+#[tauri::command]
+pub async fn sync_undo(state: State<'_, AppState>) -> AppResult<SyncResult> {
+    let mut snap = {
+        let conn = state.lock()?;
+        db::load_sync_undo(&conn)?
+    }
+    .ok_or_else(|| AppError::Other("Tidak ada sync yang bisa di-undo.".into()))?;
+
+    let mut log: Vec<SyncLogEntry> = Vec::new();
+    let mut server_restored = 0i64;
+    let mut skipped = 0i64;
+
+    // Bagian SSoT dulu: kalau jaringan gagal, belum ada yang berubah sama sekali.
+    if !snap.server.is_empty() {
+        let (server_url, store_id, _) = read_sync_config(&state)?;
+        let current = fetch_server_products(&server_url, &store_id).await?;
+        let mut to_send: Vec<Product> = Vec::new();
+        let mut local_marks: Vec<(String, bool, String)> = Vec::new();
+        for it in &snap.server {
+            let a = &it.after;
+            let untouched = current.get(&a.id).is_some_and(|c| db::same_content(c, a));
+            if !untouched {
+                skipped += 1;
+                log.push(SyncLogEntry { id: a.id.clone(), name: a.name.clone(), action: "Konflik".into() });
+                continue;
+            }
+            let (restore, action) = match &it.before {
+                Some(b) => (b.clone(), "Dikembalikan"),
+                // Produk yang baru dibuat oleh push: di SSoT ditandai terhapus.
+                None => (Product { is_active: false, is_deleted: true, ..a.clone() }, "Dihapus"),
+            };
+            log.push(SyncLogEntry { id: a.id.clone(), name: a.name.clone(), action: format!("{action} (server)") });
+            to_send.push(restore);
+            local_marks.push((a.id.clone(), it.local_dirty, it.local_updated_at.clone()));
+        }
+        if !to_send.is_empty() {
+            let resp = sync::hard_push(&server_url, &store_id, &to_send, &[]).await?;
+            server_restored = resp.applied;
+            let conn = state.lock()?;
+            db::mark_products_server_restored(&conn, &local_marks, &resp.server_time)?;
+        }
+        snap.server.clear();
+        let conn = state.lock()?;
+        if snap.local.is_empty() {
+            db::clear_sync_undo(&conn)?;
+        } else {
+            db::save_sync_undo(&conn, &snap)?;
+        }
+    }
+
+    let mut local_restored = 0i64;
+    if !snap.local.is_empty() {
+        let conn = state.lock()?;
+        let (restored, sk, l) = db::undo_local_pull(&conn, &snap.local, snap.last_pull_before.as_deref())?;
+        local_restored = restored;
+        skipped += sk;
+        log.extend(l);
+        db::clear_sync_undo(&conn)?;
+    }
+
+    let mut message = format!(
+        "Undo selesai: {} produk lokal & {} produk server dikembalikan.",
+        local_restored, server_restored
+    );
+    if skipped > 0 {
+        message.push_str(&format!(" {skipped} dilewati karena sudah diubah lagi sesudah sync."));
+    }
+    Ok(SyncResult { pushed: server_restored, pulled: local_restored, skipped, message, log })
 }
 
 // ---------- Bridge: Pull dari app mobile (galaxyas-mobile, fase 6) ----------

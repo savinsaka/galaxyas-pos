@@ -170,6 +170,59 @@ pub struct SyncResult {
     pub log: Vec<SyncLogEntry>,
 }
 
+// ---------- Undo sync terakhir ----------
+
+/// Baris produk lokal lengkap dengan metadata sync-nya.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProductRow {
+    #[serde(flatten)]
+    pub product: Product,
+    pub dirty: bool,
+    pub ever_synced: bool,
+}
+
+/// Satu produk lokal yang ditimpa pull. `before = None` = produk baru dari
+/// server (undo menghapusnya). `after` = isi yang diterapkan pull — dipakai
+/// untuk mendeteksi produk yang sudah diubah lagi sesudah sync.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalUndoItem {
+    pub before: Option<ProductRow>,
+    pub after: Product,
+}
+
+/// Satu produk di SSoT yang ditimpa push. `before = None` = produk baru di
+/// server. `local_dirty`/`local_updated_at` = status lokal sebelum push, supaya
+/// undo bisa mengembalikan status "belum dikirim".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerUndoItem {
+    pub before: Option<Product>,
+    pub after: Product,
+    pub local_dirty: bool,
+    pub local_updated_at: String,
+}
+
+/// Cadangan sebelum sync terakhir yang benar-benar mengubah data. Cuma satu
+/// yang disimpan (tabel `sync_undo`), dihapus begitu undo dijalankan.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SyncUndoSnapshot {
+    pub kind: String,
+    pub created_at: String,
+    /// Nilai `last_pull_at` sebelum sync — `Some` kalau bagian pull ikut mengubah data.
+    pub last_pull_before: Option<String>,
+    #[serde(default)]
+    pub local: Vec<LocalUndoItem>,
+    #[serde(default)]
+    pub server: Vec<ServerUndoItem>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncUndoInfo {
+    pub kind: String,
+    pub created_at: String,
+    pub local_count: usize,
+    pub server_count: usize,
+}
+
 // ---------- Pengguna / hak akses ----------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

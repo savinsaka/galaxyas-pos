@@ -114,6 +114,14 @@ export interface SyncResult {
   log: SyncLogEntry[];
 }
 
+/** Cadangan "Undo Sync Terakhir" yang tersedia. */
+export interface SyncUndoInfo {
+  kind: "push" | "pull" | "all" | "hard_push" | "hard_pull";
+  created_at: string;
+  local_count: number;
+  server_count: number;
+}
+
 export type PaymentMethod = "Tunai" | "QRIS" | "Kombinasi" | "Kartu";
 
 export interface Brand {

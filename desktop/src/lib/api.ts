@@ -53,6 +53,7 @@ import type {
   StockFlowRow,
   StoreInfo,
   SyncResult,
+  SyncUndoInfo,
   TimeOpnameInput,
   TimeOpnameResult,
   TimeOpnameRow,
@@ -257,6 +258,8 @@ export const api = {
   syncAll: () => invoke<SyncResult>("sync_all"),
   syncHardPush: () => invoke<SyncResult>("sync_hard_push"),
   syncHardPull: () => invoke<SyncResult>("sync_hard_pull"),
+  syncUndoInfo: () => invoke<SyncUndoInfo | null>("sync_undo_info"),
+  syncUndo: () => invoke<SyncResult>("sync_undo"),
 
   // Bridge: Pull dari app mobile (galaxyas-mobile, fase 6) — server & auth
   // TERPISAH dari Sinkronisasi di atas (itu ke server POS, ini ke server mobile).
