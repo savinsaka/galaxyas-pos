@@ -9,6 +9,7 @@ import { api } from "$lib/api";
 import { showToast, toastError } from "$lib/toast";
 import { playEndTone, startRingback, startRingtone, stopCallTones } from "$lib/callSound";
 import { chatStatus, contactName } from "$lib/stores/chat";
+import { applySink, audioPrefs, loadAudioPrefs, micConstraints } from "$lib/stores/audioPrefs";
 
 export type CallPhase = "idle" | "outgoing" | "ringing" | "incoming" | "connecting" | "active" | "ended";
 
@@ -97,11 +98,38 @@ function finish(reason: string, silent = false) {
   }, 3000);
 }
 
+/** Mic sesuai Pengaturan Audio; kalau mic pilihan sudah dicabut, pakai mic default. */
 async function getMic(): Promise<MediaStream> {
-  return navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    video: false,
-  });
+  const prefs = await loadAudioPrefs();
+  try {
+    return await navigator.mediaDevices.getUserMedia(micConstraints(prefs));
+  } catch (e) {
+    if (!prefs.micId) throw e;
+    showToast("Mikrofon pilihan tidak ditemukan — memakai mikrofon default.", "info", 5000);
+    return navigator.mediaDevices.getUserMedia(micConstraints(prefs, false));
+  }
+}
+
+/** Terapkan perubahan Pengaturan Audio ke panggilan yang sedang berjalan. */
+export async function applyAudioToCall() {
+  const prefs = get(audioPrefs);
+  await applySink(remoteAudio as unknown as { setSinkId?: (id: string) => Promise<void> }, prefs.speakerId);
+  if (!pc || !localStream) return;
+  const muted = get(call).muted;
+  let next: MediaStream;
+  try {
+    next = await getMic();
+  } catch {
+    showToast("Mikrofon tidak bisa dipakai.", "error");
+    return;
+  }
+  const track = next.getAudioTracks()[0];
+  if (!track) return;
+  track.enabled = !muted;
+  const sender = pc.getSenders().find((x) => x.track?.kind === "audio");
+  await sender?.replaceTrack(track);
+  localStream.getTracks().forEach((t) => t.stop());
+  localStream = next;
 }
 
 function createPeer(callId: string) {
@@ -114,6 +142,7 @@ function createPeer(callId: string) {
   peer.ontrack = (e) => {
     remoteAudio ??= new Audio();
     remoteAudio.autoplay = true;
+    applySink(remoteAudio as unknown as { setSinkId?: (id: string) => Promise<void> }, get(audioPrefs).speakerId);
     remoteAudio.srcObject = e.streams[0] ?? new MediaStream([e.track]);
     remoteAudio.play().catch(() => {});
   };
@@ -300,6 +329,7 @@ let started = false;
 export async function initCall() {
   if (started) return;
   started = true;
+  loadAudioPrefs(); // supaya dering langsung lewat speaker pilihan
   await listen<CallEvent>("chat://call", (e) => {
     onEvent(e.payload).catch((err) => console.warn("Sinyal panggilan gagal:", err));
   });

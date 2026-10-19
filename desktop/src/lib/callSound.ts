@@ -3,6 +3,9 @@
 // keluar ("tuut… tuut…" ala telepon Indonesia, 425 Hz), dan bunyi pendek saat
 // panggilan selesai.
 
+import { get } from "svelte/store";
+import { applySink, audioPrefs } from "$lib/stores/audioPrefs";
+
 let ctx: AudioContext | null = null;
 let loop: ReturnType<typeof setInterval> | null = null;
 
@@ -10,6 +13,8 @@ function audio(): AudioContext | null {
   try {
     ctx ??= new AudioContext();
     ctx.resume().catch(() => {});
+    // Dering & nada lewat speaker yang dipilih di Pengaturan Audio.
+    applySink(ctx as unknown as { setSinkId?: (id: string) => Promise<void> }, get(audioPrefs).speakerId);
     return ctx;
   } catch {
     return null;

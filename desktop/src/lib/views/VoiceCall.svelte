@@ -8,6 +8,7 @@
   import { chatContacts, chatDirectory, chatMessages, chatStatus, contactName, fmtDuration, resolveName } from "$lib/stores/chat";
   import { call, startCall } from "$lib/stores/call";
   import type { ChatMessage } from "$lib/types";
+  import AudioSettings from "$lib/components/AudioSettings.svelte";
 
   let dial = $state("");
   let online = $state<Record<string, boolean>>({});
@@ -127,6 +128,8 @@
       </div>
     </div>
 
+    <div class="side">
+    <AudioSettings />
     <div class="card">
       <h2>Riwayat Panggilan</h2>
       <div class="history">
@@ -145,6 +148,7 @@
         {/each}
       </div>
     </div>
+    </div>
   </div>
 {/if}
 
@@ -157,11 +161,13 @@
     margin-bottom: 0.8rem;
     font-size: 0.85rem;
   }
+  .side { display: flex; flex-direction: column; gap: 0.8rem; }
   .dial { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
   .dial input { flex: 1; }
   .list-head { display: flex; justify-content: space-between; align-items: center; font-weight: 650; margin-bottom: 0.4rem; }
   .small { padding: 0.25rem 0.6rem; font-size: 0.78rem; }
-  .people, .history { max-height: 60vh; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+  .people { max-height: 60vh; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+  .history { max-height: 40vh; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
   .person, .hist-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border); }
   .person:last-child, .hist-row:last-child { border-bottom: none; }
   .avatar {
