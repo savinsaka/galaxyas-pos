@@ -6,9 +6,11 @@
   import { confirmDialog } from "$lib/dialog";
   import type { Brand, SyncResult, SyncUndoInfo } from "$lib/types";
   import BrandMultiSelect from "$lib/components/BrandMultiSelect.svelte";
+  import { syncAccount, refreshSyncAccount, openSyncAkun } from "$lib/stores/syncAccount";
 
   let settings = $state<Record<string, string>>({});
   let syncing = $state(false);
+  const locked = $derived(!$syncAccount?.logged_in);
   let lastResult = $state<SyncResult | null>(null);
   let undoInfo = $state<SyncUndoInfo | null>(null);
 
@@ -46,6 +48,7 @@
     }
   }
   onMount(async () => {
+    refreshSyncAccount();
     await load();
     try {
       allBrands = await api.listBrands();
@@ -74,15 +77,6 @@
   autoSave("hard_sync_include_brands", () => JSON.stringify([...includeBrands]));
 
   const includeEmpty = $derived(brandMode === "include" && includeBrands.size === 0);
-
-  async function saveField(key: string) {
-    try {
-      await api.updateSetting(key, settings[key] ?? "");
-      showToast("Tersimpan.", "success");
-    } catch (e) {
-      toastError(e);
-    }
-  }
 
   type Kind = "push" | "pull" | "all" | "hard_push" | "hard_pull";
   const runners: Record<Kind, () => Promise<SyncResult>> = {
@@ -154,15 +148,17 @@
 
 <div class="grid-2" style="align-items:start;">
   <div class="card">
-    <h2>Koneksi Server</h2>
-    <div style="margin-bottom:0.8rem;">
-      <label>ID Toko</label>
-      <div class="row"><input bind:value={settings.store_id} /><button onclick={() => saveField("store_id")}>Simpan</button></div>
-    </div>
-    <div>
-      <label>URL Server Sync</label>
-      <div class="row"><input bind:value={settings.server_url} placeholder="http://localhost:8000" /><button onclick={() => saveField("server_url")}>Simpan</button></div>
-    </div>
+    <h2>Akun Server</h2>
+    {#if $syncAccount?.logged_in}
+      <div class="text-dim" style="font-size:0.78rem;">Masuk sebagai</div>
+      <div class="mono" style="font-size:1.1rem; font-weight:700;">{$syncAccount.username}</div>
+      {#if $syncAccount.name}<div class="text-dim">{$syncAccount.name}</div>{/if}
+    {:else}
+      <p class="text-dim" style="margin-top:0;">
+        Belum login. Sync In / Out terkunci sampai PC ini login dengan akun anggota.
+      </p>
+      <button class="btn-primary" onclick={openSyncAkun}>🔑 Login di Akun Server</button>
+    {/if}
     <div class="text-dim" style="margin-top:0.8rem; font-size:0.78rem;">
       Pull terakhir: {settings.last_pull_at ? formatDateTime(settings.last_pull_at) : "belum pernah"}
     </div>
@@ -175,13 +171,13 @@
       stok &amp; transaksi tetap lokal.
     </p>
     <div style="display:flex; flex-direction:column; gap:0.5rem; margin:1rem 0;">
-      <button class="btn-primary" style="padding:0.8rem;" disabled={syncing} onclick={() => run("push")}>⬆ Kirim Data ke Server (Sync Out)</button>
-      <button class="btn-primary" style="padding:0.8rem;" disabled={syncing} onclick={() => run("pull")}>⬇ Ambil Update dari Server (Sync In)</button>
-      <button class="btn-success" style="padding:0.8rem;" disabled={syncing} onclick={() => run("all")}>⇅ Sync Semua</button>
+      <button class="btn-primary" style="padding:0.8rem;" disabled={syncing || locked} onclick={() => run("push")}>⬆ Kirim Data ke Server (Sync Out)</button>
+      <button class="btn-primary" style="padding:0.8rem;" disabled={syncing || locked} onclick={() => run("pull")}>⬇ Ambil Update dari Server (Sync In)</button>
+      <button class="btn-success" style="padding:0.8rem;" disabled={syncing || locked} onclick={() => run("all")}>⇅ Sync Semua</button>
     </div>
 
     <div class="undo-box">
-      <button class="btn-ghost undo-btn" disabled={syncing || !undoInfo} onclick={undo}>↶ Undo Sync Terakhir</button>
+      <button class="btn-ghost undo-btn" disabled={syncing || locked || !undoInfo} onclick={undo}>↶ Undo Sync Terakhir</button>
       <div class="text-dim undo-info">
         {#if undoInfo}
           {kindLabel[undoInfo.kind]} · {formatDateTime(undoInfo.created_at)} · {undoScope(undoInfo)}
@@ -216,8 +212,8 @@
         {/if}
       {/if}
       <div class="row" style="gap:0.5rem; margin-top:0.8rem;">
-        <button class="btn-danger" style="flex:1; padding:0.7rem;" disabled={syncing || includeEmpty} onclick={() => (hardConfirm = "hard_push")}>⏫ Hard Push</button>
-        <button class="btn-danger" style="flex:1; padding:0.7rem;" disabled={syncing || includeEmpty} onclick={() => (hardConfirm = "hard_pull")}>⏬ Hard Pull</button>
+        <button class="btn-danger" style="flex:1; padding:0.7rem;" disabled={syncing || locked || includeEmpty} onclick={() => (hardConfirm = "hard_push")}>⏫ Hard Push</button>
+        <button class="btn-danger" style="flex:1; padding:0.7rem;" disabled={syncing || locked || includeEmpty} onclick={() => (hardConfirm = "hard_pull")}>⏬ Hard Pull</button>
       </div>
     </div>
 

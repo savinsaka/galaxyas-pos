@@ -1,0 +1,123 @@
+{% extends "sqladmin/layout.html" %}
+{% block content %}
+<!-- row-deck milik sqladmin membuat kolom jadi flex horizontal; susun ke bawah. -->
+<div class="col-12 col-xl-10" style="flex-direction:column;">
+  {% if pesan %}
+  <div class="alert alert-success" role="alert">{{ pesan }}</div>
+  {% endif %}
+  {% if galat %}
+  <div class="alert alert-danger" role="alert">{{ galat }}</div>
+  {% endif %}
+
+  <div class="card mb-3">
+    <div class="card-header">
+      <h3 class="card-title">Anggota (login Sync &amp; SSoT)</h3>
+    </div>
+    <div class="card-body">
+      <p class="text-muted">
+        Tidak ada pendaftaran sendiri — akun hanya dibuat di sini. Di GPOS / Warehouse, buka
+        <b>Sync → Akun Server</b> lalu login dengan <b>ID Toko</b> + password di bawah. Sekali login,
+        PC itu tetap masuk sampai menekan Keluar, password direset, atau akunnya dinonaktifkan.
+        Batas app lama tanpa login: <b>{{ batas }}</b>.
+      </p>
+      <div class="table-responsive">
+        <table class="table table-vcenter">
+          <thead>
+            <tr><th>ID Toko</th><th>Nama</th><th>Status</th><th>PC login</th><th>Ganti password</th><th></th></tr>
+          </thead>
+          <tbody>
+            {% for m in members %}
+            <tr>
+              <td style="font-family:monospace;">{{ m.username }}</td>
+              <td>
+                <form method="POST" class="d-flex gap-2">
+                  <input type="hidden" name="aksi" value="nama" />
+                  <input type="hidden" name="username" value="{{ m.username }}" />
+                  <input class="form-control form-control-sm" name="name" value="{{ m.name }}" required />
+                  <button class="btn btn-sm">Simpan</button>
+                </form>
+              </td>
+              <td>
+                {% if m.is_active %}<span class="text-success">● Aktif</span>{% else %}<span class="text-danger">○ Nonaktif</span>{% endif %}
+              </td>
+              <td>
+                {{ m.sessions }} PC
+                {% if m.last_used %}<div class="text-muted small">terakhir {{ m.last_used.strftime("%d-%m-%Y %H:%M") }} UTC</div>{% endif %}
+                {% if m.devices %}<div class="text-muted small">{{ m.devices | join(", ") }}</div>{% endif %}
+              </td>
+              <td>
+                <form method="POST" class="d-flex gap-2"
+                      onsubmit="return confirm('Ganti password {{ m.username }}? Semua PC toko ini harus login ulang.');">
+                  <input type="hidden" name="aksi" value="password" />
+                  <input type="hidden" name="username" value="{{ m.username }}" />
+                  <input class="form-control form-control-sm" type="password" name="password" minlength="{{ min_len }}"
+                         placeholder="Password baru" autocomplete="new-password" required />
+                  <button class="btn btn-sm btn-primary">Ganti</button>
+                </form>
+              </td>
+              <td class="text-end" style="white-space:nowrap;">
+                <form method="POST" class="d-inline">
+                  <input type="hidden" name="aksi" value="{{ 'nonaktif' if m.is_active else 'aktif' }}" />
+                  <input type="hidden" name="username" value="{{ m.username }}" />
+                  <button class="btn btn-sm">{{ "Nonaktifkan" if m.is_active else "Aktifkan" }}</button>
+                </form>
+                {% if m.sessions %}
+                <form method="POST" class="d-inline" onsubmit="return confirm('Keluarkan semua PC {{ m.username }}? Mereka harus login ulang.');">
+                  <input type="hidden" name="aksi" value="cabut" />
+                  <input type="hidden" name="username" value="{{ m.username }}" />
+                  <button class="btn btn-sm">Keluarkan PC</button>
+                </form>
+                {% endif %}
+                <form method="POST" class="d-inline" onsubmit="return confirm('Hapus anggota {{ m.username }}?');">
+                  <input type="hidden" name="aksi" value="hapus" />
+                  <input type="hidden" name="username" value="{{ m.username }}" />
+                  <button class="btn btn-sm btn-outline-danger">Hapus</button>
+                </form>
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" class="text-muted">Belum ada anggota.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title">Tambah Anggota</h3>
+    </div>
+    <div class="card-body">
+      <form method="POST">
+        <input type="hidden" name="aksi" value="tambah" />
+        <div class="row g-2">
+          <div class="col-md-3">
+            <label class="form-label" for="username">ID Toko (username)</label>
+            <input class="form-control" id="username" name="username" list="saran-id" placeholder="toko-001" required />
+            <datalist id="saran-id">
+              {% for c in saran %}<option value="{{ c }}"></option>{% endfor %}
+            </datalist>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label" for="name">Nama</label>
+            <input class="form-control" id="name" name="name" placeholder="Toko Depan" required />
+          </div>
+          <div class="col-md-4">
+            <label class="form-label" for="password">Password</label>
+            <input class="form-control" id="password" type="password" name="password" minlength="{{ min_len }}"
+                   autocomplete="new-password" required />
+            <small class="form-hint">Minimal {{ min_len }} karakter.</small>
+          </div>
+          <div class="col-md-2 d-flex align-items-end">
+            <button type="submit" class="btn btn-primary w-100">Tambah</button>
+          </div>
+        </div>
+        {% if saran %}
+        <div class="text-muted mt-2">ID yang pernah sync tapi belum jadi anggota: {{ saran | join(", ") }}</div>
+        {% endif %}
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

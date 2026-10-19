@@ -39,7 +39,7 @@ class PullResponse(BaseModel):
 
 
 class PushRequest(BaseModel):
-    store_id: str = Field(..., description="Identitas toko pengirim")
+    store_id: str = Field("", description="Identitas toko pengirim (diabaikan bila login)")
     products: list[ProductIn]
 
 
@@ -63,7 +63,7 @@ class SsotProductIn(ProductBase):
 
 
 class SsotSaveRequest(BaseModel):
-    store_id: str = Field(..., description="Identitas toko yang mengubah")
+    store_id: str = Field("", description="Identitas toko yang mengubah (diabaikan bila login)")
     product: SsotProductIn
 
 

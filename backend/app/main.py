@@ -7,7 +7,7 @@ from fastapi.responses import RedirectResponse
 from app.admin import ensure_admin_user, setup_admin
 from app.config import settings
 from app.database import Base, engine
-from app.routers import chat, ssot, sync
+from app.routers import auth, chat, ssot, sync
 from app.routers.chat import ensure_chat_columns
 
 
@@ -25,6 +25,11 @@ app = FastAPI(
     description="Backend hanya untuk sinkronisasi master data (Delta Sync, Last Write Wins).",
     version="0.1.0",
     lifespan=lifespan,
+    # Dokumentasi API tidak dibuka untuk umum — peta endpoint memudahkan orang
+    # luar mencoba-coba. Panel /admin tetap lewat login.
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
 app.add_middleware(
@@ -35,6 +40,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router)
 app.include_router(sync.router)
 app.include_router(chat.router)
 app.include_router(ssot.router)

@@ -66,6 +66,7 @@ export const RIBBON: RibbonCategory[] = [
         actions: [
           { key: "sync", label: "Sync In / Out", icon: "🔄", viewKey: "sync", title: "Sinkronisasi", singleton: true },
           { key: "ssot", label: "SSoT", icon: "🗄️", viewKey: "ssot", title: "Data SSoT", singleton: true },
+          { key: "sync-akun", label: "Akun Server", icon: "🔑", viewKey: "sync-akun", title: "Akun Server", singleton: true },
         ],
       },
     ],
@@ -188,7 +189,6 @@ export const RIBBON: RibbonCategory[] = [
         label: "Aplikasi",
         actions: [
           { key: "pengaturan-toko", label: "Info Toko", icon: "🏪", viewKey: "pengaturan-toko", title: "Informasi Toko", singleton: true, props: { section: "toko" } },
-          { key: "pengaturan-server", label: "Server Sinkronisasi", icon: "🔄", viewKey: "pengaturan-server", title: "Server Sinkronisasi", singleton: true, props: { section: "server" } },
           { key: "pengaturan-lan", label: "Server Pusat", icon: "🖧", viewKey: "pengaturan-lan", title: "Server Pusat", singleton: true, props: { section: "lan" } },
           { key: "pengaturan-struk", label: "Struk & Printer", icon: "🖨️", viewKey: "pengaturan-struk", title: "Struk & Printer", singleton: true, props: { section: "struk" } },
           { key: "pengaturan-tema", label: "Tema", icon: "🎨", viewKey: "pengaturan-tema", title: "Tema", singleton: true, props: { section: "tema" } },

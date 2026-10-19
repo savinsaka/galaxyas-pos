@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -120,3 +120,43 @@ class ChatMessage(Base):
     # dibaca = percakapan dibuka di salah satu PC toko tujuan.
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Member(Base):
+    """Akun anggota (toko/gudang) untuk login Sync & SSoT dari app.
+
+    Tidak ada pendaftaran sendiri: hanya admin yang membuat akun lewat panel
+    `/admin` -> Kelola Anggota. `username` = ID Toko (sama dengan `store_id`
+    sync), password disimpan sebagai hash (`app.security`).
+    """
+
+    __tablename__ = "members"
+
+    username: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    password_set_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
+class MemberToken(Base):
+    """Sesi login satu PC. Yang disimpan hanya hash token (sha256), jadi isi
+    tabel ini bocor pun token aslinya tidak bisa dipakai."""
+
+    __tablename__ = "member_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    username: Mapped[str] = mapped_column(
+        String(64), ForeignKey("members.username", ondelete="CASCADE"), index=True, nullable=False
+    )
+    device: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

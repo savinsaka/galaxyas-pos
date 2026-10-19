@@ -20,7 +20,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.database import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import SyncLog  # noqa: E402
+from app.models import Member, SyncLog  # noqa: E402
+from app.security import hash_password  # noqa: E402
 
 results = []
 
@@ -38,6 +39,12 @@ def produk(**kw):
 
 
 with TestClient(app) as c:
+    with SessionLocal() as db:
+        db.add(Member(username="T1", name="Tes", password_hash=hash_password("rahasia-123")))
+        db.commit()
+    tok = c.post("/api/v1/auth/login", json={"username": "T1", "password": "rahasia-123"}).json()["token"]
+    c.headers["Authorization"] = f"Bearer {tok}"
+
     r = c.post("/api/v1/ssot/products", json={"store_id": "T1", "product": produk(name="Kopi", barcode="111")})
     check("tambah barang baru", r.status_code == 200, r.text)
     kopi = r.json()

@@ -19,6 +19,28 @@ pub struct Product {
     pub updated_at: String,
 }
 
+/// Akun server (login anggota) di PC ini.
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncAccount {
+    pub logged_in: bool,
+    /// ID Toko = `store_id` sync.
+    pub username: String,
+    pub name: String,
+}
+
+/// Hasil cek versi minimum ke server saat app dibuka.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct UpdatePolicy {
+    pub current: String,
+    pub min_version: String,
+    pub deadline: Option<String>,
+    pub message: String,
+    /// Versi app di bawah minimum.
+    pub must_update: bool,
+    /// Sudah lewat batas (atau tanpa batas) → app dikunci sampai diupdate.
+    pub blocked: bool,
+}
+
 /// Hasil simpan satu barang di layar SSoT.
 #[derive(Debug, Clone, Serialize)]
 pub struct SsotSaveResult {

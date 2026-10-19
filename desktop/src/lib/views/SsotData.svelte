@@ -8,6 +8,7 @@
   import { formatMoneyInput, onMoneyInput } from "$lib/moneyInput";
   import type { Product, ProductInput } from "$lib/types";
   import BrandPicker from "$lib/components/BrandPicker.svelte";
+  import { syncAccount, refreshSyncAccount, openSyncAkun } from "$lib/stores/syncAccount";
 
   // Isi SSoT (server jjapps.net) dimuat sekali lalu dicari di memori, jadi
   // scan barcode langsung ketemu tanpa bolak-balik ke server.
@@ -77,11 +78,22 @@
       loading = false;
     }
   }
-  onMount(async () => {
-    await load();
-    // Input masih disabled sampai render berikutnya — focus() ke input disabled diabaikan.
-    await tick();
-    searchEl?.focus();
+  onMount(() => {
+    refreshSyncAccount();
+  });
+
+  // Muat sekali begitu PC ini login (bisa juga terjadi saat tab ini sudah
+  // terbuka lalu login dilakukan di tab Akun Server).
+  let loadedOnce = false;
+  $effect(() => {
+    if ($syncAccount?.logged_in && !loadedOnce) {
+      loadedOnce = true;
+      load().then(async () => {
+        // Input masih disabled sampai render berikutnya — focus() ke input disabled diabaikan.
+        await tick();
+        searchEl?.focus();
+      });
+    }
   });
 
   const applyTerm = debounce(() => {
@@ -221,6 +233,13 @@
   }
 </script>
 
+{#if $syncAccount && !$syncAccount.logged_in}
+  <div class="page-head"><h1>Data SSoT</h1></div>
+  <div class="card" style="max-width:460px;">
+    <p style="margin-top:0;">Data SSoT hanya bisa dibuka setelah PC ini login ke server.</p>
+    <button class="btn-primary" onclick={openSyncAkun}>🔑 Login di Akun Server</button>
+  </div>
+{:else}
 <div class="view-flex">
   <div class="page-head">
     <h1>Data SSoT</h1>
@@ -296,6 +315,8 @@
     </div>
   </div>
 </div>
+
+{/if}
 
 {#if form}
   <div class="modal-backdrop" onclick={closeForm} role="presentation">

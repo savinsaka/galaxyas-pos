@@ -16,11 +16,10 @@
   import Receipt from "$lib/components/Receipt.svelte";
   import { parseClosingSop, saveClosingSop } from "$lib/stores/closingSop";
 
-  type PTab = "toko" | "server" | "lan" | "struk" | "tema" | "kasir" | "closing" | "lanjutan";
+  type PTab = "toko" | "lan" | "struk" | "tema" | "kasir" | "closing" | "lanjutan";
   let { section }: { section: PTab; tabId?: string } = $props();
   const SECTION_TITLES: Record<PTab, string> = {
     toko: "Informasi Toko",
-    server: "Server Sinkronisasi",
     lan: "Server Pusat",
     struk: "Struk & Printer",
     tema: "Tema Tampilan",
@@ -50,7 +49,6 @@
   let printers = $state<string[]>([]);
   let savingKey = $state<string | null>(null);
   let savingReceipt = $state(false);
-  let savingServer = $state(false);
   let preview = $state(false);
   let spacingChanged = $state(false);
   let spacingTimer: ReturnType<typeof setTimeout> | null = null;
@@ -70,17 +68,6 @@
     { key: "store_whatsapp", label: "WhatsApp", hint: "0812-xxxx-xxxx" },
     { key: "tax_percent", label: "Pajak (%)", hint: "0 jika tidak memakai pajak" },
   ];
-  const serverFields = [
-    { key: "store_id", label: "ID Toko", hint: "Identitas untuk sinkronisasi" },
-    { key: "server_url", label: "URL Server Sync", hint: "http://localhost:8000" },
-  ];
-  // Server Gudang (bridge tombol "Pull dari Gudang" di Item Masuk) — TERPISAH
-  // dari Server Sinkronisasi di atas (beda server, beda database, beda auth).
-  const mobileFields = [
-    { key: "mobile_server_url", label: "URL Server Gudang", hint: "https://app.jjapps.net" },
-    { key: "mobile_store_api_key", label: "API Key Toko", hint: "Diminta ke Bos (dari gudang)" },
-  ];
-  let savingMobile = $state(false);
   const receiptKeys = [
     "receipt_paper", "receipt_printer", "receipt_font_size",
     "receipt_line_height", "receipt_margin", "receipt_header", "receipt_footer",
@@ -270,10 +257,6 @@
       settings.store_instagram ??= "";
       settings.store_tiktok ??= "";
       settings.store_whatsapp ??= "";
-      settings.store_id ??= "";
-      settings.server_url ??= "";
-      settings.mobile_server_url ??= "";
-      settings.mobile_store_api_key ??= "";
       settings.tax_percent ??= "0";
       settings.theme ??= "baby-blue";
       activeTheme = settings.theme;
@@ -372,22 +355,6 @@
     } catch (e) { toastError(e); } finally { savingKey = null; }
   }
 
-  async function saveServer() {
-    savingServer = true;
-    try {
-      for (const f of serverFields) await api.updateSetting(f.key, String(settings[f.key] ?? ""));
-      showToast("Pengaturan server tersimpan.", "success");
-    } catch (e) { toastError(e); } finally { savingServer = false; }
-  }
-
-  async function saveMobile() {
-    savingMobile = true;
-    try {
-      for (const f of mobileFields) await api.updateSetting(f.key, String(settings[f.key] ?? ""));
-      showToast("Pengaturan server gudang tersimpan.", "success");
-    } catch (e) { toastError(e); } finally { savingMobile = false; }
-  }
-
   async function saveReceipt() {
     savingReceipt = true;
     try {
@@ -476,47 +443,6 @@
         </div>
       </div>
     {/each}
-  </div>
-{/if}
-
-<!-- ── Tab: Server Sinkronisasi ── -->
-{#if section === "server"}
-  <div class="card" style="max-width:520px;">
-    <h2>Server Sinkronisasi</h2>
-    <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
-      Hanya diperlukan jika menggunakan fitur sinkronisasi data ke server pusat.
-      Biarkan kosong jika hanya dipakai secara lokal.
-    </p>
-    {#each serverFields as f}
-      <div style="margin-bottom:0.9rem;">
-        <label>{f.label}</label>
-        <input bind:value={settings[f.key]} placeholder={f.hint} />
-      </div>
-    {/each}
-    <div class="row" style="justify-content:flex-end;">
-      <button class="btn-primary" disabled={savingServer} onclick={saveServer}>
-        Simpan Pengaturan Server
-      </button>
-    </div>
-  </div>
-
-  <div class="card" style="max-width:520px; margin-top:0.8rem;">
-    <h2>Server Gudang</h2>
-    <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
-      Diisi sekali agar tombol <b>"Pull dari Gudang"</b> di menu Item Masuk bisa
-      menarik barang yang dikirim gudang ke toko ini. API Key toko didapat dari Bos.
-    </p>
-    {#each mobileFields as f}
-      <div style="margin-bottom:0.9rem;">
-        <label>{f.label}</label>
-        <input bind:value={settings[f.key]} placeholder={f.hint} />
-      </div>
-    {/each}
-    <div class="row" style="justify-content:flex-end;">
-      <button class="btn-primary" disabled={savingMobile} onclick={saveMobile}>
-        Simpan Pengaturan Mobile
-      </button>
-    </div>
   </div>
 {/if}
 

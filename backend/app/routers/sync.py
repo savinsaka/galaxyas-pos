@@ -14,7 +14,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Product, SyncLog
+from app.deps import member_or_legacy, store_of
+from app.models import Member, Product, SyncLog
 from app.schemas import (
     HardPushRequest,
     ProductOut,
@@ -25,6 +26,8 @@ from app.schemas import (
     SyncLogOut,
 )
 
+# Semua endpoint wajib login anggota (app lama tanpa login hanya diterima
+# sampai `settings.sync_auth_deadline`, lihat app.deps.member_or_legacy).
 router = APIRouter(prefix="/api/v1/sync", tags=["sync"])
 
 
@@ -38,7 +41,8 @@ def _as_utc(dt: datetime) -> datetime:
 @router.get("/products/pull", response_model=PullResponse)
 def pull_products(
     db: Session = Depends(get_db),
-    store_id: str = Query(..., description="Identitas toko"),
+    member: Member | None = Depends(member_or_legacy),
+    store_id: str = Query("", description="Identitas toko (diabaikan bila login)"),
     since: datetime | None = Query(
         None, description="Ambil produk yang berubah setelah waktu ini (ISO 8601). Kosong = full sync."
     ),
@@ -53,7 +57,7 @@ def pull_products(
 
     db.add(
         SyncLog(
-            store_id=store_id,
+            store_id=store_of(member, store_id),
             direction="download",
             record_count=len(products),
             detail=f"pull since={since.isoformat() if since else 'full'}",
@@ -69,7 +73,11 @@ def pull_products(
 
 
 @router.post("/products/push", response_model=PushResponse)
-def push_products(payload: PushRequest, db: Session = Depends(get_db)) -> PushResponse:
+def push_products(
+    payload: PushRequest,
+    db: Session = Depends(get_db),
+    member: Member | None = Depends(member_or_legacy),
+) -> PushResponse:
     results: list[PushResultItem] = []
     applied = 0
     skipped = 0
@@ -120,7 +128,7 @@ def push_products(payload: PushRequest, db: Session = Depends(get_db)) -> PushRe
 
     db.add(
         SyncLog(
-            store_id=payload.store_id,
+            store_id=store_of(member, payload.store_id),
             direction="upload",
             record_count=applied,
             detail=f"push received={len(payload.products)} applied={applied} skipped={skipped}",
@@ -138,7 +146,11 @@ def push_products(payload: PushRequest, db: Session = Depends(get_db)) -> PushRe
 
 
 @router.post("/products/hard-push", response_model=PushResponse)
-def hard_push_products(payload: HardPushRequest, db: Session = Depends(get_db)) -> PushResponse:
+def hard_push_products(
+    payload: HardPushRequest,
+    db: Session = Depends(get_db),
+    member: Member | None = Depends(member_or_legacy),
+) -> PushResponse:
     """Timpa SSoT dengan data klien, TANPA Last Write Wins.
 
     - Produk yang dikirim selalu menimpa yang ada di SSoT (atau dibuat baru).
@@ -205,7 +217,7 @@ def hard_push_products(payload: HardPushRequest, db: Session = Depends(get_db)) 
 
     db.add(
         SyncLog(
-            store_id=payload.store_id,
+            store_id=store_of(member, payload.store_id),
             direction="upload",
             record_count=applied,
             detail=(
@@ -229,6 +241,7 @@ def hard_push_products(payload: HardPushRequest, db: Session = Depends(get_db)) 
 @router.get("/logs", response_model=list[SyncLogOut])
 def list_logs(
     db: Session = Depends(get_db),
+    member: Member | None = Depends(member_or_legacy),
     store_id: str | None = Query(None),
     limit: int = Query(50, le=500),
 ) -> list[SyncLog]:

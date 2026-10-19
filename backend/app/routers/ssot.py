@@ -14,7 +14,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Product, SyncLog
+from app.deps import member_or_legacy, store_of
+from app.models import Member, Product, SyncLog
 from app.schemas import ProductOut, SsotSaveRequest
 
 router = APIRouter(prefix="/api/v1/ssot", tags=["ssot"])
@@ -23,6 +24,7 @@ router = APIRouter(prefix="/api/v1/ssot", tags=["ssot"])
 @router.get("/products", response_model=list[ProductOut])
 def list_products(
     db: Session = Depends(get_db),
+    member: Member | None = Depends(member_or_legacy),
     include_deleted: bool = Query(False, description="Ikut tampilkan produk yang sudah dihapus (tombstone)"),
 ) -> list[Product]:
     stmt = select(Product)
@@ -33,7 +35,11 @@ def list_products(
 
 
 @router.post("/products", response_model=ProductOut)
-def save_product(payload: SsotSaveRequest, db: Session = Depends(get_db)) -> Product:
+def save_product(
+    payload: SsotSaveRequest,
+    db: Session = Depends(get_db),
+    member: Member | None = Depends(member_or_legacy),
+) -> Product:
     p = payload.product
     name = p.name.strip()
     if not name:
@@ -75,7 +81,7 @@ def save_product(payload: SsotSaveRequest, db: Session = Depends(get_db)) -> Pro
 
     db.add(
         SyncLog(
-            store_id=payload.store_id,
+            store_id=store_of(member, payload.store_id),
             direction="upload",
             record_count=1,
             detail=f"SSoT {action}: {name}",

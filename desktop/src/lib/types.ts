@@ -122,6 +122,23 @@ export interface SyncUndoInfo {
   server_count: number;
 }
 
+/** Akun server (login anggota) di PC ini. `username` = ID Toko. */
+export interface SyncAccount {
+  logged_in: boolean;
+  username: string;
+  name: string;
+}
+
+/** Hasil cek versi minimum ke server saat app dibuka. */
+export interface UpdatePolicy {
+  current: string;
+  min_version: string;
+  deadline: string | null;
+  message: string;
+  must_update: boolean;
+  blocked: boolean;
+}
+
 /** Hasil simpan satu barang di layar SSoT. */
 export interface SsotSaveResult {
   product: Product;

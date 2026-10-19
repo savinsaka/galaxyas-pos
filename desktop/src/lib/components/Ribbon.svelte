@@ -21,7 +21,7 @@
         .map((g) => ({
           ...g,
           actions: g.actions.filter(
-          (a) => !($isRemoteClient && ["sync", "ssot", "pengaturan-server", "pengaturan-lanjutan"].includes(a.key)),
+          (a) => !($isRemoteClient && ["sync", "ssot", "sync-akun", "pengaturan-lanjutan"].includes(a.key)),
         ),
         }))
         .filter((g) => g.actions.length > 0),

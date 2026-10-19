@@ -7,6 +7,7 @@ panel ini cuma menjawab request yang datang, sama seperti endpoint sync.
 """
 
 import secrets
+from datetime import timedelta, timezone
 from pathlib import Path
 
 from anyio.to_thread import run_sync
@@ -17,7 +18,7 @@ from sqladmin.authentication import AuthenticationBackend
 
 from app.config import settings
 from app.database import SessionLocal, engine
-from app.models import AdminUser, ChatStore, Product, SyncLog, utcnow
+from app.models import AdminUser, ChatStore, Member, MemberToken, Product, SyncLog, utcnow
 from app.routers import chat as chat_router
 from app.security import MIN_PASSWORD_LENGTH, hash_password, verify_password
 
@@ -370,6 +371,148 @@ class TokoChatView(BaseView):
         )
 
 
+# ---------- Kelola Anggota (login Sync & SSoT dari app) ----------
+
+
+def _daftar_anggota() -> tuple[list[dict], list[str]]:
+    with SessionLocal() as db:
+        tokens: dict[str, list[MemberToken]] = {}
+        for t in db.query(MemberToken).all():
+            tokens.setdefault(t.username, []).append(t)
+        members = []
+        for m in db.query(Member).order_by(Member.username).all():
+            sesi = tokens.get(m.username, [])
+            dipakai = [t.last_used_at for t in sesi if t.last_used_at]
+            members.append(
+                {
+                    "username": m.username,
+                    "name": m.name,
+                    "is_active": m.is_active,
+                    "sessions": len(sesi),
+                    "last_used": max(dipakai) if dipakai else None,
+                    "devices": sorted({t.device for t in sesi if t.device}),
+                }
+            )
+        terdaftar = {m["username"] for m in members}
+        saran = sorted(
+            {
+                code
+                for (code,) in db.query(SyncLog.store_id).distinct().all()
+                if code and code not in terdaftar and chat_router.CODE_RE.match(code)
+            }
+        )
+    return members, saran
+
+
+def _cabut_sesi(db, username: str) -> int:
+    return db.query(MemberToken).filter(MemberToken.username == username).delete()
+
+
+def _aksi_anggota(aksi: str, username: str, name: str, password: str) -> tuple[str | None, str | None]:
+    if aksi == "tambah":
+        if not chat_router.CODE_RE.match(username):
+            return None, "ID Toko hanya boleh huruf, angka, titik, strip, garis bawah (maks 64)."
+        if not name:
+            return None, "Nama wajib diisi."
+        if len(password) < MIN_PASSWORD_LENGTH:
+            return None, f"Password minimal {MIN_PASSWORD_LENGTH} karakter."
+    elif aksi == "password" and len(password) < MIN_PASSWORD_LENGTH:
+        return None, f"Password minimal {MIN_PASSWORD_LENGTH} karakter."
+
+    with SessionLocal() as db:
+        m = db.get(Member, username)
+        if aksi == "tambah":
+            if m is not None:
+                return None, f"ID {username} sudah terdaftar."
+            db.add(Member(username=username, name=name[:120], password_hash=hash_password(password)))
+            pesan = f"Anggota {username} ditambahkan. Login di app: Sync → Akun Server."
+        elif m is None:
+            return None, "Anggota tidak ditemukan."
+        elif aksi == "nama":
+            if not name:
+                return None, "Nama wajib diisi."
+            m.name = name[:120]
+            pesan = f"Nama {username} diperbarui."
+        elif aksi == "password":
+            m.password_hash = hash_password(password)
+            m.password_set_at = utcnow()
+            n = _cabut_sesi(db, username)
+            pesan = f"Password {username} diganti. {n} PC dikeluarkan dan harus login ulang."
+        elif aksi in ("nonaktif", "aktif"):
+            m.is_active = aksi == "aktif"
+            if aksi == "nonaktif":
+                n = _cabut_sesi(db, username)
+                pesan = f"{username} dinonaktifkan. {n} PC dikeluarkan."
+            else:
+                pesan = f"{username} diaktifkan lagi. PC-nya perlu login ulang."
+        elif aksi == "cabut":
+            n = _cabut_sesi(db, username)
+            pesan = f"{n} PC {username} dikeluarkan dan harus login ulang."
+        elif aksi == "hapus":
+            _cabut_sesi(db, username)
+            db.delete(m)
+            pesan = f"Anggota {username} dihapus."
+        else:
+            return None, "Aksi tidak dikenal."
+        db.commit()
+    return pesan, None
+
+
+_anggota_flash: dict[str, dict] = {}
+
+
+class AnggotaView(BaseView):
+    """Akun anggota untuk login Sync & SSoT. Tanpa sign up: hanya admin yang mendaftarkan."""
+
+    name = "Kelola Anggota"
+    identity = "anggota"
+    icon = "fa-solid fa-users"
+
+    @expose("/anggota", methods=["GET", "POST"], identity="anggota")
+    async def anggota(self, request: Request) -> Response:
+        pesan: str | None = None
+        galat: str | None = None
+
+        if request.method == "GET":
+            token = request.session.pop("anggota_flash", None)
+            flash = _anggota_flash.pop(token, None) if token else None
+            if flash:
+                pesan, galat = flash.get("pesan"), flash.get("galat")
+
+        if request.method == "POST":
+            form = await request.form()
+            pesan, galat = await run_sync(
+                _aksi_anggota,
+                str(form.get("aksi") or ""),
+                str(form.get("username") or "").strip(),
+                str(form.get("name") or "").strip(),
+                str(form.get("password") or ""),
+            )
+            # Post/Redirect/Get seperti Toko Chat: refresh tidak mengulang aksi.
+            token = secrets.token_urlsafe(16)
+            _anggota_flash[token] = {"pesan": pesan, "galat": galat}
+            if len(_anggota_flash) > 50:
+                _anggota_flash.pop(next(iter(_anggota_flash)))
+            request.session["anggota_flash"] = token
+            return RedirectResponse(request.url.path, status_code=303)
+
+        members, saran = await run_sync(_daftar_anggota)
+        batas = settings.sync_auth_deadline.astimezone(timezone(timedelta(hours=7)))
+        return await self.templates.TemplateResponse(
+            request,
+            "members.html",
+            {
+                "title": "Kelola Anggota",
+                "members": members,
+                "saran": saran,
+                "pesan": pesan,
+                "galat": galat,
+                "min_len": MIN_PASSWORD_LENGTH,
+                "batas": batas.strftime("%d-%m-%Y %H:%M WIB"),
+            },
+        )
+
+
 def setup_admin(app) -> None:
     admin = Admin(
         app,
@@ -382,5 +525,6 @@ def setup_admin(app) -> None:
     )
     admin.add_view(ProductAdmin)
     admin.add_view(SyncLogAdmin)
+    admin.add_view(AnggotaView)
     admin.add_view(TokoChatView)
     admin.add_view(ProfilView)
