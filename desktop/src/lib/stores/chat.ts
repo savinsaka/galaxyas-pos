@@ -103,7 +103,7 @@ async function dispatch(item: ChatOutgoing) {
     if (item.voice) {
       await api.chatSendFile(item.to, "voice.webm", item.voice.bytes, item.push, item.client_id, item.voice.duration);
     } else if (item.file) {
-      await api.chatSendFile(item.to, item.file.name, item.file.bytes, item.push, item.client_id);
+      await api.chatSendFile(item.to, item.file.name, item.file.bytes, item.push, item.client_id, null, item.body);
     } else {
       await api.chatSend(item.to, item.body, item.push, item.client_id);
     }
@@ -123,11 +123,11 @@ export function sendText(to: string, body: string, push: boolean) {
   });
 }
 
-export function sendFile(to: string, name: string, bytes: Uint8Array, push: boolean) {
+export function sendFile(to: string, name: string, bytes: Uint8Array, push: boolean, caption = "") {
   return dispatch({
     client_id: newClientId(),
     to,
-    body: "",
+    body: caption.trim(),
     push,
     created_at: new Date().toISOString(),
     status: "sending",

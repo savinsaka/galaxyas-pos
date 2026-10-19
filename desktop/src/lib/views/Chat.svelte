@@ -31,6 +31,18 @@
   import { activeTabId } from "$lib/stores/tabs";
   import type { ChatMessage, ChatOutgoing } from "$lib/types";
   import VoicePlayer from "$lib/components/VoicePlayer.svelte";
+  import FilePreview from "$lib/components/FilePreview.svelte";
+  import { getCurrentWebview } from "@tauri-apps/api/webview";
+  import {
+    CHAT_ACCEPT,
+    fileKind,
+    fmtSize,
+    isImagePreview,
+    kindLabel,
+    mimeOf,
+    rejectReason,
+    screenshotName,
+  } from "$lib/chatFiles";
 
   let { peer: initialPeer = "", tabId = "" }: { peer?: string; tabId?: string } = $props();
 
@@ -39,10 +51,6 @@
   let pageVisible = $state(typeof document === "undefined" || document.visibilityState === "visible");
   const onVisibility = () => (pageVisible = document.visibilityState === "visible");
   const onScreen = $derived(pageVisible && (!tabId || $activeTabId === tabId));
-
-  const ACCEPT = ".jpg,.jpeg,.png,.gif,.webp,.bmp,.heic,.heif,.tif,.tiff,.doc,.docx,.xls,.xlsx,.csv,.pdf";
-  const ALLOWED = new Set(ACCEPT.split(",").map((e) => e.slice(1)));
-  const MAX_FILE = 10 * 1024 * 1024;
 
   let suggestedCode = $state("");
   let setupCode = $state("");
@@ -53,7 +61,6 @@
   let selected = $state("");
   let draft = $state("");
   let asAlert = $state(false);
-  let sending = $state(false);
   let fileInput = $state<HTMLInputElement | null>(null);
   let scroller = $state<HTMLDivElement | null>(null);
 
@@ -119,8 +126,25 @@
     return list;
   });
 
+  let unlistenDrop: (() => void) | null = null;
+
   onMount(async () => {
     document.addEventListener("visibilitychange", onVisibility);
+    // Seret file dari Explorer: event drop HTML5 ditelan Tauri, jadi pakai
+    // event drag-drop webview (berisi path) lalu baca isinya lewat Rust.
+    getCurrentWebview()
+      .onDragDropEvent((e) => {
+        const p = e.payload;
+        if (p.type === "leave") return void (dragOver = false);
+        if (!canAttach) return;
+        if (p.type === "enter" || p.type === "over") dragOver = true;
+        else if (p.type === "drop") {
+          dragOver = false;
+          addDropped(p.paths);
+        }
+      })
+      .then((u) => (unlistenDrop = u))
+      .catch(() => {});
     await initChat();
     try {
       const s = await api.chatStatus();
@@ -134,6 +158,9 @@
 
   onDestroy(() => {
     document.removeEventListener("visibilitychange", onVisibility);
+    unlistenDrop?.();
+    clearStaged();
+    for (const u of thumbCache.values()) URL.revokeObjectURL(u);
     // Tab ditutup saat merekam: lepaskan mikrofon, jangan kirim apa pun.
     stopRecording(false);
   });
@@ -268,25 +295,159 @@
     }
   }
 
-  async function onFilePicked(e: Event) {
-    const input = e.currentTarget as HTMLInputElement;
-    const file = input.files?.[0];
-    input.value = "";
-    if (!file || !selected) return;
-    const ext = file.name.includes(".") ? file.name.split(".").pop()!.toLowerCase() : "";
-    if (!ALLOWED.has(ext)) return showToast("Hanya gambar, Word, Excel, dan PDF yang bisa dikirim.", "error");
-    if (file.size > MAX_FILE) return showToast("File terlalu besar (maks 10 MB).", "error");
-    sending = true;
-    try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      const push = asAlert;
-      asAlert = false;
-      await sendFile(selected, file.name, bytes, push);
-    } catch (err) {
-      toastError(err);
-    } finally {
-      sending = false;
+  // ---------- Lampiran: dipilih (📎), Ctrl+V, atau diseret → antre dulu ----------
+  // Tidak ada yang langsung terkirim: file masuk panel lampiran, bisa
+  // dipratinjau & diberi keterangan (caption) per file, baru dikirim.
+  type Staged = { id: string; name: string; bytes: Uint8Array; caption: string; thumb: string };
+  let staged = $state<Staged[]>([]);
+  let stagedIdx = $state(0);
+  let dragOver = $state(false);
+  let captionInput = $state<HTMLInputElement | null>(null);
+  const stagedCur = $derived(staged[stagedIdx] ?? null);
+  const canAttach = $derived(configured && onScreen && !!selected && !recording);
+
+  function addFiles(files: { name: string; bytes: Uint8Array }[]) {
+    if (!selected) return showToast("Pilih chat dulu sebelum melampirkan file.", "error");
+    const errors: string[] = [];
+    const before = staged.length;
+    for (const f of files) {
+      const bad = rejectReason(f.name, f.bytes.length);
+      if (bad) {
+        errors.push(bad);
+        continue;
+      }
+      const thumb = isImagePreview(f.name) ? URL.createObjectURL(new Blob([f.bytes as BlobPart], { type: mimeOf(f.name) })) : "";
+      staged.push({ id: crypto.randomUUID(), name: f.name, bytes: f.bytes, caption: "", thumb });
     }
+    if (errors.length) showToast(errors.join("\n"), "error", 6000);
+    if (staged.length > before) {
+      stagedIdx = before;
+      tick().then(() => captionInput?.focus());
+    }
+  }
+
+  async function fromFileList(list: FileList | File[]) {
+    const out: { name: string; bytes: Uint8Array }[] = [];
+    for (const f of Array.from(list)) {
+      // Gambar dari clipboard (screenshot) selalu bernama "image.png".
+      const name = /^image\.(png|jpe?g|gif|bmp|webp)$/i.test(f.name) ? screenshotName(f.type || "image/png") : f.name;
+      out.push({ name, bytes: new Uint8Array(await f.arrayBuffer()) });
+    }
+    addFiles(out);
+  }
+
+  async function addDropped(paths: string[]) {
+    const out: { name: string; bytes: Uint8Array }[] = [];
+    const errors: string[] = [];
+    for (const path of paths) {
+      const name = path.split(/[\\/]/).pop() || "file";
+      try {
+        out.push({ name, bytes: new Uint8Array(await api.chatReadDropped(path)) });
+      } catch (e) {
+        errors.push(`${name}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    if (errors.length) showToast(errors.join("\n"), "error", 6000);
+    if (out.length) addFiles(out);
+  }
+
+  function onFilePicked(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const files = input.files ? Array.from(input.files) : [];
+    input.value = "";
+    if (files.length) fromFileList(files);
+  }
+
+  // Ctrl+V: screenshot / file yang di-copy di Explorer → panel lampiran.
+  // Copy sel Excel menaruh teks DAN gambar di clipboard — kalau ada teks dan
+  // yang ada cuma gambar "image.*", tempel sebagai teks biasa.
+  function onPaste(e: ClipboardEvent) {
+    if (!canAttach) return;
+    const files = Array.from(e.clipboardData?.files ?? []);
+    if (!files.length) return;
+    const text = e.clipboardData?.getData("text/plain") ?? "";
+    if (text.trim() && files.every((f) => /^image\./i.test(f.name))) return;
+    e.preventDefault();
+    fromFileList(files);
+  }
+
+  function removeStaged(i: number) {
+    const [gone] = staged.splice(i, 1);
+    if (gone?.thumb) URL.revokeObjectURL(gone.thumb);
+    stagedIdx = Math.min(stagedIdx, Math.max(0, staged.length - 1));
+  }
+
+  function clearStaged() {
+    for (const f of staged) if (f.thumb) URL.revokeObjectURL(f.thumb);
+    staged = [];
+    stagedIdx = 0;
+  }
+
+  async function sendStaged() {
+    if (!selected || !staged.length) return;
+    const to = selected;
+    const push = asAlert;
+    const items = staged.map((f) => ({ name: f.name, bytes: f.bytes, caption: f.caption }));
+    clearStaged();
+    asAlert = false;
+    for (const f of items) await sendFile(to, f.name, f.bytes, push, f.caption);
+  }
+
+  function onCaptionKey(e: KeyboardEvent) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendStaged();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      clearStaged();
+    }
+  }
+
+  // Pindah kontak = lampiran yang belum dikirim dibuang.
+  let stagedFor = "";
+  $effect(() => {
+    if (selected !== stagedFor) {
+      stagedFor = selected;
+      if (staged.length) clearStaged();
+    }
+  });
+
+  // ---------- Pratinjau & download file di gelembung ----------
+  type PreviewFile = { name: string; size: number | null; path: string | null; bytes: Uint8Array | null };
+  let preview = $state<PreviewFile | null>(null);
+
+  async function download(path: string) {
+    try {
+      const dest = await api.chatDownloadFile(path);
+      showToast(`Tersimpan di Downloads: ${dest.split(/[\\/]/).pop()}`, "success", 4000);
+    } catch (e) {
+      toastError(e);
+    }
+  }
+
+  // Thumbnail gambar di gelembung, dimuat saat gelembungnya terlihat.
+  const thumbCache = new Map<string, string>();
+  let thumbs = $state<Record<string, string>>({});
+
+  function lazyThumb(node: HTMLElement, path: string) {
+    if (thumbCache.has(path)) {
+      thumbs[path] = thumbCache.get(path)!;
+      return;
+    }
+    const io = new IntersectionObserver((entries) => {
+      if (!entries.some((en) => en.isIntersecting)) return;
+      io.disconnect();
+      api
+        .chatReadFile(path)
+        .then((buf) => {
+          const u = URL.createObjectURL(new Blob([buf], { type: mimeOf(path) }));
+          thumbCache.set(path, u);
+          thumbs[path] = u;
+        })
+        .catch(() => {});
+    });
+    io.observe(node);
+    return { destroy: () => io.disconnect() };
   }
 
   async function lookup() {
@@ -363,15 +524,46 @@
     return h;
   }
 
-  function fmtSize(n: number | null): string {
-    if (!n) return "";
-    return n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
-  }
-
-  function openFile(m: ChatMessage, reveal = false) {
-    if (m.local_path) api.chatOpenFile(m.local_path, reveal).catch(toastError);
-  }
 </script>
+
+<svelte:window onpaste={onPaste} />
+
+{#snippet fileCard(name: string, size: number | null, path: string | null, bytes: Uint8Array | null, mine: boolean)}
+  {@const available = !!(path || bytes)}
+  {@const isImg = isImagePreview(name) && !!path}
+  <div class="file-box" class:unavailable={!available}>
+    {#if isImg && path}
+      <button class="img-thumb" use:lazyThumb={path} onclick={() => (preview = { name, size, path, bytes: null })}
+        title="Lihat {name}">
+        {#if thumbs[path]}<img src={thumbs[path]} alt={name} />{:else}<span class="thumb-wait">🖼</span>{/if}
+      </button>
+    {/if}
+    <div class="file-row">
+      <button class="file-card" disabled={!available} onclick={() => (preview = { name, size, path, bytes })}
+        title={available ? `Lihat ${name}` : ""}>
+        <span class="kind-icon k-{fileKind(name)}">{kindLabel(name)}</span>
+        <span class="file-meta">
+          <span class="file-name">{name}</span>
+          <span class="file-size">
+            {#if available}{fmtSize(size)}{:else if mine}File hanya ada di PC pengirim{:else}File tidak tersedia di PC ini{/if}
+          </span>
+        </span>
+      </button>
+      {#if path}
+        <button class="dl-btn" title="Download ke folder Downloads" aria-label="Download {name}"
+          onclick={() => download(path)}>
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14" fill="none" stroke="currentColor"
+              stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
+      {/if}
+    </div>
+    {#if !available}
+      <div class="note">PC mati saat file dikirim, atau file sudah lewat 14 hari.</div>
+    {/if}
+  </div>
+{/snippet}
 
 <div class="chat">
   {#if !configured || showSetup}
@@ -491,6 +683,44 @@
             {/if}
           </header>
 
+          {#if staged.length && stagedCur}
+            <!-- ===== Panel lampiran: pratinjau + caption sebelum dikirim ===== -->
+            <div class="stage">
+              <div class="stage-top">
+                <button class="icon-btn" title="Batal (Esc)" onclick={clearStaged}>✕</button>
+                <span class="stage-name">{stagedCur.name}</span>
+                <span class="stage-size">{fmtSize(stagedCur.bytes.length)}</span>
+              </div>
+              <div class="stage-preview">
+                {#key stagedCur.id}
+                  <FilePreview inline name={stagedCur.name} bytes={stagedCur.bytes} />
+                {/key}
+              </div>
+              <div class="stage-caption">
+                <div class="input-wrap" class:alerting={asAlert}>
+                  <input bind:this={captionInput} bind:value={stagedCur.caption} onkeydown={onCaptionKey}
+                    placeholder="Tambahkan keterangan…" maxlength="2000" />
+                  <button class="alert-btn" class:on={asAlert} onclick={() => (asAlert = !asAlert)}
+                    title="Kirim sebagai alert: muncul sebagai popup di GPOS toko tujuan">🔔</button>
+                </div>
+              </div>
+              <div class="stage-bottom">
+                <div class="stage-thumbs">
+                  {#each staged as f, i (f.id)}
+                    <div class="st-thumb" class:on={i === stagedIdx}>
+                      <button class="st-pick" onclick={() => (stagedIdx = i)} title={f.name}>
+                        {#if f.thumb}<img src={f.thumb} alt={f.name} />{:else}<span class="kind-icon k-{fileKind(f.name)}">{kindLabel(f.name)}</span>{/if}
+                      </button>
+                      <button class="st-x" title="Buang {f.name}" onclick={() => removeStaged(i)}>✕</button>
+                    </div>
+                  {/each}
+                  <button class="st-add" title="Tambah file" onclick={() => fileInput?.click()}>＋</button>
+                </div>
+                <button class="send-btn" onclick={sendStaged}
+                  title="Kirim {staged.length} file (Enter)">➤{#if staged.length > 1}<span class="send-count">{staged.length}</span>{/if}</button>
+              </div>
+            </div>
+          {:else}
           <div class="messages" bind:this={scroller}>
             {#each items as it (it.key)}
               {#if it.day}<div class="day-sep"><span>{it.day}</span></div>{/if}
@@ -508,24 +738,8 @@
                         <div class="note">🎤 Voice note {fmtDuration(Number(m.body) || 0)} — tidak tersimpan di PC ini.</div>
                       {/if}
                     {:else if m.kind === "file"}
-                      <div class="file-card">
-                        <span class="file-icon">📄</span>
-                        <span class="file-meta">
-                          <span class="file-name">{m.file_name}</span>
-                          <span class="file-size">{fmtSize(m.file_size)}</span>
-                        </span>
-                      </div>
-                      {#if !it.mine}
-                        {#if m.local_path}
-                          <div class="file-actions">
-                            <button onclick={() => openFile(m)}>Buka</button>
-                            <button class="btn-ghost" onclick={() => openFile(m, true)}>Folder</button>
-                          </div>
-                        {:else}
-                          <div class="note">File tidak tersimpan di PC ini (PC mati saat dikirim).</div>
-                        {/if}
-                      {/if}
-                      {#if m.body}<div class="body">{m.body}</div>{/if}
+                      {@render fileCard(m.file_name ?? "file", m.file_size, m.local_path ?? null, null, it.mine)}
+                      {#if m.body}<div class="body caption">{m.body}</div>{/if}
                     {:else}
                       <span class="body">{m.body}</span>
                     {/if}
@@ -549,13 +763,8 @@
                     {#if x.voice}
                       <VoicePlayer bytes={x.voice.bytes} duration={x.voice.duration} mine />
                     {:else if x.file}
-                      <div class="file-card">
-                        <span class="file-icon">📄</span>
-                        <span class="file-meta">
-                          <span class="file-name">{x.file.name}</span>
-                          <span class="file-size">{fmtSize(x.file.size)}</span>
-                        </span>
-                      </div>
+                      {@render fileCard(x.file.name, x.file.size, null, x.file.bytes, true)}
+                      {#if x.body}<div class="body caption">{x.body}</div>{/if}
                     {:else}
                       <span class="body">{x.body}</span>
                     {/if}
@@ -575,12 +784,11 @@
                 {/if}
               </div>
             {:else}
-              <div class="conv-empty small">Belum ada pesan 7 hari terakhir. Sapa duluan! 👋</div>
+              <div class="conv-empty small">Belum ada pesan 14 hari terakhir. Sapa duluan! 👋</div>
             {/each}
           </div>
 
           <footer class="composer">
-            <input type="file" accept={ACCEPT} bind:this={fileInput} onchange={onFilePicked} hidden />
             {#if recording}
               <button class="icon-btn attach" onclick={() => stopRecording(false)} title="Batalkan rekaman">🗑️</button>
               <div class="rec-bar" class:alerting={recPush}>
@@ -590,8 +798,8 @@
               </div>
               <button class="send-btn" onclick={() => stopRecording(true)} title="Kirim voice note">➤</button>
             {:else}
-              <button class="icon-btn attach" disabled={sending} onclick={() => fileInput?.click()}
-                title="Lampirkan gambar, Word, Excel, PDF — maks 10 MB">📎</button>
+              <button class="icon-btn attach" onclick={() => fileInput?.click()}
+                title="Lampirkan gambar, Word, Excel, PDF — maks 10 MB. Bisa juga Ctrl+V atau seret file ke sini.">📎</button>
               <div class="input-wrap" class:alerting={asAlert}>
                 <textarea
                   rows="1"
@@ -603,15 +811,27 @@
                   title="Kirim sebagai alert: muncul sebagai popup di GPOS toko tujuan">🔔</button>
               </div>
               {#if draft.trim()}
-                <button class="send-btn" disabled={sending} onclick={send} title="Kirim (Enter)">➤</button>
+                <button class="send-btn" onclick={send} title="Kirim (Enter)">➤</button>
               {:else}
                 <button class="send-btn" onclick={startRecording} title="Rekam voice note">🎤</button>
               {/if}
             {/if}
           </footer>
+          {/if}
+          <input type="file" accept={CHAT_ACCEPT} multiple bind:this={fileInput} onchange={onFilePicked} hidden />
+          {#if dragOver}
+            <div class="drop-overlay">
+              <div class="drop-box">📎 Lepaskan file untuk dilampirkan ke <b>{current.name}</b></div>
+            </div>
+          {/if}
         {/if}
       </section>
     </div>
+  {/if}
+  {#if preview}
+    {@const pv = preview}
+    <FilePreview name={pv.name} size={pv.size} path={pv.path} bytes={pv.bytes} onclose={() => (preview = null)}
+      ondownload={pv.path ? () => download(pv.path!) : null} />
   {/if}
 </div>
 
@@ -851,6 +1071,7 @@
 
   /* ----- Kanan ----- */
   .conv {
+    position: relative;
     display: flex;
     flex-direction: column;
     min-height: 0;
@@ -972,17 +1193,106 @@
     color: var(--warning);
     margin-bottom: 0.1rem;
   }
+  /* ----- Kartu file: klik = pratinjau, tombol ⬇ di samping = download ----- */
+  .file-box {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    min-width: 240px;
+    max-width: 340px;
+  }
+  .img-thumb {
+    display: block;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--c-soft);
+    cursor: zoom-in;
+    min-height: 120px;
+  }
+  .img-thumb img {
+    display: block;
+    width: 100%;
+    max-height: 260px;
+    object-fit: cover;
+  }
+  .thumb-wait {
+    display: grid;
+    place-items: center;
+    height: 120px;
+    font-size: 1.8rem;
+    opacity: 0.4;
+  }
+  .file-row {
+    display: flex;
+    align-items: stretch;
+    gap: 0.35rem;
+  }
   .file-card {
+    flex: 1;
+    min-width: 0;
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.6rem;
     background: var(--c-soft);
-    border-radius: 6px;
-    padding: 0.45rem 0.6rem;
-    min-width: 200px;
+    color: var(--text);
+    border: none;
+    border-radius: 8px;
+    padding: 0.5rem 0.6rem;
+    text-align: left;
+    cursor: pointer;
+    font: inherit;
   }
-  .file-icon {
-    font-size: 1.5rem;
+  .file-card:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--text) 13%, transparent);
+  }
+  .file-card:disabled {
+    cursor: default;
+  }
+  .unavailable .file-card {
+    opacity: 0.6;
+  }
+  .kind-icon {
+    flex: none;
+    width: 34px;
+    height: 40px;
+    display: grid;
+    place-items: center;
+    border-radius: 6px;
+    font-size: 0.62rem;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    color: #fff;
+    background: var(--k, #64748b);
+  }
+  .k-pdf {
+    --k: #d93025;
+  }
+  .k-word {
+    --k: #2b579a;
+  }
+  .k-excel {
+    --k: #217346;
+  }
+  .k-image {
+    --k: #8e44ad;
+  }
+  .dl-btn {
+    flex: none;
+    width: 40px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: none;
+    border-radius: 8px;
+    background: var(--c-soft);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .dl-btn:hover {
+    background: var(--c-accent);
+    color: var(--c-on-accent);
   }
   .file-meta {
     display: flex;
@@ -1000,12 +1310,164 @@
     font-size: 0.72rem;
     color: var(--muted);
   }
-  .file-actions {
-    display: flex;
-    gap: 0.4rem;
+  .caption {
+    display: block;
     margin-top: 0.3rem;
   }
-  .file-actions button,
+
+  /* ----- Panel lampiran sebelum kirim ----- */
+  .stage {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--conv-bg);
+  }
+  .stage-top {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.4rem 0.8rem;
+  }
+  .stage-name {
+    flex: 1;
+    min-width: 0;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .stage-size {
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+  .stage-preview {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    margin: 0 0.8rem;
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--c-panel);
+    box-shadow: var(--c-bubble-shadow);
+  }
+  .stage-caption {
+    padding: 0.6rem 15% 0.3rem;
+  }
+  .stage-caption input {
+    flex: 1;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--text);
+    padding: 0.4rem 0;
+    font: inherit;
+  }
+  .stage-bottom {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.5rem 0.8rem;
+    background: var(--c-head);
+  }
+  .stage-thumbs {
+    flex: 1;
+    display: flex;
+    gap: 0.45rem;
+    overflow-x: auto;
+    justify-content: center;
+    padding: 0.2rem;
+  }
+  .st-thumb {
+    position: relative;
+    flex: none;
+  }
+  .st-pick {
+    width: 52px;
+    height: 52px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 2px solid transparent;
+    background: var(--c-panel);
+    cursor: pointer;
+  }
+  .st-thumb.on .st-pick {
+    border-color: var(--c-accent);
+  }
+  .st-pick img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .st-x {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    font-size: 0.6rem;
+    line-height: 18px;
+    background: var(--text);
+    color: var(--panel);
+    cursor: pointer;
+    opacity: 0;
+  }
+  .st-thumb:hover .st-x,
+  .st-thumb.on .st-x {
+    opacity: 1;
+  }
+  .st-add {
+    flex: none;
+    width: 52px;
+    height: 52px;
+    border-radius: 8px;
+    border: 2px dashed var(--border);
+    background: transparent;
+    color: var(--muted);
+    font-size: 1.3rem;
+    cursor: pointer;
+  }
+  .send-btn {
+    position: relative;
+  }
+  .send-count {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    font-size: 0.65rem;
+    font-weight: 700;
+    line-height: 18px;
+    background: var(--danger);
+    color: #fff;
+  }
+
+  /* ----- Seret file ke percakapan ----- */
+  .drop-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: grid;
+    place-items: center;
+    background: color-mix(in srgb, var(--c-panel) 82%, transparent);
+    pointer-events: none;
+  }
+  .drop-box {
+    padding: 2.2rem 3rem;
+    border: 3px dashed var(--c-accent);
+    border-radius: 14px;
+    font-size: 1.05rem;
+    background: var(--c-panel);
+  }
+
   .fail-row button {
     font-size: 0.75rem;
     padding: 0.15rem 0.55rem;

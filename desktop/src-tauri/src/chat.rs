@@ -7,8 +7,10 @@
 //! `ChatAlert.svelte`) — pesan biasa diam saja.
 //!
 //! File tidak disimpan di server: isinya datang sebagai frame biner tepat
-//! setelah kepala pesannya, lalu ditulis ke `Documents\GPOS Chat\<kode toko>\`.
-//! File tidak pernah dibuka otomatis.
+//! setelah kepala pesannya, lalu ditulis ke folder cache app
+//! (`AppData\Local\<app>\chat-files\<kode toko>\`) — dilihat lewat pratinjau di
+//! layar chat, baru masuk folder Downloads kalau user menekan Download. File
+//! cache dihapus otomatis setelah 14 hari, sama dengan umur riwayat chat.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -33,6 +35,9 @@ pub const MAX_FILE: usize = 10 * 1024 * 1024;
 pub const MAX_VOICE: usize = 2 * 1024 * 1024;
 pub const VOICE_EXT: &[&str] = &["webm", "ogg"];
 const MAX_TEXT: usize = 2000;
+/// Umur file chat di cache PC ini — sama dengan retensi riwayat di server.
+pub const KEEP_DAYS: u64 = 14;
+const CLEANUP_INTERVAL: Duration = Duration::from_secs(6 * 3600);
 
 /// Sama persis dengan `ALLOWED_EXT` di server. Sengaja TIDAK: svg, docm, xlsm.
 pub const ALLOWED_EXT: &[&str] = &[
@@ -161,21 +166,122 @@ fn safe_name(name: &str) -> String {
     }
 }
 
+/// Folder file chat (cache app, bukan Documents).
 fn chat_dir(app: &AppHandle) -> AppResult<PathBuf> {
-    let docs = app
+    let base = app
         .path()
-        .document_dir()
-        .map_err(|e| AppError::Other(format!("folder Documents tidak ditemukan: {e}")))?;
-    Ok(docs.join("GPOS Chat"))
+        .app_local_data_dir()
+        .map_err(|e| AppError::Other(format!("folder data app tidak ditemukan: {e}")))?;
+    Ok(base.join("chat-files"))
 }
 
-/// Letak file sebuah pesan: `GPOS Chat\<kode lawan bicara>\<id>-<nama>`. Id
+/// Lokasi lama (sebelum v1.9.0): `Documents\GPOS Chat`. Masih dibaca supaya file
+/// lama tetap bisa dibuka, tapi tidak pernah ditulisi atau dibersihkan.
+fn legacy_chat_dir(app: &AppHandle) -> Option<PathBuf> {
+    app.path().document_dir().ok().map(|d| d.join("GPOS Chat"))
+}
+
+/// Letak file sebuah pesan: `chat-files\<kode lawan bicara>\<id>-<nama>`. Id
 /// pesan ikut di nama supaya dua file bernama sama tidak saling menimpa, dan
 /// riwayat bisa menemukan file-nya lagi tanpa catatan tambahan. File yang
-/// DIKIRIM dari PC ini juga disimpan salinannya (supaya voice note sendiri bisa
-/// diputar ulang), di folder toko tujuan.
+/// DIKIRIM dari PC ini juga disimpan salinannya (supaya bisa dipratinjau &
+/// voice note sendiri bisa diputar ulang), di folder toko tujuan.
+fn file_name_for(peer: &str, id: i64, name: &str) -> PathBuf {
+    Path::new(&safe_name(peer)).join(format!("{id}-{}", safe_name(name)))
+}
+
 fn file_path(app: &AppHandle, peer: &str, id: i64, name: &str) -> AppResult<PathBuf> {
-    Ok(chat_dir(app)?.join(safe_name(peer)).join(format!("{id}-{}", safe_name(name))))
+    Ok(chat_dir(app)?.join(file_name_for(peer, id, name)))
+}
+
+/// File yang ada di PC ini: lokasi baru dulu, lalu lokasi lama.
+fn find_local(app: &AppHandle, peer: &str, id: i64, name: &str) -> Option<PathBuf> {
+    let rel = file_name_for(peer, id, name);
+    [chat_dir(app).ok(), legacy_chat_dir(app)]
+        .into_iter()
+        .flatten()
+        .map(|root| root.join(&rel))
+        .find(|p| p.exists())
+}
+
+/// Pastikan `path` ada di dalam folder chat (baru atau lama); kembalikan
+/// path kanoniknya.
+fn checked_chat_path(app: &AppHandle, path: &str) -> AppResult<PathBuf> {
+    let canon = std::fs::canonicalize(Path::new(path))?;
+    let inside = [chat_dir(app).ok(), legacy_chat_dir(app)]
+        .into_iter()
+        .flatten()
+        .filter_map(|r| std::fs::canonicalize(r).ok())
+        .any(|root| canon.starts_with(root));
+    if !inside {
+        return Err(AppError::Other("File di luar folder chat.".into()));
+    }
+    Ok(canon)
+}
+
+/// File cache yang umurnya sudah lewat `KEEP_DAYS`.
+fn is_expired(modified: std::time::SystemTime, now: std::time::SystemTime) -> bool {
+    now.duration_since(modified)
+        .map(|age| age > Duration::from_secs(KEEP_DAYS * 86_400))
+        .unwrap_or(false)
+}
+
+/// Hapus file kedaluwarsa di `root\<toko>\*` lalu folder toko yang kosong.
+fn cleanup_dir(root: &Path, now: std::time::SystemTime) -> usize {
+    let mut removed = 0;
+    let Ok(peers) = std::fs::read_dir(root) else { return 0 };
+    for peer in peers.flatten() {
+        let dir = peer.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        if let Ok(files) = std::fs::read_dir(&dir) {
+            for f in files.flatten() {
+                let old = f.metadata().ok().filter(|m| m.is_file()).and_then(|m| m.modified().ok());
+                if old.is_some_and(|m| is_expired(m, now)) && std::fs::remove_file(f.path()).is_ok() {
+                    removed += 1;
+                }
+            }
+        }
+        let _ = std::fs::remove_dir(&dir); // gagal kalau masih berisi — memang itu maksudnya
+    }
+    removed
+}
+
+/// Bersihkan cache file chat sekarang lalu tiap 6 jam selama app terbuka.
+fn start_cleanup(app: &AppHandle) {
+    let Ok(root) = chat_dir(app) else { return };
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let r = root.clone();
+            let _ = tauri::async_runtime::spawn_blocking(move || cleanup_dir(&r, std::time::SystemTime::now())).await;
+            tokio::time::sleep(CLEANUP_INTERVAL).await;
+        }
+    });
+}
+
+/// `123-laporan.pdf` → `laporan.pdf` (nama asli tanpa id pesan).
+fn original_name(file_name: &str) -> &str {
+    match file_name.split_once('-') {
+        Some((id, rest)) if !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()) && !rest.is_empty() => rest,
+        _ => file_name,
+    }
+}
+
+/// `dir\nama.pdf`, atau `dir\nama (1).pdf` dst. kalau sudah ada.
+fn unique_dest(dir: &Path, name: &str) -> PathBuf {
+    let first = dir.join(name);
+    if !first.exists() {
+        return first;
+    }
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s, format!(".{e}")),
+        _ => (name, String::new()),
+    };
+    (1..)
+        .map(|i| dir.join(format!("{stem} ({i}){ext}")))
+        .find(|p| !p.exists())
+        .expect("selalu ada nama kosong")
 }
 
 fn peer_of(msg: &Value, me: &str) -> Option<String> {
@@ -196,10 +302,8 @@ fn attach_local_path(app: &AppHandle, me: &str, msg: &mut Value) {
     ) else {
         return;
     };
-    if let Ok(path) = file_path(app, &peer, id, name) {
-        if path.exists() {
-            msg["local_path"] = json!(path.to_string_lossy());
-        }
+    if let Some(path) = find_local(app, &peer, id, name) {
+        msg["local_path"] = json!(path.to_string_lossy());
     }
 }
 
@@ -422,6 +526,7 @@ fn save_incoming_file(app: &AppHandle, me: &str, msg: &mut Value, bytes: &[u8]) 
 
 /// Dipanggil saat app dibuka: sambungkan chat bila sudah diatur.
 pub fn autostart(app: &AppHandle) {
+    start_cleanup(app);
     let config = {
         let state = app.state::<AppState>();
         let guard = state.conn.lock();
@@ -628,6 +733,12 @@ pub async fn chat_send_file(state: State<'_, ChatState>, request: tauri::ipc::Re
     let push = header("x-chat-push") == "1";
     let voice = header("x-chat-voice") == "1";
     let duration: f64 = header("x-chat-duration").parse().unwrap_or(0.0);
+    // Caption file (voice note tidak punya caption).
+    let caption: String = if voice {
+        String::new()
+    } else {
+        percent_decode(&header("x-chat-body")).trim().chars().take(MAX_TEXT).collect()
+    };
     if to.is_empty() {
         return Err(AppError::Other("Pilih kontak tujuan dulu.".into()));
     }
@@ -651,7 +762,7 @@ pub async fn chat_send_file(state: State<'_, ChatState>, request: tauri::ipc::Re
         .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
     let head = json!({
         "type": "file", "to": to, "name": name, "push": push, "client_id": client_id,
-        "voice": voice, "duration": duration,
+        "voice": voice, "duration": duration, "body": caption,
     });
     sender(&state)?
         .send(Outgoing::File(head.to_string(), bytes.clone()))
@@ -703,16 +814,10 @@ pub async fn chat_delete_contact(app_state: State<'_, AppState>, code: String) -
 }
 
 /// Buka file hasil chat dengan aplikasi bawaan Windows. Hanya file di dalam
-/// folder `GPOS Chat` yang boleh dibuka lewat command ini.
+/// folder chat yang boleh dibuka lewat command ini.
 #[tauri::command]
 pub async fn chat_open_file(app: AppHandle, path: String, reveal: Option<bool>) -> AppResult<()> {
-    let root = chat_dir(&app)?;
-    let target = Path::new(&path);
-    let canon_root = std::fs::canonicalize(&root)?;
-    let canon = std::fs::canonicalize(target)?;
-    if !canon.starts_with(&canon_root) {
-        return Err(AppError::Other("File di luar folder GPOS Chat.".into()));
-    }
+    let canon = checked_chat_path(&app, &path)?;
     let result = if reveal.unwrap_or(false) {
         tauri_plugin_opener::reveal_item_in_dir(&canon)
     } else {
@@ -725,20 +830,55 @@ pub async fn chat_open_file(app: AppHandle, path: String, reveal: Option<bool>) 
     result.map_err(|e| AppError::Other(format!("gagal membuka file: {e}")))
 }
 
-/// Isi file di folder `GPOS Chat` sebagai bytes mentah — dipakai pemutar
-/// voice note di layar chat.
+/// Isi file di folder chat sebagai bytes mentah — dipakai pemutar voice note
+/// dan pratinjau file (gambar/PDF/Word/Excel) di layar chat.
 #[tauri::command]
 pub async fn chat_read_file(app: AppHandle, path: String) -> AppResult<tauri::ipc::Response> {
-    let canon_root = std::fs::canonicalize(chat_dir(&app)?)?;
-    let canon = std::fs::canonicalize(Path::new(&path))?;
-    if !canon.starts_with(&canon_root) {
-        return Err(AppError::Other("File di luar folder GPOS Chat.".into()));
-    }
-    if !voice_ext_allowed(&canon.to_string_lossy()) {
-        return Err(AppError::Other("Hanya voice note yang bisa diputar di sini.".into()));
+    let canon = checked_chat_path(&app, &path)?;
+    let p = canon.to_string_lossy();
+    if !voice_ext_allowed(&p) && !ext_allowed(&p) {
+        return Err(AppError::Other("Jenis file tidak diizinkan.".into()));
     }
     let bytes = std::fs::read(&canon)?;
     Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// "Download": salin file chat ke folder Downloads Windows (nama asli, tanpa
+/// id pesan; bentrok → "nama (1).pdf") lalu tunjukkan di Explorer.
+#[tauri::command]
+pub async fn chat_download_file(app: AppHandle, path: String) -> AppResult<String> {
+    let canon = checked_chat_path(&app, &path)?;
+    if !ext_allowed(&canon.to_string_lossy()) {
+        return Err(AppError::Other("Jenis file tidak diizinkan.".into()));
+    }
+    let downloads = app
+        .path()
+        .download_dir()
+        .map_err(|e| AppError::Other(format!("folder Downloads tidak ditemukan: {e}")))?;
+    std::fs::create_dir_all(&downloads)?;
+    let file_name = canon.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
+    let dest = unique_dest(&downloads, &safe_name(original_name(&file_name)));
+    std::fs::copy(&canon, &dest)?;
+    let _ = tauri_plugin_opener::reveal_item_in_dir(&dest);
+    Ok(dest.to_string_lossy().into_owned())
+}
+
+/// Isi file yang diseret dari Explorer ke layar chat (event drop HTML5 ditelan
+/// Tauri, jadi frontend hanya dapat path-nya). Hanya jenis yang boleh dikirim.
+#[tauri::command]
+pub async fn chat_read_dropped(path: String) -> AppResult<tauri::ipc::Response> {
+    let p = Path::new(&path);
+    let meta = std::fs::metadata(p)?;
+    if !meta.is_file() {
+        return Err(AppError::Other("Yang diseret bukan file.".into()));
+    }
+    if !ext_allowed(&path) {
+        return Err(AppError::Other("Hanya gambar, Word, Excel, dan PDF yang bisa dikirim.".into()));
+    }
+    if meta.len() as usize > MAX_FILE {
+        return Err(AppError::Other("File terlalu besar (maks 10 MB).".into()));
+    }
+    Ok(tauri::ipc::Response::new(std::fs::read(p)?))
 }
 
 #[cfg(test)]
@@ -770,6 +910,49 @@ mod tests {
         assert_eq!(percent_decode("laporan%20bulan%20ini.pdf"), "laporan bulan ini.pdf");
         assert_eq!(percent_decode("caf%C3%A9.jpg"), "café.jpg");
         assert_eq!(percent_decode("100%"), "100%");
+    }
+
+    #[test]
+    fn nama_asli_tanpa_id() {
+        assert_eq!(original_name("123-laporan-akhir.pdf"), "laporan-akhir.pdf");
+        assert_eq!(original_name("laporan-akhir.pdf"), "laporan-akhir.pdf");
+        assert_eq!(original_name("123-"), "123-");
+    }
+
+    #[test]
+    fn download_tidak_menimpa() {
+        let dir = std::env::temp_dir().join(format!("gpos-chat-test-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(unique_dest(&dir, "a.pdf"), dir.join("a.pdf"));
+        std::fs::write(dir.join("a.pdf"), b"x").unwrap();
+        assert_eq!(unique_dest(&dir, "a.pdf"), dir.join("a (1).pdf"));
+        std::fs::write(dir.join("a (1).pdf"), b"x").unwrap();
+        assert_eq!(unique_dest(&dir, "a.pdf"), dir.join("a (2).pdf"));
+        std::fs::write(dir.join("README"), b"x").unwrap();
+        assert_eq!(unique_dest(&dir, "README"), dir.join("README (1)"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn kedaluwarsa_14_hari() {
+        let now = std::time::SystemTime::now();
+        let day = Duration::from_secs(86_400);
+        assert!(!is_expired(now - day * 13, now));
+        assert!(is_expired(now - day * 15, now));
+        assert!(!is_expired(now + day, now)); // jam PC mundur: jangan hapus
+    }
+
+    #[test]
+    fn bersihkan_cache_lama() {
+        let root = std::env::temp_dir().join(format!("gpos-chat-clean-{}", uuid::Uuid::new_v4().simple()));
+        let peer = root.join("toko-002");
+        std::fs::create_dir_all(&peer).unwrap();
+        std::fs::write(peer.join("1-a.pdf"), b"x").unwrap();
+        // "Sekarang" dimajukan 15 hari → file tadi dianggap lama.
+        let later = std::time::SystemTime::now() + Duration::from_secs(15 * 86_400);
+        assert_eq!(cleanup_dir(&root, later), 1);
+        assert!(!peer.exists(), "folder toko kosong ikut dihapus");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

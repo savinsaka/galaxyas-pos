@@ -301,6 +301,8 @@ pub fn run() {
             chat::chat_mark_read,
             chat::chat_call,
             chat::chat_read_file,
+            chat::chat_download_file,
+            chat::chat_read_dropped,
             commands::save_relay_settings,
             commands::set_relay_enabled,
         ])

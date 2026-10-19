@@ -293,6 +293,7 @@ export interface ChatContact {
 export interface ChatOutgoing {
   client_id: string;
   to: string;
+  /** Teks pesan, atau caption untuk file. */
   body: string;
   push: boolean;
   created_at: string;

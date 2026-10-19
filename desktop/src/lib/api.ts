@@ -327,6 +327,7 @@ export const api = {
     push: boolean,
     clientId: string,
     voiceDuration: number | null = null,
+    caption = "",
   ) =>
     invoke<string>("chat_send_file", bytes, {
       headers: {
@@ -336,9 +337,14 @@ export const api = {
         "x-chat-client-id": clientId,
         "x-chat-voice": voiceDuration === null ? "0" : "1",
         "x-chat-duration": String(voiceDuration ?? 0),
+        "x-chat-body": encodeURIComponent(caption),
       },
     }),
   chatReadFile: (path: string) => invoke<ArrayBuffer>("chat_read_file", { path }),
+  /** Salin file chat ke folder Downloads; hasilnya path tujuan. */
+  chatDownloadFile: (path: string) => invoke<string>("chat_download_file", { path }),
+  /** Isi file yang diseret dari Explorer (path dari event drag-drop Tauri). */
+  chatReadDropped: (path: string) => invoke<ArrayBuffer>("chat_read_dropped", { path }),
   chatContacts: () => invoke<ChatContact[]>("chat_contacts"),
   chatSaveContact: (code: string, name: string) => invoke<ChatContact[]>("chat_save_contact", { code, name }),
   chatDeleteContact: (code: string) => invoke<ChatContact[]>("chat_delete_contact", { code }),
