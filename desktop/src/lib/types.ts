@@ -308,8 +308,9 @@ export interface ChatMessage {
   id: number;
   from: string;
   to: string;
-  /** Untuk "voice", `body` berisi durasi rekaman dalam detik. */
-  kind: "text" | "file" | "voice";
+  /** Untuk "voice", `body` berisi durasi rekaman dalam detik. Untuk "call",
+   * `body` = durasi bicara (detik) atau "missed" / "rejected". */
+  kind: "text" | "file" | "voice" | "call";
   body: string;
   file_name: string | null;
   file_size: number | null;

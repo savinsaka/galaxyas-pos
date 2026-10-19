@@ -16,6 +16,7 @@
   import Workspace from "$lib/components/Workspace.svelte";
   import RemoteBanner from "$lib/components/RemoteBanner.svelte";
   import ChatAlert from "$lib/components/ChatAlert.svelte";
+  import CallOverlay from "$lib/components/CallOverlay.svelte";
 
   let ready = $state(false);
   let showServerPicker = $state(false);
@@ -106,6 +107,7 @@
   </div>
   {#if $currentUser.role === "admin" || $currentUser.permissions.includes("chat")}
     <ChatAlert />
+    <CallOverlay />
   {/if}
 {/if}
 

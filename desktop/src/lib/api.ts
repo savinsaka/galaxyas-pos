@@ -344,4 +344,5 @@ export const api = {
   chatDeleteContact: (code: string) => invoke<ChatContact[]>("chat_delete_contact", { code }),
   chatOpenFile: (path: string, reveal = false) => invoke<void>("chat_open_file", { path, reveal }),
   chatMarkRead: (peer: string, upTo: number) => invoke<void>("chat_mark_read", { peer, upTo }),
+  chatCall: (msg: Record<string, unknown>) => invoke<void>("chat_call", { msg }),
 };

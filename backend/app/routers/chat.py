@@ -6,6 +6,8 @@
 - Pesan teks disimpan 7 hari. File **tidak pernah disimpan**: diteruskan
   langsung ke PC toko tujuan yang sedang tersambung; yang dicatat hanya nama
   dan ukurannya.
+- Voice call: sinyal WebRTC (dering, angkat, SDP/ICE) lewat socket yang sama;
+  suaranya sendiri lewat WebRTC (P2P atau TURN coturn di VPS), tidak lewat sini.
 - Proses uvicorn tunggal (lihat unit `galaxyas-sync`), jadi daftar socket yang
   tersambung cukup disimpan di memori.
 """
@@ -13,7 +15,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
+import hmac
+import itertools
 import json
 import re
 import secrets
@@ -27,6 +32,7 @@ from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from sqlalchemy import delete, inspect, or_, select, text, update
 
+from app.config import settings
 from app.database import SessionLocal, engine
 from app.models import ChatMessage, ChatStore, utcnow
 
@@ -229,8 +235,12 @@ def message_dict(m: ChatMessage) -> dict[str, Any]:
 # ---------- Socket yang tersambung ----------
 
 
+_conn_ids = itertools.count(1)
+
+
 class Conn:
     def __init__(self, code: str, ws: WebSocket) -> None:
+        self.id = next(_conn_ids)
         self.code = code
         self.ws = ws
         # Pasangan teks+biner (file) harus terkirim berurutan tanpa disela.
@@ -336,11 +346,14 @@ async def chat_ws(websocket: WebSocket) -> None:
                 await _handle_file(me, msg, websocket)
             elif kind == "read":
                 await _handle_read(me, msg)
+            elif isinstance(kind, str) and kind.startswith("call_"):
+                await _handle_call(me, msg)
     except WebSocketDisconnect:
         pass
     except Exception:
         pass
     finally:
+        await _call_conn_gone(me)
         CONNS.get(code, set()).discard(me)
         if code in CONNS and not CONNS[code]:
             del CONNS[code]
@@ -472,6 +485,184 @@ async def _handle_file(me: Conn, msg: dict[str, Any], websocket: WebSocket) -> N
     saved = await run_sync(_save_message, row)
     saved["client_id"] = client_id
     await _deliver(saved, me, data)
+
+
+# ---------- Voice call (sinyal WebRTC) ----------
+#
+# Alur: penelepon `call_invite` → semua PC toko tujuan `call_ring` → satu PC
+# `call_accept` (PC lain berhenti berdering) → penelepon membuat offer WebRTC,
+# SDP/ICE diteruskan lewat `call_signal` HANYA antara dua socket yang terlibat
+# → `call_hangup` / `call_reject` / timeout / socket putus mengakhiri. Satu
+# toko hanya boleh punya satu panggilan aktif.
+
+RING_TIMEOUT_S = 45.0
+CALL_LIMIT = (10, 60.0)  # 10 panggilan keluar per menit per toko
+TURN_TTL_S = 2 * 3600
+CALL_ID_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
+
+
+class Call:
+    def __init__(self, call_id: str, caller: Conn, callee_code: str) -> None:
+        self.id = call_id
+        self.caller = caller
+        self.callee_code = callee_code
+        self.callee: Conn | None = None
+        self.started_at: float | None = None  # saat diangkat
+        self.timer: asyncio.Task | None = None
+        self.ended = False
+
+
+CALLS: dict[str, Call] = {}
+_call_hits: dict[str, deque[float]] = defaultdict(deque)
+
+
+def ice_servers(code: str) -> list[dict[str, Any]]:
+    """STUN publik + TURN coturn di VPS (kredensial sementara ala TURN REST API:
+    username `<kedaluwarsa>:<kode>`, password HMAC-SHA1 dari rahasia bersama)."""
+    servers: list[dict[str, Any]] = [{"urls": ["stun:stun.l.google.com:19302"]}]
+    urls = [u.strip() for u in settings.turn_urls.split(",") if u.strip()]
+    if settings.turn_secret and urls:
+        username = f"{int(time.time()) + TURN_TTL_S}:{code}"
+        digest = hmac.new(settings.turn_secret.encode(), username.encode(), hashlib.sha1).digest()
+        servers.insert(0, {"urls": urls, "username": username, "credential": base64.b64encode(digest).decode()})
+    return servers
+
+
+def _busy(code: str) -> bool:
+    return any(
+        not c.ended and (c.caller.code == code or c.callee_code == code) for c in CALLS.values()
+    )
+
+
+def _peer_conn(call: Call, me: Conn) -> Conn | None:
+    if me is call.caller:
+        return call.callee
+    if me is call.callee:
+        return call.caller
+    return None
+
+
+async def _send_callee_store(call: Call, payload: dict[str, Any], skip: Conn | None = None) -> None:
+    for conn in list(CONNS.get(call.callee_code, ())):
+        if conn is not skip:
+            await conn.send_json(payload)
+
+
+async def _log_call(call: Call, body: str, read: bool) -> None:
+    """Catat panggilan di riwayat chat (penelepon → yang ditelepon)."""
+    now = utcnow()
+    row = ChatMessage(
+        from_code=call.caller.code,
+        to_code=call.callee_code,
+        kind="call",
+        body=body,
+        push=False,
+        delivered_at=now if online(call.callee_code) else None,
+        read_at=now if read else None,
+    )
+    saved = await run_sync(_save_message, row)
+    await _deliver(saved, call.caller)
+
+
+async def _end_call(call: Call, reason: str, by: Conn | None = None) -> None:
+    """Akhiri panggilan sekali saja: kabari pihak yang masih ada & catat riwayat."""
+    if call.ended:
+        return
+    call.ended = True
+    CALLS.pop(call.id, None)
+    if call.timer is not None and call.timer is not asyncio.current_task():
+        call.timer.cancel()
+    end = {"type": "call_end", "call_id": call.id, "reason": reason}
+    if call.callee is None:
+        # Masih berdering: hentikan dering di semua PC tujuan.
+        await _send_callee_store(call, end)
+        if by is not call.caller:
+            await call.caller.send_json(end)
+    else:
+        for conn in (call.caller, call.callee):
+            if conn is not by:
+                await conn.send_json(end)
+
+    if call.started_at is not None:
+        await _log_call(call, str(int(time.monotonic() - call.started_at)), read=True)
+    elif reason == "rejected":
+        await _log_call(call, "rejected", read=True)
+    elif reason in ("no_answer", "cancelled", "disconnected"):
+        await _log_call(call, "missed", read=False)
+
+
+async def _ring_timeout(call: Call) -> None:
+    await asyncio.sleep(RING_TIMEOUT_S)
+    if not call.ended and call.callee is None:
+        await _end_call(call, "no_answer")
+
+
+async def _handle_call(me: Conn, msg: dict[str, Any]) -> None:
+    kind = msg.get("type")
+    call_id = str(msg.get("call_id", ""))
+    if not CALL_ID_RE.match(call_id):
+        return
+
+    if kind == "call_invite":
+        to = str(msg.get("to", "")).strip()
+
+        async def refuse(reason: str) -> None:
+            await me.send_json({"type": "call_end", "call_id": call_id, "reason": reason})
+
+        if call_id in CALLS:
+            return
+        if to == me.code or not CODE_RE.match(to) or await run_sync(_store_name, to) is None:
+            return await refuse("unknown")
+        if not _rate_ok(_call_hits[me.code], *CALL_LIMIT):
+            return await refuse("rate_limited")
+        if not online(to):
+            return await refuse("offline")
+        if _busy(to) or _busy(me.code):
+            return await refuse("busy")
+        call = Call(call_id, me, to)
+        CALLS[call_id] = call
+        name = await run_sync(_store_name, me.code) or me.code
+        await _send_callee_store(
+            call,
+            {"type": "call_ring", "call_id": call_id, "from": me.code, "from_name": name, "ice": ice_servers(to)},
+        )
+        await me.send_json({"type": "call_ringing", "call_id": call_id, "ice": ice_servers(me.code)})
+        call.timer = asyncio.create_task(_ring_timeout(call))
+        return
+
+    call = CALLS.get(call_id)
+    if call is None or call.ended:
+        return
+
+    if kind == "call_accept":
+        if me.code != call.callee_code or call.callee is not None:
+            return
+        call.callee = me
+        call.started_at = time.monotonic()
+        if call.timer is not None:
+            call.timer.cancel()
+        await call.caller.send_json({"type": "call_accepted", "call_id": call_id})
+        await _send_callee_store(call, {"type": "call_end", "call_id": call_id, "reason": "answered_elsewhere"}, skip=me)
+    elif kind == "call_reject":
+        if me.code == call.callee_code and call.callee is None:
+            await _end_call(call, "rejected", by=me)
+    elif kind == "call_hangup":
+        if me is call.caller and call.callee is None:
+            await _end_call(call, "cancelled", by=me)
+        elif _peer_conn(call, me) is not None:
+            await _end_call(call, "hangup", by=me)
+    elif kind == "call_signal":
+        peer = _peer_conn(call, me)
+        data = msg.get("data")
+        if peer is not None and isinstance(data, dict) and len(json.dumps(data)) <= 16_000:
+            await peer.send_json({"type": "call_signal", "call_id": call_id, "data": data})
+
+
+async def _call_conn_gone(me: Conn) -> None:
+    """Socket putus: panggilan yang melibatkan PC ini berakhir."""
+    for call in list(CALLS.values()):
+        if me is call.caller or me is call.callee:
+            await _end_call(call, "disconnected", by=me)
 
 
 # ---------- REST ----------

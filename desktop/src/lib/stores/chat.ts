@@ -153,9 +153,17 @@ export function fmtDuration(sec: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
+/** Teks riwayat panggilan: "📞 Panggilan suara · 2:31" / tak terjawab / ditolak. */
+export function callLabel(body: string): string {
+  if (body === "missed") return "📞 Panggilan tak terjawab";
+  if (body === "rejected") return "📞 Panggilan ditolak";
+  return `📞 Panggilan suara · ${fmtDuration(Number(body) || 0)}`;
+}
+
 /** Cuplikan satu baris untuk daftar chat & popup alert. */
 export function messagePreview(m: { kind: string; body: string; file_name: string | null }): string {
   if (m.kind === "voice") return `🎤 Voice note (${fmtDuration(Number(m.body) || 0)})`;
+  if (m.kind === "call") return callLabel(m.body);
   if (m.kind === "file") return "📎 " + (m.file_name ?? "file") + (m.body ? " — " + m.body : "");
   return m.body;
 }

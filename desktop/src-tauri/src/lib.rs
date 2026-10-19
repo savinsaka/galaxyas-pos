@@ -299,6 +299,7 @@ pub fn run() {
             chat::chat_delete_contact,
             chat::chat_open_file,
             chat::chat_mark_read,
+            chat::chat_call,
             chat::chat_read_file,
             commands::save_relay_settings,
             commands::set_relay_enabled,

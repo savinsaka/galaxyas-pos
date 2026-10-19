@@ -176,6 +176,7 @@ export const RIBBON: RibbonCategory[] = [
         label: "Chat Toko",
         actions: [
           { key: "chat", label: "Chat", icon: "💬", viewKey: "chat", title: "Chat Toko", singleton: true },
+          { key: "voice-call", label: "Voice Call", icon: "📞", viewKey: "voice-call", title: "Voice Call", singleton: true },
         ],
       },
     ],

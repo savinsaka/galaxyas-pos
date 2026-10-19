@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     app_update_deadline: datetime | None = None
     app_update_message: str = ""
 
+    # TURN (coturn di VPS) untuk Voice Call. Kosong = hanya STUN (panggilan
+    # bisa gagal tersambung di jaringan CGNAT). `turn_urls` dipisah koma.
+    turn_secret: str = ""
+    turn_urls: str = ""
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

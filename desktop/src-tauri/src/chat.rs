@@ -366,6 +366,10 @@ async fn session(
                             Some("receipt") => {
                                 let _ = app.emit("chat://receipt", v);
                             }
+                            // Sinyal Voice Call (dering, angkat, SDP/ICE, selesai).
+                            Some(t) if t.starts_with("call_") => {
+                                let _ = app.emit("chat://call", v);
+                            }
                             Some("error") => {
                                 if v.get("fatal").and_then(Value::as_bool) == Some(true) {
                                     let m = v.get("message").and_then(Value::as_str).unwrap_or("ditolak server");
@@ -563,6 +567,23 @@ pub async fn chat_send(
         .await
         .map_err(|_| AppError::Other("Chat belum tersambung.".into()))?;
     Ok(client_id)
+}
+
+/// Jenis sinyal Voice Call yang boleh dikirim frontend ke server.
+const CALL_TYPES: [&str; 5] = ["call_invite", "call_accept", "call_reject", "call_hangup", "call_signal"];
+
+/// Teruskan sinyal Voice Call ke server lewat socket chat. Suaranya sendiri
+/// lewat WebRTC di webview, bukan lewat sini.
+#[tauri::command]
+pub async fn chat_call(state: State<'_, ChatState>, msg: Value) -> AppResult<()> {
+    let kind = msg.get("type").and_then(Value::as_str).unwrap_or_default();
+    if !CALL_TYPES.contains(&kind) {
+        return Err(AppError::Other("Sinyal panggilan tidak dikenal.".into()));
+    }
+    sender(&state)?
+        .send(Outgoing::Text(msg.to_string()))
+        .await
+        .map_err(|_| AppError::Other("Chat belum tersambung.".into()))
 }
 
 /// Tandai pesan dari `peer` sampai id `up_to` sudah dibaca (✓✓ biru di

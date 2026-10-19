@@ -25,7 +25,9 @@
     peerOf,
     refreshHistory,
     resolveName,
+    callLabel,
   } from "$lib/stores/chat";
+  import { call, startCall } from "$lib/stores/call";
   import { activeTabId } from "$lib/stores/tabs";
   import type { ChatMessage, ChatOutgoing } from "$lib/types";
   import VoicePlayer from "$lib/components/VoicePlayer.svelte";
@@ -483,6 +485,9 @@
               <button class="icon-btn" title={current.saved ? "Ubah nama kontak" : "Simpan kontak"}
                 onclick={() => { renameValue = current?.name ?? ""; renaming = true; }}>{current.saved ? "✏️" : "💾"}</button>
               {#if current.saved}<button class="icon-btn" title="Hapus kontak" onclick={deleteCurrent}>🗑️</button>{/if}
+              <button class="icon-btn call-icon" title="Voice call {current.name}"
+                disabled={!$chatStatus?.connected || ($call.phase !== "idle" && $call.phase !== "ended")}
+                onclick={() => current && startCall(current.code)}>📞</button>
             {/if}
           </header>
 
@@ -494,7 +499,9 @@
                   {@const m = it.msg}
                   <div class="bubble" class:mine={it.mine} class:alert={m.push}>
                     {#if m.push}<div class="alert-tag">🔔 Alert</div>{/if}
-                    {#if m.kind === "voice"}
+                    {#if m.kind === "call"}
+                      <span class="body call-log" class:missed={m.body === "missed" && !it.mine}>{callLabel(m.body)}</span>
+                    {:else if m.kind === "voice"}
                       {#if m.local_path}
                         <VoicePlayer path={m.local_path} duration={Number(m.body) || 0} mine={it.mine} />
                       {:else}
@@ -724,6 +731,19 @@
   }
   .icon-btn:hover:not(:disabled) {
     background: var(--c-soft);
+  }
+  .icon-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+  .call-icon {
+    margin-left: auto;
+  }
+  .call-log {
+    font-weight: 600;
+  }
+  .call-log.missed {
+    color: var(--danger);
   }
   .add {
     display: flex;

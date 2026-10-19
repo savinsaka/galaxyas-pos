@@ -107,7 +107,7 @@ class ChatMessage(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     from_code: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     to_code: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
-    kind: Mapped[str] = mapped_column(String(8), nullable=False)  # "text" | "file" | "voice"
+    kind: Mapped[str] = mapped_column(String(8), nullable=False)  # "text" | "file" | "voice" | "call"
     body: Mapped[str] = mapped_column(Text, default="", nullable=False)
     file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
