@@ -8,6 +8,7 @@ import Migrasi from "./Migrasi.svelte";
 import DiskonPeriodik from "./DiskonPeriodik.svelte";
 import DaftarMerek from "./DaftarMerek.svelte";
 import SyncCenter from "./SyncCenter.svelte";
+import SsotData from "./SsotData.svelte";
 import DaftarKasir from "./DaftarKasir.svelte";
 import EditKasir from "./EditKasir.svelte";
 import KasirPOS from "./KasirPOS.svelte";
@@ -44,6 +45,7 @@ export const VIEW_REGISTRY: Record<string, Component<any>> = {
   diskon: DiskonPeriodik,
   "daftar-merek": DaftarMerek,
   sync: SyncCenter,
+  ssot: SsotData,
   "daftar-kasir": DaftarKasir,
   "edit-kasir": EditKasir,
   "kasir-pos": KasirPOS,

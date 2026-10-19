@@ -12,23 +12,34 @@
   let lastResult = $state<SyncResult | null>(null);
   let undoInfo = $state<SyncUndoInfo | null>(null);
 
-  // Merek yang dikecualikan dari Hard Push / Hard Pull (setting JSON array).
+  // Filter merek Hard Push / Hard Pull. Mode "exclude" = semua merek kecuali
+  // daftar pengecualian; "include" = hanya merek yang dipilih. Dua daftar
+  // disimpan terpisah (setting JSON array) supaya ganti mode tidak menghapus isinya.
+  type BrandMode = "exclude" | "include";
   let allBrands = $state<Brand[]>([]);
+  let brandMode = $state<BrandMode>("exclude");
   let excludeBrands = $state<Set<string>>(new Set());
-  let excludeLoaded = false;
+  let includeBrands = $state<Set<string>>(new Set());
+  let filterLoaded = $state(false);
   let hardConfirm = $state<"hard_push" | "hard_pull" | null>(null);
+
+  function parseBrandList(raw: string | undefined): Set<string> {
+    try {
+      return new Set(JSON.parse(raw || "[]"));
+    } catch {
+      return new Set();
+    }
+  }
 
   async function load() {
     try {
       undoInfo = await api.syncUndoInfo();
       settings = await api.getSettings();
-      if (!excludeLoaded) {
-        try {
-          excludeBrands = new Set(JSON.parse(settings.hard_sync_exclude_brands || "[]"));
-        } catch {
-          excludeBrands = new Set();
-        }
-        excludeLoaded = true;
+      if (!filterLoaded) {
+        brandMode = settings.hard_sync_brand_mode === "include" ? "include" : "exclude";
+        excludeBrands = parseBrandList(settings.hard_sync_exclude_brands);
+        includeBrands = parseBrandList(settings.hard_sync_include_brands);
+        filterLoaded = true;
       }
     } catch (e) {
       toastError(e);
@@ -43,19 +54,26 @@
     }
   });
 
-  // Simpan otomatis tiap kali daftar pengecualian berubah.
-  let lastSavedExclude = "";
-  $effect(() => {
-    const json = JSON.stringify([...excludeBrands]);
-    if (!excludeLoaded) return;
-    if (!lastSavedExclude) {
-      lastSavedExclude = json;
-      return;
-    }
-    if (json === lastSavedExclude) return;
-    lastSavedExclude = json;
-    api.updateSetting("hard_sync_exclude_brands", json).catch(toastError);
-  });
+  // Simpan otomatis tiap kali mode / daftar merek berubah.
+  function autoSave(key: string, value: () => string) {
+    let last: string | null = null;
+    $effect(() => {
+      const v = value();
+      if (!filterLoaded) return;
+      if (last === null) {
+        last = v;
+        return;
+      }
+      if (v === last) return;
+      last = v;
+      api.updateSetting(key, v).catch(toastError);
+    });
+  }
+  autoSave("hard_sync_brand_mode", () => brandMode);
+  autoSave("hard_sync_exclude_brands", () => JSON.stringify([...excludeBrands]));
+  autoSave("hard_sync_include_brands", () => JSON.stringify([...includeBrands]));
+
+  const includeEmpty = $derived(brandMode === "include" && includeBrands.size === 0);
 
   async function saveField(key: string) {
     try {
@@ -179,12 +197,28 @@
         Mengabaikan aturan "siapa terakhir diubah". Data yang sama <strong>ditimpa</strong>;
         data yang hanya ada di satu sisi <strong>tidak dihapus</strong>.
       </p>
-      <div class="row" style="gap:0.5rem;">
-        <button class="btn-danger" style="flex:1; padding:0.7rem;" disabled={syncing} onclick={() => (hardConfirm = "hard_push")}>⏫ Hard Push</button>
-        <button class="btn-danger" style="flex:1; padding:0.7rem;" disabled={syncing} onclick={() => (hardConfirm = "hard_pull")}>⏬ Hard Pull</button>
+      <div class="seg" role="group" aria-label="Filter merek">
+        <button type="button" class:active={brandMode === "exclude"} onclick={() => (brandMode = "exclude")}>
+          Semua merek, kecuali…
+        </button>
+        <button type="button" class:active={brandMode === "include"} onclick={() => (brandMode = "include")}>
+          Hanya merek terpilih
+        </button>
       </div>
-      <label style="margin-top:0.8rem;">Pengecualian merek (tidak ikut Hard Push/Pull)</label>
-      <BrandMultiSelect {allBrands} bind:selected={excludeBrands} placeholder="Tambah merek dikecualikan…" />
+      {#if brandMode === "exclude"}
+        <label style="margin-top:0.6rem;">Pengecualian merek (tidak ikut Hard Push/Pull)</label>
+        <BrandMultiSelect {allBrands} bind:selected={excludeBrands} placeholder="Tambah merek dikecualikan…" />
+      {:else}
+        <label style="margin-top:0.6rem;">Merek yang ikut Hard Push/Pull (merek lain tidak disentuh)</label>
+        <BrandMultiSelect {allBrands} bind:selected={includeBrands} placeholder="Tambah merek yang ikut…" />
+        {#if includeEmpty}
+          <div class="text-dim" style="font-size:0.78rem; margin-top:0.3rem;">Pilih minimal satu merek.</div>
+        {/if}
+      {/if}
+      <div class="row" style="gap:0.5rem; margin-top:0.8rem;">
+        <button class="btn-danger" style="flex:1; padding:0.7rem;" disabled={syncing || includeEmpty} onclick={() => (hardConfirm = "hard_push")}>⏫ Hard Push</button>
+        <button class="btn-danger" style="flex:1; padding:0.7rem;" disabled={syncing || includeEmpty} onclick={() => (hardConfirm = "hard_pull")}>⏬ Hard Pull</button>
+      </div>
     </div>
 
     {#if syncing}<p class="text-dim">Menyinkronkan…</p>{/if}
@@ -200,7 +234,7 @@
           <div class="sync-log-head">📋 Detail barang ({lastResult.log.length})</div>
           <div class="sync-log">
             {#each lastResult.log as l}
-              <div class="log-row log-{l.action === 'Diterapkan' || l.action.startsWith('Dikembalikan') ? 'applied' : l.action === 'Dikirim' ? 'sent' : l.action === 'Dikecualikan' || l.action.startsWith('Dihapus') ? 'excluded' : 'skipped'}">
+              <div class="log-row log-{l.action === 'Diterapkan' || l.action.startsWith('Dikembalikan') ? 'applied' : l.action === 'Dikirim' ? 'sent' : l.action === 'Dikecualikan' || l.action === 'Tidak dipilih' || l.action.startsWith('Dihapus') ? 'excluded' : 'skipped'}">
                 <span>{l.name}</span>
                 <span class="log-action">{l.action}</span>
               </div>
@@ -219,20 +253,22 @@
       {#if hardConfirm === "hard_push"}
         <h2>Hard Push ke SSoT?</h2>
         <p>
-          <strong>SEMUA</strong> data barang di PC ini akan dikirim dan <strong>MENIMPA</strong> data yang sama
+          <strong>{brandMode === "include" ? "Semua barang bermerek terpilih" : "SEMUA"}</strong> data barang di PC ini akan dikirim dan <strong>MENIMPA</strong> data yang sama
           di SSoT (server), walaupun data di server lebih baru. Toko lain akan ikut menerima perubahan ini
           saat Sync In.
         </p>
       {:else}
         <h2>Hard Pull dari SSoT?</h2>
         <p>
-          <strong>SEMUA</strong> data barang di PC ini akan <strong>DITIMPA</strong> dengan data dari SSoT
+          <strong>{brandMode === "include" ? "Semua barang bermerek terpilih" : "SEMUA"}</strong> data barang di PC ini akan <strong>DITIMPA</strong> dengan data dari SSoT
           (server), termasuk perubahan lokal yang belum dikirim.
         </p>
       {/if}
       <p class="text-dim" style="font-size:0.82rem;">
         Barang yang hanya ada di satu sisi tidak dihapus. Stok &amp; transaksi tidak terpengaruh.
-        {#if excludeBrands.size > 0}
+        {#if brandMode === "include"}
+          <br />Hanya merek: <strong>{[...includeBrands].join(", ")}</strong>
+        {:else if excludeBrands.size > 0}
           <br />Dikecualikan: <strong>{[...excludeBrands].join(", ")}</strong>
         {:else}
           <br />Tidak ada merek yang dikecualikan.
@@ -255,6 +291,10 @@
   .undo-info { font-size: 0.78rem; }
   .hard-box { border: 1px dashed var(--danger); border-radius: 8px; padding: 0.8rem; margin-bottom: 1rem; }
   .hard-head { font-weight: 700; color: var(--danger); margin-bottom: 0.3rem; }
+  .seg { display: flex; border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; }
+  .seg button { flex: 1; border: none; border-radius: 0; background: var(--white); color: var(--text-dim); padding: 0.45rem 0.5rem; font-size: 0.8rem; }
+  .seg button + button { border-left: 1px solid var(--border-strong); }
+  .seg button.active { background: var(--danger); color: #fff; font-weight: 650; }
   .hard-confirm { max-width: 460px; text-align: center; }
   .hard-confirm p { margin: 0.4rem 0 0.8rem; }
   .hard-icon { font-size: 2.2rem; }

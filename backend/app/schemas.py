@@ -48,9 +48,23 @@ class HardPushRequest(PushRequest):
 
     `exclude_brands` = merek yang dikecualikan; produk yang di SSoT bermerek
     salah satu dari ini tidak ikut ditimpa (dibanding case-insensitive).
+    `include_brands` (mode "hanya merek terpilih") = kebalikannya: produk SSoT
+    yang sudah ada hanya ditimpa bila mereknya ada di daftar ini.
     """
 
     exclude_brands: list[str] = []
+    include_brands: list[str] | None = None
+
+
+class SsotProductIn(ProductBase):
+    """Satu barang yang ditambah/diubah langsung di SSoT. `id` kosong = baru."""
+
+    id: str | None = None
+
+
+class SsotSaveRequest(BaseModel):
+    store_id: str = Field(..., description="Identitas toko yang mengubah")
+    product: SsotProductIn
 
 
 class PushResultItem(BaseModel):

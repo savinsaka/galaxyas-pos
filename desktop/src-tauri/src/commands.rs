@@ -12,7 +12,7 @@ use crate::models::{
     BrandSalesRow, CloseShiftInput, Customer, CustomerInput, DiscountPeriod, DiscountPeriodInput,
     Expense, ExpenseInput, OpenShiftInput, Product, ProductInput, ProductSalesRow,
     LocalUndoItem, ProductWithStock, SaleInput, ServerUndoItem, Shift, StockMovement,
-    StockMovementInput, StoreInfo, SyncLogEntry, SyncResult, SyncUndoInfo, SyncUndoSnapshot,
+    SsotSaveResult, StockMovementInput, StoreInfo, SyncLogEntry, SyncResult, SyncUndoInfo, SyncUndoSnapshot,
     TransactionDetail, User, UserInput,
 };
 use crate::stores;
@@ -1405,21 +1405,27 @@ pub async fn sync_all(state: State<'_, AppState>) -> AppResult<SyncResult> {
 //
 // Mengabaikan Last Write Wins: hard push menimpa SSoT dengan data lokal,
 // hard pull menimpa lokal dengan data SSoT. Keduanya TIDAK menghapus produk
-// yang cuma ada di satu sisi. Merek yang dikecualikan (setting
-// `hard_sync_exclude_brands`, JSON array) dilewati di kedua arah.
+// yang cuma ada di satu sisi. Filter merek (setting `hard_sync_brand_mode`:
+// "exclude" = semua kecuali `hard_sync_exclude_brands`, "include" = hanya
+// `hard_sync_include_brands`) berlaku di kedua arah.
 
-fn read_hard_sync_excludes(state: &State<'_, AppState>) -> AppResult<Vec<String>> {
+fn read_hard_sync_filter(state: &State<'_, AppState>) -> AppResult<(db::BrandFilter, Vec<String>)> {
     let conn = state.lock()?;
-    let raw = db::get_setting(&conn, "hard_sync_exclude_brands")?.unwrap_or_default();
-    Ok(serde_json::from_str::<Vec<String>>(&raw).unwrap_or_default())
+    let include = db::get_setting(&conn, "hard_sync_brand_mode")?.as_deref() == Some("include");
+    let key = if include { "hard_sync_include_brands" } else { "hard_sync_exclude_brands" };
+    let raw = db::get_setting(&conn, key)?.unwrap_or_default();
+    let names = serde_json::from_str::<Vec<String>>(&raw).unwrap_or_default();
+    let filter = db::BrandFilter::new(include, &names);
+    if include && filter.brands.is_empty() {
+        return Err(AppError::Other("Pilih minimal satu merek untuk Hard Sync.".into()));
+    }
+    Ok((filter, names))
 }
 
 #[tauri::command]
 pub async fn sync_hard_push(state: State<'_, AppState>) -> AppResult<SyncResult> {
     let (server_url, store_id, _) = read_sync_config(&state)?;
-    let excludes = read_hard_sync_excludes(&state)?;
-    let excluded: std::collections::HashSet<String> =
-        excludes.iter().map(|b| db::brand_key(Some(b))).filter(|b| !b.is_empty()).collect();
+    let (filter, brand_names) = read_hard_sync_filter(&state)?;
 
     let (all, dirty_ids): (Vec<Product>, std::collections::HashSet<String>) = {
         let conn = state.lock()?;
@@ -1427,7 +1433,7 @@ pub async fn sync_hard_push(state: State<'_, AppState>) -> AppResult<SyncResult>
         (db::get_all_products_for_sync(&conn)?, dirty)
     };
     let (to_send, local_excluded): (Vec<Product>, Vec<Product>) =
-        all.into_iter().partition(|p| !excluded.contains(&db::brand_key(p.brand.as_deref())));
+        all.into_iter().partition(|p| filter.allows(p.brand.as_deref()));
 
     if to_send.is_empty() {
         return Ok(SyncResult {
@@ -1438,7 +1444,9 @@ pub async fn sync_hard_push(state: State<'_, AppState>) -> AppResult<SyncResult>
     }
 
     let server_before = fetch_server_products(&server_url, &store_id).await?;
-    let resp = sync::hard_push(&server_url, &store_id, &to_send, &excludes).await?;
+    let (excludes, includes): (&[String], Option<&[String]>) =
+        if filter.include { (&[], Some(&brand_names)) } else { (&brand_names, None) };
+    let resp = sync::hard_push(&server_url, &store_id, &to_send, excludes, includes).await?;
     let server_undo = server_undo_items(&to_send, &resp, &server_before, &dirty_ids);
 
     let names: std::collections::HashMap<&str, &str> =
@@ -1452,7 +1460,7 @@ pub async fn sync_hard_push(state: State<'_, AppState>) -> AppResult<SyncResult>
                 done_ids.push(r.id.clone());
                 "Dikirim"
             }
-            "skipped_brand" => "Dikecualikan",
+            "skipped_brand" => filter.skip_label(),
             _ => "Dilewati",
         };
         log.push(SyncLogEntry { id: r.id.clone(), name, action: action.into() });
@@ -1460,7 +1468,7 @@ pub async fn sync_hard_push(state: State<'_, AppState>) -> AppResult<SyncResult>
     log.extend(local_excluded.iter().map(|p| SyncLogEntry {
         id: p.id.clone(),
         name: p.name.clone(),
-        action: "Dikecualikan".into(),
+        action: filter.skip_label().into(),
     }));
 
     {
@@ -1475,8 +1483,10 @@ pub async fn sync_hard_push(state: State<'_, AppState>) -> AppResult<SyncResult>
         pulled: 0,
         skipped,
         message: format!(
-            "Hard push selesai: {} produk menimpa SSoT, {} dikecualikan (merek).",
-            resp.applied, skipped
+            "Hard push selesai: {} produk menimpa SSoT, {} {} (merek).",
+            resp.applied,
+            skipped,
+            filter.skip_label().to_lowercase()
         ),
         log,
     })
@@ -1485,14 +1495,14 @@ pub async fn sync_hard_push(state: State<'_, AppState>) -> AppResult<SyncResult>
 #[tauri::command]
 pub async fn sync_hard_pull(state: State<'_, AppState>) -> AppResult<SyncResult> {
     let (server_url, store_id, last_pull) = read_sync_config(&state)?;
-    let excludes = read_hard_sync_excludes(&state)?;
+    let (filter, _) = read_hard_sync_filter(&state)?;
 
     // Full pull (tanpa `since`) — semua produk SSoT.
     let resp = sync::pull(&server_url, &store_id, None).await?;
 
     let (applied, skipped, log, local_undo) = {
         let conn = state.lock()?;
-        let res = db::apply_pulled_products_forced(&conn, &resp.products, &excludes)?;
+        let res = db::apply_pulled_products_forced(&conn, &resp.products, &filter)?;
         db::set_setting(&conn, "last_pull_at", &Utc::now().to_rfc3339())?;
         res
     };
@@ -1503,11 +1513,43 @@ pub async fn sync_hard_pull(state: State<'_, AppState>) -> AppResult<SyncResult>
         skipped,
         pushed: 0,
         message: format!(
-            "Hard pull selesai: {} produk lokal disamakan dengan SSoT, {} dikecualikan (merek).",
-            applied, skipped
+            "Hard pull selesai: {} produk lokal disamakan dengan SSoT, {} {} (merek).",
+            applied,
+            skipped,
+            filter.skip_label().to_lowercase()
         ),
         log,
     })
+}
+
+// ---------- Layar SSoT ----------
+
+/// Semua barang di SSoT (tanpa tombstone), urut nama.
+#[tauri::command]
+pub async fn ssot_list_products(state: State<'_, AppState>) -> AppResult<Vec<Product>> {
+    let (server_url, _, _) = read_sync_config(&state)?;
+    sync::ssot_list(&server_url).await
+}
+
+/// Tambah/ubah satu barang langsung di SSoT. `apply_local` = hasilnya juga
+/// diterapkan ke SQLite PC ini (seperti hasil pull). Gagal di lokal tidak
+/// membatalkan simpan di SSoT — dikembalikan sebagai `local_error`.
+#[tauri::command]
+pub async fn ssot_save_product(
+    state: State<'_, AppState>,
+    input: ProductInput,
+    apply_local: bool,
+) -> AppResult<SsotSaveResult> {
+    let (server_url, store_id, _) = read_sync_config(&state)?;
+    let product = sync::ssot_save(&server_url, &store_id, &input).await?;
+    let mut local_error = None;
+    if apply_local {
+        let conn = state.lock()?;
+        if let Err(e) = db::apply_pulled_products_forced(&conn, std::slice::from_ref(&product), &db::BrandFilter::all()) {
+            local_error = Some(e.to_string());
+        }
+    }
+    Ok(SsotSaveResult { product, local_error })
 }
 
 // ---------- Undo sync terakhir ----------
@@ -1561,7 +1603,7 @@ pub async fn sync_undo(state: State<'_, AppState>) -> AppResult<SyncResult> {
             local_marks.push((a.id.clone(), it.local_dirty, it.local_updated_at.clone()));
         }
         if !to_send.is_empty() {
-            let resp = sync::hard_push(&server_url, &store_id, &to_send, &[]).await?;
+            let resp = sync::hard_push(&server_url, &store_id, &to_send, &[], None).await?;
             server_restored = resp.applied;
             let conn = state.lock()?;
             db::mark_products_server_restored(&conn, &local_marks, &resp.server_time)?;

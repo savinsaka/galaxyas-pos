@@ -52,10 +52,20 @@ export const RIBBON: RibbonCategory[] = [
           { key: "daftar-pelanggan", label: "Pelanggan", icon: "🧑‍🤝‍🧑", viewKey: "daftar-pelanggan", title: "Manajemen Pelanggan", singleton: true },
         ],
       },
+    ],
+  },
+  {
+    // Sync punya tab sendiri. Izinnya tetap ikut modul "master" supaya akun
+    // yang selama ini bisa sync tidak kehilangan akses.
+    key: "sync",
+    label: "Sync",
+    perm: "master",
+    groups: [
       {
-        label: "Server",
+        label: "Sinkronisasi",
         actions: [
           { key: "sync", label: "Sync In / Out", icon: "🔄", viewKey: "sync", title: "Sinkronisasi", singleton: true },
+          { key: "ssot", label: "SSoT", icon: "🗄️", viewKey: "ssot", title: "Data SSoT", singleton: true },
         ],
       },
     ],

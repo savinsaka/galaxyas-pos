@@ -122,6 +122,13 @@ export interface SyncUndoInfo {
   server_count: number;
 }
 
+/** Hasil simpan satu barang di layar SSoT. */
+export interface SsotSaveResult {
+  product: Product;
+  /** Terisi bila tersimpan di SSoT tapi gagal diterapkan ke PC ini. */
+  local_error: string | null;
+}
+
 export type PaymentMethod = "Tunai" | "QRIS" | "Kombinasi" | "Kartu";
 
 export interface Brand {

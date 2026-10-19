@@ -41,6 +41,7 @@ import type {
   ServerInput,
   ServerPath,
   SetupCode,
+  SsotSaveResult,
   Shift,
   StockMovement,
   StockMovementInput,
@@ -260,6 +261,9 @@ export const api = {
   syncHardPull: () => invoke<SyncResult>("sync_hard_pull"),
   syncUndoInfo: () => invoke<SyncUndoInfo | null>("sync_undo_info"),
   syncUndo: () => invoke<SyncResult>("sync_undo"),
+  ssotListProducts: () => invoke<Product[]>("ssot_list_products"),
+  ssotSaveProduct: (input: ProductInput, applyLocal: boolean) =>
+    invoke<SsotSaveResult>("ssot_save_product", { input, applyLocal }),
 
   // Bridge: Pull dari app mobile (galaxyas-mobile, fase 6) — server & auth
   // TERPISAH dari Sinkronisasi di atas (itu ke server POS, ini ke server mobile).

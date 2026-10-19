@@ -143,12 +143,18 @@ def hard_push_products(payload: HardPushRequest, db: Session = Depends(get_db)) 
 
     - Produk yang dikirim selalu menimpa yang ada di SSoT (atau dibuat baru).
     - Produk SSoT yang tidak ikut dikirim TIDAK dihapus.
-    - Produk yang di SSoT bermerek dikecualikan (`exclude_brands`) dilewati.
+    - Produk yang di SSoT bermerek dikecualikan (`exclude_brands`) — atau,
+      kalau `include_brands` diisi, bermerek di luar daftar itu — dilewati.
     - `updated_at` diisi waktu server supaya toko lain ikut menarik perubahan
       ini lewat Delta Sync biasa (kalau pakai `updated_at` klien yang lebih
       tua, delta pull toko lain tidak akan melihatnya).
     """
     excluded = {b.strip().lower() for b in payload.exclude_brands if b.strip()}
+    included = (
+        {b.strip().lower() for b in payload.include_brands if b.strip()}
+        if payload.include_brands is not None
+        else None
+    )
     now = datetime.now(timezone.utc)
     results: list[PushResultItem] = []
     applied = 0
@@ -177,7 +183,8 @@ def hard_push_products(payload: HardPushRequest, db: Session = Depends(get_db)) 
             results.append(PushResultItem(id=incoming.id, status="created"))
             continue
 
-        if (existing.brand or "").strip().lower() in excluded:
+        existing_brand = (existing.brand or "").strip().lower()
+        if existing_brand in excluded or (included is not None and existing_brand not in included):
             skipped += 1
             results.append(PushResultItem(id=incoming.id, status="skipped_brand"))
             continue
@@ -204,6 +211,7 @@ def hard_push_products(payload: HardPushRequest, db: Session = Depends(get_db)) 
             detail=(
                 f"HARD push received={len(payload.products)} applied={applied} "
                 f"skipped={skipped} exclude={sorted(excluded)}"
+                + (f" include={sorted(included)}" if included is not None else "")
             ),
         )
     )

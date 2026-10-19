@@ -255,6 +255,8 @@ pub fn run() {
             commands::sync_all,
             commands::sync_hard_push,
             commands::sync_hard_pull,
+            commands::ssot_list_products,
+            commands::ssot_save_product,
             commands::sync_undo_info,
             commands::sync_undo,
             commands::bridge_list_pending,

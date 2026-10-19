@@ -1197,24 +1197,59 @@ pub fn apply_pulled_products(
     conn: &Connection,
     incoming: &[Product],
 ) -> AppResult<AppliedPull> {
-    apply_products(conn, incoming, false, &[])
+    apply_products(conn, incoming, false, &BrandFilter::all())
 }
 
 /// Hard pull: terapkan SEMUA produk dari server tanpa Last Write Wins
 /// (lokal disamakan persis dengan SSoT). Produk lokal yang tidak ada di
 /// server tidak dihapus. Produk yang merek-nya (versi server ATAU lokal)
-/// ada di `exclude_brands` dilewati.
+/// tidak lolos `filter` dilewati.
 pub fn apply_pulled_products_forced(
     conn: &Connection,
     incoming: &[Product],
-    exclude_brands: &[String],
+    filter: &BrandFilter,
 ) -> AppResult<AppliedPull> {
-    apply_products(conn, incoming, true, exclude_brands)
+    apply_products(conn, incoming, true, filter)
 }
 
-/// Normalisasi nama merek untuk pencocokan pengecualian hard sync.
+/// Normalisasi nama merek untuk pencocokan filter merek hard sync.
 pub fn brand_key(brand: Option<&str>) -> String {
     brand.unwrap_or("").trim().to_lowercase()
+}
+
+/// Filter merek Hard Push / Hard Pull. `include = false`: semua merek kecuali
+/// `brands`; `include = true`: hanya merek di `brands`. Merek yang tidak lolos
+/// tidak disentuh di sisi mana pun.
+#[derive(Debug, Clone, Default)]
+pub struct BrandFilter {
+    pub include: bool,
+    pub brands: std::collections::HashSet<String>,
+}
+
+impl BrandFilter {
+    /// Tanpa filter (dipakai pull biasa).
+    pub fn all() -> Self {
+        Self::default()
+    }
+
+    pub fn new(include: bool, names: &[String]) -> Self {
+        let brands = names.iter().map(|b| brand_key(Some(b))).filter(|b| !b.is_empty()).collect();
+        Self { include, brands }
+    }
+
+    pub fn allows(&self, brand: Option<&str>) -> bool {
+        let key = brand_key(brand);
+        if self.include {
+            self.brands.contains(&key)
+        } else {
+            key.is_empty() || !self.brands.contains(&key)
+        }
+    }
+
+    /// Label log untuk barang yang tidak lolos filter.
+    pub fn skip_label(&self) -> &'static str {
+        if self.include { "Tidak dipilih" } else { "Dikecualikan" }
+    }
 }
 
 /// Hasil pull yang diterapkan ke lokal: (diterapkan, dilewati, log, cadangan undo).
@@ -1224,13 +1259,9 @@ fn apply_products(
     conn: &Connection,
     incoming: &[Product],
     force: bool,
-    exclude_brands: &[String],
+    filter: &BrandFilter,
 ) -> AppResult<AppliedPull> {
-    let excluded: std::collections::HashSet<String> = exclude_brands
-        .iter()
-        .map(|b| brand_key(Some(b)))
-        .filter(|b| !b.is_empty())
-        .collect();
+    let filtered = filter.include || !filter.brands.is_empty();
     let tx = conn.unchecked_transaction()?;
     let conn: &Connection = &tx;
     let mut applied = 0i64;
@@ -1246,13 +1277,14 @@ fn apply_products(
             )
             .optional()?;
 
-        if !excluded.is_empty() {
-            let local_brand = local.as_ref().and_then(|l| l.2.as_deref());
-            if excluded.contains(&brand_key(p.brand.as_deref()))
-                || excluded.contains(&brand_key(local_brand))
-            {
+        if filtered {
+            let local_ok = match &local {
+                Some(l) => filter.allows(l.2.as_deref()),
+                None => true,
+            };
+            if !filter.allows(p.brand.as_deref()) || !local_ok {
                 skipped += 1;
-                log.push(SyncLogEntry { id: p.id.clone(), name: p.name.clone(), action: "Dikecualikan".into() });
+                log.push(SyncLogEntry { id: p.id.clone(), name: p.name.clone(), action: filter.skip_label().into() });
                 continue;
             }
         }
@@ -3639,9 +3671,34 @@ mod tests {
         let a = produk(&conn, "OMG A", "OMG", 0.0, true);
         conn.execute("UPDATE products SET dirty = 0, ever_synced = 1, updated_at = '2026-08-01T00:00:00Z'", []).unwrap();
         let sama = get_product_row(&conn, &a).unwrap().unwrap().product;
-        let (applied, _, _, undo) = apply_pulled_products_forced(&conn, &[sama], &[]).unwrap();
+        let (applied, _, _, undo) = apply_pulled_products_forced(&conn, &[sama], &BrandFilter::all()).unwrap();
         assert_eq!(applied, 1);
         assert!(undo.is_empty());
+    }
+
+    #[test]
+    fn hard_pull_mode_pilih_merek_tidak_menyentuh_merek_lain() {
+        let conn = test_db();
+        let omg = produk(&conn, "OMG A", "OMG", 0.0, true);
+        let lain = produk(&conn, "Lain A", "LAIN", 0.0, true);
+        // Merek lokal LAIN tapi di SSoT sudah jadi OMG → tetap tidak disentuh.
+        let pindah = produk(&conn, "Pindah", "LAIN", 0.0, true);
+        let masuk = vec![
+            server_produk(&omg, "OMG A", 21000.0, "2026-09-29T03:00:00Z"),
+            Product { brand: Some("LAIN".into()), ..server_produk(&lain, "Lain A", 21000.0, "2026-09-29T03:00:00Z") },
+            server_produk(&pindah, "Pindah", 21000.0, "2026-09-29T03:00:00Z"),
+            server_produk("baru-omg", "OMG Baru", 18000.0, "2026-09-29T03:00:00Z"),
+        ];
+        let filter = BrandFilter::new(true, &[" omg ".into()]);
+        let (applied, skipped, log, _) = apply_pulled_products_forced(&conn, &masuk, &filter).unwrap();
+        assert_eq!((applied, skipped), (2, 2));
+        assert!(log.iter().any(|l| l.id == lain && l.action == "Tidak dipilih"));
+        assert_eq!(get_product_row(&conn, &omg).unwrap().unwrap().product.sell_price, 21000.0);
+        assert_eq!(get_product_row(&conn, &lain).unwrap().unwrap().product.sell_price, 0.0);
+        assert_eq!(get_product_row(&conn, &pindah).unwrap().unwrap().product.sell_price, 0.0);
+        assert!(get_product_row(&conn, "baru-omg").unwrap().is_some());
+        assert!(!filter.allows(None), "barang tanpa merek tidak ikut mode pilih merek");
+        assert!(BrandFilter::new(false, &["OMG".into()]).allows(None));
     }
 
     #[test]

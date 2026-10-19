@@ -19,6 +19,14 @@ pub struct Product {
     pub updated_at: String,
 }
 
+/// Hasil simpan satu barang di layar SSoT.
+#[derive(Debug, Clone, Serialize)]
+pub struct SsotSaveResult {
+    pub product: Product,
+    /// Terisi bila simpan ke SSoT berhasil tapi penerapan ke PC ini gagal.
+    pub local_error: Option<String>,
+}
+
 /// Produk + info stok (untuk tampilan kasir/persediaan). Stok TIDAK di-sync.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProductWithStock {
