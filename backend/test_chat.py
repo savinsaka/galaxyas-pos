@@ -1,5 +1,5 @@
 """Uji Chat antar toko: auth, teks & push, file (diteruskan, tidak disimpan),
-ekstensi terlarang, toko offline, riwayat & retensi 7 hari, ganti kunci.
+ekstensi terlarang, toko offline, riwayat & retensi 14 hari, ganti kunci.
 
     pip install -r requirements.txt httpx
     python test_chat.py
@@ -86,11 +86,12 @@ with TestClient(app) as client:
         check("tujuan tak terdaftar ditolak", m["type"] == "error" and m["client_id"] == "c2")
 
         # 6. File: diteruskan dengan isi ke tujuan, tanpa isi ke PC pengirim.
-        a.send_json({"type": "file", "to": "toko-002", "name": "laporan.pdf", "client_id": "f1"})
+        a.send_json({"type": "file", "to": "toko-002", "name": "laporan.pdf", "client_id": "f1", "body": " stok gudang "})
         a.send_bytes(b"%PDF-1.4 isi")
         head = b.receive_json()
         data = b.receive_bytes()
         check("file sampai ke tujuan", head["message"]["file_name"] == "laporan.pdf" and data == b"%PDF-1.4 isi")
+        check("caption file ikut terkirim", head["message"]["body"] == "stok gudang")
         check("pengirim dapat konfirmasi file", a.receive_json()["message"]["kind"] == "file")
         a2.receive_json()
 
@@ -124,20 +125,26 @@ with TestClient(app) as client:
         files = db.query(ChatMessage).filter(ChatMessage.kind == "file").all()
         check("file hanya tercatat nama & ukuran", len(files) == 1 and files[0].file_size == 12)
 
-    # 12. Retensi 7 hari.
+    # 12. Retensi 14 hari: 13 hari masih tampil, 15 hari hilang.
     with SessionLocal() as db:
         old = db.query(ChatMessage).first()
-        old.created_at = utcnow() - timedelta(days=8)
+        old.created_at = utcnow() - timedelta(days=13)
         db.commit()
     r = client.get("/api/v1/chat/messages", headers=hdr("toko-001", k1)).json()
-    check("pesan > 7 hari tidak tampil", all(m["body"] != "halo" for m in r["messages"]))
+    check("pesan 13 hari masih tampil", any(m["body"] == "halo" for m in r["messages"]))
+    with SessionLocal() as db:
+        old = db.query(ChatMessage).first()
+        old.created_at = utcnow() - timedelta(days=15)
+        db.commit()
+    r = client.get("/api/v1/chat/messages", headers=hdr("toko-001", k1)).json()
+    check("pesan > 14 hari tidak tampil", all(m["body"] != "halo" for m in r["messages"]))
     chat._last_cleanup = 0
     with client.websocket_connect("/api/v1/chat/ws", headers=hdr("toko-001", k1)) as a:
         a.receive_json()
         a.send_json({"type": "send", "to": "toko-003", "body": "pemicu bersih"})
         a.receive_json()
     with SessionLocal() as db:
-        check("pesan > 7 hari dihapus", db.query(ChatMessage).filter(ChatMessage.body == "halo").count() == 0)
+        check("pesan > 14 hari dihapus", db.query(ChatMessage).filter(ChatMessage.body == "halo").count() == 0)
 
     # 13. Ganti kunci: kunci lama tidak berlaku lagi.
     k1b = admin._kunci_baru("toko-001")

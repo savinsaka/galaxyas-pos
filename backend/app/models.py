@@ -99,7 +99,7 @@ class ChatStore(Base):
 
 
 class ChatMessage(Base):
-    """Pesan chat, disimpan 7 hari. Untuk file hanya nama & ukurannya —
+    """Pesan chat, disimpan 14 hari. Untuk file hanya nama & ukurannya —
     isi file tidak pernah ditulis ke server."""
 
     __tablename__ = "chat_messages"

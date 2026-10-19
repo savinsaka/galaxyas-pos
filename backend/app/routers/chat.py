@@ -3,7 +3,7 @@
 - Identitas = kode toko (sama dengan `store_id` sync) + Kunci Chat dari panel
   admin. Satu toko = satu identitas: semua PC toko itu tersambung dengan kode
   & kunci yang sama dan menerima pesan yang sama.
-- Pesan teks disimpan 7 hari. File **tidak pernah disimpan**: diteruskan
+- Pesan teks disimpan 14 hari. File **tidak pernah disimpan**: diteruskan
   langsung ke PC toko tujuan yang sedang tersambung; yang dicatat hanya nama
   dan ukurannya.
 - Voice call: sinyal WebRTC (dering, angkat, SDP/ICE) lewat socket yang sama;
@@ -38,7 +38,7 @@ from app.models import ChatMessage, ChatStore, utcnow
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 
-RETENTION = timedelta(days=7)
+RETENTION = timedelta(days=14)
 MAX_TEXT = 2000
 MAX_FILE = 10 * 1024 * 1024
 # Voice note: rekaman opus dari GPOS (MediaRecorder), maks 2 menit.
@@ -187,7 +187,7 @@ def _save_message(msg: ChatMessage) -> dict[str, Any]:
     global _last_cleanup
     with SessionLocal() as db:
         db.add(msg)
-        # Pembersihan 7 hari dilakukan sambil lalu (paling sering sejam
+        # Pembersihan 14 hari dilakukan sambil lalu (paling sering sejam
         # sekali) — tidak perlu proses/timer terpisah.
         now = time.time()
         if now - _last_cleanup > 3600:
