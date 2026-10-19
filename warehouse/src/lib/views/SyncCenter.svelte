@@ -4,9 +4,11 @@
   import { formatDateTime } from "$lib/format";
   import { showToast, toastError } from "$lib/toast";
   import type { SyncResult } from "$lib/types";
+  import { syncAccount, refreshSyncAccount, openSyncAkun } from "$lib/stores/syncAccount";
 
   let settings = $state<Record<string, string>>({});
   let syncing = $state(false);
+  const locked = $derived(!$syncAccount?.logged_in);
   let lastResult = $state<SyncResult | null>(null);
 
   async function load() {
@@ -16,16 +18,10 @@
       toastError(e);
     }
   }
-  onMount(load);
-
-  async function saveField(key: string) {
-    try {
-      await api.updateSetting(key, settings[key] ?? "");
-      showToast("Tersimpan.", "success");
-    } catch (e) {
-      toastError(e);
-    }
-  }
+  onMount(() => {
+    refreshSyncAccount();
+    load();
+  });
 
   async function run(kind: "push" | "pull" | "all") {
     syncing = true;
@@ -47,15 +43,17 @@
 
 <div class="grid-2" style="align-items:start;">
   <div class="card">
-    <h2>Koneksi Server</h2>
-    <div style="margin-bottom:0.8rem;">
-      <label>ID Toko</label>
-      <div class="row"><input bind:value={settings.store_id} /><button onclick={() => saveField("store_id")}>Simpan</button></div>
-    </div>
-    <div>
-      <label>URL Server Sync</label>
-      <div class="row"><input bind:value={settings.server_url} placeholder="http://localhost:8000" /><button onclick={() => saveField("server_url")}>Simpan</button></div>
-    </div>
+    <h2>Akun Server</h2>
+    {#if $syncAccount?.logged_in}
+      <div class="text-dim" style="font-size:0.78rem;">Masuk sebagai</div>
+      <div class="mono" style="font-size:1.1rem; font-weight:700;">{$syncAccount.username}</div>
+      {#if $syncAccount.name}<div class="text-dim">{$syncAccount.name}</div>{/if}
+    {:else}
+      <p class="text-dim" style="margin-top:0;">
+        Belum login. Sync In / Out terkunci sampai PC ini login dengan akun anggota.
+      </p>
+      <button class="btn-primary" onclick={openSyncAkun}>🔑 Login di Akun Server</button>
+    {/if}
     <div class="text-dim" style="margin-top:0.8rem; font-size:0.78rem;">
       Pull terakhir: {settings.last_pull_at ? formatDateTime(settings.last_pull_at) : "belum pernah"}
     </div>
@@ -68,9 +66,9 @@
       stok &amp; transaksi tetap lokal.
     </p>
     <div style="display:flex; flex-direction:column; gap:0.5rem; margin:1rem 0;">
-      <button class="btn-primary" style="padding:0.8rem;" disabled={syncing} onclick={() => run("push")}>⬆ Kirim Data ke Server (Sync Out)</button>
-      <button class="btn-primary" style="padding:0.8rem;" disabled={syncing} onclick={() => run("pull")}>⬇ Ambil Update dari Server (Sync In)</button>
-      <button class="btn-success" style="padding:0.8rem;" disabled={syncing} onclick={() => run("all")}>⇅ Sync Semua</button>
+      <button class="btn-primary" style="padding:0.8rem;" disabled={syncing || locked} onclick={() => run("push")}>⬆ Kirim Data ke Server (Sync Out)</button>
+      <button class="btn-primary" style="padding:0.8rem;" disabled={syncing || locked} onclick={() => run("pull")}>⬇ Ambil Update dari Server (Sync In)</button>
+      <button class="btn-success" style="padding:0.8rem;" disabled={syncing || locked} onclick={() => run("all")}>⇅ Sync Semua</button>
     </div>
     {#if syncing}<p class="text-dim">Menyinkronkan…</p>{/if}
     {#if lastResult}

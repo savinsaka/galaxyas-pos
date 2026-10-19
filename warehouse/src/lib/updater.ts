@@ -54,3 +54,12 @@ export async function installUpdate() {
 export function dismissUpdate() {
   updateState.set({ status: "idle" });
 }
+
+/** Untuk gerbang wajib update: cek dulu kalau belum ada update tertunda, lalu
+ * langsung download & install. `false` = server rilis belum punya versi baru. */
+export async function updateNow(): Promise<boolean> {
+  if (!pendingUpdate) await checkForUpdate();
+  if (!pendingUpdate) return false;
+  await installUpdate();
+  return true;
+}

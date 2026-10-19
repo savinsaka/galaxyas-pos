@@ -11,8 +11,8 @@ use crate::error::{AppError, AppResult};
 use crate::models::{
     BrandSalesRow, CloseShiftInput, Customer, CustomerInput, DiscountPeriod, DiscountPeriodInput,
     Expense, ExpenseInput, OpenShiftInput, Product, ProductInput, ProductSalesRow,
-    ProductWithStock, SaleInput, Shift, StockMovement, StockMovementInput, StoreInfo, SyncLogEntry,
-    SyncResult, TransactionDetail, User, UserInput,
+    ProductWithStock, SaleInput, Shift, SsotSaveResult, StockMovement, StockMovementInput, StoreInfo,
+    SyncAccount, SyncLogEntry, SyncResult, TransactionDetail, UpdatePolicy, User, UserInput,
 };
 use crate::stores;
 use crate::sync;
@@ -1030,22 +1030,26 @@ pub fn take_print_payload(state: State<'_, PrintPayloadState>, label: String) ->
 
 // ---------- Sinkronisasi (manual) ----------
 
-fn read_sync_config(state: &State<'_, AppState>) -> AppResult<(String, String, String)> {
+/// Akun server yang sedang login di PC ini + `last_pull_at`. Belum login =
+/// error yang mengarahkan ke Sync → Akun Server.
+fn read_sync_config(state: &State<'_, AppState>) -> AppResult<(sync::Server, String)> {
     let conn = state.lock()?;
-    let server_url = db::get_setting(&conn, "server_url")?
+    let token = db::get_setting(&conn, "sync_token")?.filter(|s| !s.is_empty());
+    let store_id = db::get_setting(&conn, "store_id")?.filter(|s| !s.is_empty());
+    let (Some(token), Some(store_id)) = (token, store_id) else {
+        return Err(AppError::Config("Belum login ke server. Buka Sync → Akun Server untuk login.".into()));
+    };
+    let url = db::get_setting(&conn, "server_url")?
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| AppError::Config("server_url belum diatur".into()))?;
-    let store_id = db::get_setting(&conn, "store_id")?
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| AppError::Config("store_id belum diatur".into()))?;
+        .unwrap_or_else(sync::default_server);
     let last_pull = db::get_setting(&conn, "last_pull_at")?.unwrap_or_default();
-    Ok((server_url, store_id, last_pull))
+    Ok((sync::Server { url, store_id, token }, last_pull))
 }
 
 /// Kirim Data ke Server (Upload): kirim perubahan master data lokal.
 #[tauri::command]
 pub async fn sync_push(state: State<'_, AppState>) -> AppResult<SyncResult> {
-    let (server_url, store_id, _) = read_sync_config(&state)?;
+    let (srv, _) = read_sync_config(&state)?;
 
     let dirty: Vec<Product> = {
         let conn = state.lock()?;
@@ -1059,7 +1063,7 @@ pub async fn sync_push(state: State<'_, AppState>) -> AppResult<SyncResult> {
         });
     }
 
-    let resp = sync::push(&server_url, &store_id, &dirty).await?;
+    let resp = sync::push(&srv, &dirty).await?;
 
     // Server tidak mengembalikan breakdown per-ID (cuma agregat applied/skipped),
     // jadi log push cuma bisa melaporkan apa yang DIKIRIM, bukan status per-item.
@@ -1089,10 +1093,10 @@ pub async fn sync_push(state: State<'_, AppState>) -> AppResult<SyncResult> {
 /// Ambil Update dari Server (Download): tarik master data terbaru (Delta Sync).
 #[tauri::command]
 pub async fn sync_pull(state: State<'_, AppState>) -> AppResult<SyncResult> {
-    let (server_url, store_id, last_pull) = read_sync_config(&state)?;
+    let (srv, last_pull) = read_sync_config(&state)?;
 
     let since = if last_pull.is_empty() { None } else { Some(last_pull.as_str()) };
-    let resp = sync::pull(&server_url, &store_id, since).await?;
+    let resp = sync::pull(&srv, since).await?;
 
     let (applied, skipped, log) = {
         let conn = state.lock()?;
@@ -1128,6 +1132,127 @@ pub async fn sync_all(state: State<'_, AppState>) -> AppResult<SyncResult> {
         message: format!("{} {}", push_res.message, pull_res.message),
         log,
     })
+}
+
+// ---------- Akun server (login anggota) ----------
+
+fn device_name() -> String {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "PC".into())
+}
+
+#[tauri::command]
+pub fn sync_account(state: State<'_, AppState>) -> AppResult<SyncAccount> {
+    let conn = state.lock()?;
+    let token = db::get_setting(&conn, "sync_token")?.unwrap_or_default();
+    Ok(SyncAccount {
+        logged_in: !token.is_empty(),
+        username: db::get_setting(&conn, "store_id")?.unwrap_or_default(),
+        name: db::get_setting(&conn, "sync_member_name")?.unwrap_or_default(),
+    })
+}
+
+/// Login sekali per PC: token disimpan di SQLite lokal (ikut bertahan saat app
+/// diupdate). ID Toko akun = `store_id` sync.
+#[tauri::command]
+pub async fn sync_login(state: State<'_, AppState>, username: String, password: String) -> AppResult<SyncAccount> {
+    let username = username.trim().to_string();
+    if username.is_empty() || password.is_empty() {
+        return Err(AppError::Other("ID Toko dan password wajib diisi.".into()));
+    }
+    let server = sync::default_server();
+    let resp = sync::login(&server, &username, &password, &device_name()).await?;
+    let conn = state.lock()?;
+    db::set_setting(&conn, "server_url", &server)?;
+    db::set_setting(&conn, "store_id", &resp.username)?;
+    db::set_setting(&conn, "sync_member_name", &resp.name)?;
+    db::set_setting(&conn, "sync_token", &resp.token)?;
+    Ok(SyncAccount { logged_in: true, username: resp.username, name: resp.name })
+}
+
+/// Keluar: cabut token di server (kalau bisa) lalu hapus token lokal. ID Toko
+/// tetap tersimpan supaya form login berikutnya sudah terisi.
+#[tauri::command]
+pub async fn sync_logout(state: State<'_, AppState>) -> AppResult<()> {
+    if let Ok((srv, _)) = read_sync_config(&state) {
+        let _ = sync::logout(&srv).await;
+    }
+    let conn = state.lock()?;
+    db::set_setting(&conn, "sync_token", "")?;
+    db::set_setting(&conn, "sync_member_name", "")?;
+    Ok(())
+}
+
+// ---------- Gerbang wajib update ----------
+
+/// Bandingkan versi "1.7.0" secara numerik per bagian.
+fn version_lt(a: &str, b: &str) -> bool {
+    let parse = |v: &str| -> Vec<u64> {
+        v.trim().trim_start_matches('v').split('.').map(|p| p.trim().parse().unwrap_or(0)).collect()
+    };
+    let (mut a, mut b) = (parse(a), parse(b));
+    let n = a.len().max(b.len());
+    a.resize(n, 0);
+    b.resize(n, 0);
+    a < b
+}
+
+/// Kebijakan versi minimum dari server. Server tidak terjangkau → tidak ada
+/// kewajiban (toko tetap bisa jualan saat offline).
+#[tauri::command]
+pub async fn app_update_policy(app: tauri::AppHandle) -> AppResult<UpdatePolicy> {
+    let current = app.package_info().version.to_string();
+    let none = UpdatePolicy { current: current.clone(), ..Default::default() };
+    let Ok(p) = sync::app_policy(&sync::default_server(), "warehouse").await else {
+        return Ok(none);
+    };
+    if p.min_version.is_empty() || !version_lt(&current, &p.min_version) {
+        return Ok(none);
+    }
+    let passed = p
+        .deadline
+        .as_deref()
+        .and_then(|d| chrono::DateTime::parse_from_rfc3339(d).ok())
+        .is_none_or(|d| Utc::now() >= d);
+    Ok(UpdatePolicy {
+        current,
+        min_version: p.min_version,
+        deadline: p.deadline,
+        message: p.message,
+        must_update: true,
+        blocked: passed,
+    })
+}
+
+// ---------- Layar SSoT ----------
+
+/// Semua barang di SSoT (tanpa tombstone), urut nama.
+#[tauri::command]
+pub async fn ssot_list_products(state: State<'_, AppState>) -> AppResult<Vec<Product>> {
+    let (srv, _) = read_sync_config(&state)?;
+    sync::ssot_list(&srv).await
+}
+
+/// Tambah/ubah satu barang langsung di SSoT. `apply_local` = hasilnya juga
+/// diterapkan ke SQLite PC ini (seperti hasil pull). Gagal di lokal tidak
+/// membatalkan simpan di SSoT — dikembalikan sebagai `local_error`.
+#[tauri::command]
+pub async fn ssot_save_product(
+    state: State<'_, AppState>,
+    input: ProductInput,
+    apply_local: bool,
+) -> AppResult<SsotSaveResult> {
+    let (srv, _) = read_sync_config(&state)?;
+    let product = sync::ssot_save(&srv, &input).await?;
+    let mut local_error = None;
+    if apply_local {
+        let conn = state.lock()?;
+        if let Err(e) = db::apply_pulled_products(&conn, std::slice::from_ref(&product)) {
+            local_error = Some(e.to_string());
+        }
+    }
+    Ok(SsotSaveResult { product, local_error })
 }
 
 // ---------- Bridge: Pull dari app mobile (galaxyas-mobile, fase 6) ----------
@@ -1829,4 +1954,18 @@ pub fn list_mobile_devices(state: State<'_, AppState>) -> AppResult<Vec<crate::m
 pub fn revoke_mobile_device(state: State<'_, AppState>, id: String) -> AppResult<()> {
     let conn = state.lock()?;
     db::revoke_mobile_device(&conn, &id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::version_lt;
+
+    #[test]
+    fn versi_dibandingkan_per_angka() {
+        assert!(version_lt("1.6.7", "1.7.0"));
+        assert!(version_lt("1.7.0", "1.10.0"), "1.10 lebih baru dari 1.7, bukan urutan teks");
+        assert!(version_lt("1.7", "1.7.1"));
+        assert!(!version_lt("1.7.0", "1.7.0"));
+        assert!(!version_lt("v1.8.0", "1.7.9"));
+    }
 }

@@ -49,7 +49,10 @@ import type {
   StockFlowDetail,
   StockFlowRow,
   StoreInfo,
+  SsotSaveResult,
+  SyncAccount,
   SyncResult,
+  UpdatePolicy,
   TimeOpnameInput,
   TimeOpnameResult,
   TimeOpnameRow,
@@ -238,6 +241,13 @@ export const api = {
   syncPush: () => invoke<SyncResult>("sync_push"),
   syncPull: () => invoke<SyncResult>("sync_pull"),
   syncAll: () => invoke<SyncResult>("sync_all"),
+  syncAccount: () => invoke<SyncAccount>("sync_account"),
+  syncLogin: (username: string, password: string) => invoke<SyncAccount>("sync_login", { username, password }),
+  syncLogout: () => invoke<void>("sync_logout"),
+  appUpdatePolicy: () => invoke<UpdatePolicy>("app_update_policy"),
+  ssotListProducts: () => invoke<Product[]>("ssot_list_products"),
+  ssotSaveProduct: (input: ProductInput, applyLocal: boolean) =>
+    invoke<SsotSaveResult>("ssot_save_product", { input, applyLocal }),
 
   // Bridge: Pull dari app mobile (galaxyas-mobile, fase 6) — server & auth
   // TERPISAH dari Sinkronisasi di atas (itu ke server POS, ini ke server mobile).

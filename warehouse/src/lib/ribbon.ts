@@ -53,10 +53,21 @@ export const RIBBON: RibbonCategory[] = [
           { key: "daftar-merek", label: "Daftar Merek", icon: "🏭", viewKey: "daftar-merek", title: "Daftar Merek", singleton: true },
         ],
       },
+    ],
+  },
+  {
+    // Sync punya tab sendiri. Izinnya tetap ikut modul "master" supaya akun
+    // yang selama ini bisa sync tidak kehilangan akses.
+    key: "sync",
+    label: "Sync",
+    perm: "master",
+    groups: [
       {
-        label: "Server",
+        label: "Sinkronisasi",
         actions: [
           { key: "sync", label: "Sync In / Out", icon: "🔄", viewKey: "sync", title: "Sinkronisasi", singleton: true },
+          { key: "ssot", label: "SSoT", icon: "🗄️", viewKey: "ssot", title: "Data SSoT", singleton: true },
+          { key: "sync-akun", label: "Akun Server", icon: "🔑", viewKey: "sync-akun", title: "Akun Server", singleton: true },
         ],
       },
     ],
@@ -127,7 +138,6 @@ export const RIBBON: RibbonCategory[] = [
         label: "Aplikasi",
         actions: [
           { key: "pengaturan-toko", label: "Info Gudang", icon: "🏪", viewKey: "pengaturan-toko", title: "Informasi Gudang", singleton: true, props: { section: "toko" } },
-          { key: "pengaturan-server", label: "Server Sinkronisasi", icon: "🔄", viewKey: "pengaturan-server", title: "Server Sinkronisasi", singleton: true, props: { section: "server" } },
           { key: "pengaturan-struk", label: "Struk & Printer", icon: "🖨️", viewKey: "pengaturan-struk", title: "Struk & Printer", singleton: true, props: { section: "struk" } },
           { key: "pengaturan-tema", label: "Tema", icon: "🎨", viewKey: "pengaturan-tema", title: "Tema", singleton: true, props: { section: "tema" } },
           { key: "pengaturan-lanjutan", label: "Lanjutan", icon: "⚠️", viewKey: "pengaturan-lanjutan", title: "Lanjutan", singleton: true, props: { section: "lanjutan" } },

@@ -298,7 +298,9 @@ tbody tr:hover {
 .app {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  /* --gate-offset: tinggi pita merah "Wajib update" (UpdateGate.svelte), 0 kalau tidak tampil. */
+  height: calc(100vh - var(--gate-offset, 0px));
+  margin-top: var(--gate-offset, 0px);
   background: var(--bg);
 }
 
@@ -564,7 +566,8 @@ tbody tr:hover {
 
 /* Login */
 .login-screen {
-  height: 100vh;
+  height: calc(100vh - var(--gate-offset, 0px));
+  margin-top: var(--gate-offset, 0px);
   display: flex;
   align-items: center;
   justify-content: center;

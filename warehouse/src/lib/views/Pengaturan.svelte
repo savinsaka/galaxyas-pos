@@ -13,11 +13,10 @@
   } from "$lib/stores/activeServer";
   import Receipt from "$lib/components/Receipt.svelte";
 
-  type PTab = "toko" | "server" | "lan" | "struk" | "tema" | "kasir" | "lanjutan";
+  type PTab = "toko" | "lan" | "struk" | "tema" | "kasir" | "lanjutan";
   let { section }: { section: PTab; tabId?: string } = $props();
   const SECTION_TITLES: Record<PTab, string> = {
     toko: "Informasi Toko",
-    server: "Server Sinkronisasi",
     lan: "Server Pusat",
     struk: "Struk & Printer",
     tema: "Tema Tampilan",
@@ -46,7 +45,6 @@
   let printers = $state<string[]>([]);
   let savingKey = $state<string | null>(null);
   let savingReceipt = $state(false);
-  let savingServer = $state(false);
   let preview = $state(false);
   let spacingChanged = $state(false);
   let spacingTimer: ReturnType<typeof setTimeout> | null = null;
@@ -66,18 +64,6 @@
     { key: "store_whatsapp", label: "WhatsApp", hint: "0812-xxxx-xxxx" },
     { key: "tax_percent", label: "Pajak (%)", hint: "0 jika tidak memakai pajak" },
   ];
-  const serverFields = [
-    { key: "store_id", label: "ID Toko", hint: "Identitas untuk sinkronisasi" },
-    { key: "server_url", label: "URL Server Sync", hint: "http://localhost:8000" },
-  ];
-  // Server GALAXYAS Mobile untuk PENGIRIMAN (menu Kirim ke Toko) — login
-  // sebagai Pengirim (JWT), lalu buat baris kiriman per toko tujuan. TERPISAH
-  // dari Server Sinkronisasi di atas (beda server, beda database, beda auth).
-  const mobileFields: { key: string; label: string; hint: string; password?: boolean }[] = [
-    { key: "mobile_server_url", label: "URL Server Bridge", hint: "https://app.jjapps.net" },
-    { key: "ship_warehouse_key", label: "Warehouse Key", hint: "kunci mesin dari Bos", password: true },
-  ];
-  let savingMobile = $state(false);
   const receiptKeys = [
     "receipt_paper", "receipt_printer", "receipt_font_size",
     "receipt_line_height", "receipt_margin", "receipt_header", "receipt_footer",
@@ -268,10 +254,6 @@
       settings.store_instagram ??= "";
       settings.store_tiktok ??= "";
       settings.store_whatsapp ??= "";
-      settings.store_id ??= "";
-      settings.server_url ??= "";
-      settings.mobile_server_url ??= "";
-      settings.ship_warehouse_key ??= "";
       settings.tax_percent ??= "0";
       settings.theme ??= "baby-blue";
       activeTheme = settings.theme;
@@ -327,22 +309,6 @@
       await api.updateSetting(key, String(settings[key] ?? ""));
       showToast("Tersimpan.", "success");
     } catch (e) { toastError(e); } finally { savingKey = null; }
-  }
-
-  async function saveServer() {
-    savingServer = true;
-    try {
-      for (const f of serverFields) await api.updateSetting(f.key, String(settings[f.key] ?? ""));
-      showToast("Pengaturan server tersimpan.", "success");
-    } catch (e) { toastError(e); } finally { savingServer = false; }
-  }
-
-  async function saveMobile() {
-    savingMobile = true;
-    try {
-      for (const f of mobileFields) await api.updateSetting(f.key, String(settings[f.key] ?? ""));
-      showToast("Pengaturan server mobile tersimpan.", "success");
-    } catch (e) { toastError(e); } finally { savingMobile = false; }
   }
 
   async function saveReceipt() {
@@ -437,46 +403,6 @@
 {/if}
 
 <!-- ── Tab: Server Sinkronisasi ── -->
-{#if section === "server"}
-  <div class="card" style="max-width:520px;">
-    <h2>Server Sinkronisasi</h2>
-    <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
-      Hanya diperlukan jika menggunakan fitur sinkronisasi data ke server pusat.
-      Biarkan kosong jika hanya dipakai secara lokal.
-    </p>
-    {#each serverFields as f}
-      <div style="margin-bottom:0.9rem;">
-        <label>{f.label}</label>
-        <input bind:value={settings[f.key]} placeholder={f.hint} />
-      </div>
-    {/each}
-    <div class="row" style="justify-content:flex-end;">
-      <button class="btn-primary" disabled={savingServer} onclick={saveServer}>
-        Simpan Pengaturan Server
-      </button>
-    </div>
-  </div>
-
-  <div class="card" style="max-width:520px; margin-top:0.8rem;">
-    <h2>Server Pengiriman</h2>
-    <p class="text-dim" style="margin-top:0; font-size:0.83rem;">
-      Untuk menu <b>Kirim ke Toko</b>: isi URL server bridge + <b>Warehouse Key</b>
-      (kunci mesin dari Bos). Daftar toko tujuan lalu muncul otomatis. Tanpa akun/
-      email — cukup satu kunci.
-    </p>
-    {#each mobileFields as f}
-      <div style="margin-bottom:0.9rem;">
-        <label>{f.label}</label>
-        <input type={f.password ? "password" : "text"} bind:value={settings[f.key]} placeholder={f.hint} autocomplete="off" />
-      </div>
-    {/each}
-    <div class="row" style="justify-content:flex-end;">
-      <button class="btn-primary" disabled={savingMobile} onclick={saveMobile}>
-        Simpan Pengaturan Pengiriman
-      </button>
-    </div>
-  </div>
-{/if}
 
 <!-- ── Tab: Server Pusat (LAN multi-kasir) ── -->
 {#if section === "lan"}
