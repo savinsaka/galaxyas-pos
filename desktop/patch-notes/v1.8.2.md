@@ -1,0 +1,3 @@
+- Daftar Kasir: setelah mengedit transaksi, tombol halaman Berikutnya/Sebelumnya kembali normal dan daftar tetap di halaman yang sedang dibuka.
+- Daftar Item Masuk / Item Keluar: perbaikan yang sama untuk perpindahan halaman setelah edit.
+- Popup "Update Tersedia" sekarang menampilkan daftar perubahan di setiap versi baru.

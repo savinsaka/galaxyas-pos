@@ -30,6 +30,20 @@ jobs:
         working-directory: warehouse
         run: npm ci
 
+      # Patch note WAJIB: warehouse/patch-notes/<tag>.md (mis. wh-v1.1.1.md).
+      # Isinya jadi teks rilis dan ikut ke latest.json ("notes"), lalu tampil di
+      # popup "Update Tersedia" di aplikasi. Tidak ada file = rilis dibatalkan.
+      - name: Read patch notes
+        id: notes
+        shell: pwsh
+        run: |
+          $f = "warehouse/patch-notes/${{ github.ref_name }}.md"
+          if (-not (Test-Path $f)) { Write-Error "Patch note $f belum ada. Tulis dulu, commit, lalu buat ulang tag."; exit 1 }
+          $body = (Get-Content $f -Raw -Encoding utf8).Trim()
+          if (-not $body) { Write-Error "Patch note $f kosong."; exit 1 }
+          $delim = "NOTES_" + [guid]::NewGuid().ToString("N")
+          "body<<$delim`n$body`n$delim" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
       - uses: tauri-apps/tauri-action@v0
         env:
           # Token dengan akses tulis ke repo publik gpos-warehouse-releases.
@@ -44,6 +58,6 @@ jobs:
           releaseCommitish: main
           tagName: ${{ github.ref_name }}
           releaseName: "GPOS Warehouse ${{ github.ref_name }}"
-          releaseBody: "Lihat commit log di repo utama untuk detail perubahan."
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: true
           prerelease: false

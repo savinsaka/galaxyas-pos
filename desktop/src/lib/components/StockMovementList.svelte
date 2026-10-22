@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { confirmDialog } from "$lib/dialog";
   import { api } from "$lib/api";
   import { formatQty, formatDateTime } from "$lib/format";
@@ -50,6 +50,9 @@
     load();
   });
 
+  // Reload setelah batch diedit/ditambah, tetap di halaman yang sedang dibuka.
+  // Wajib untrack: tanpa itu efek ini ikut membaca `page`/`from`/`to` di dalam
+  // load(), sehingga tiap klik "Berikutnya" memicu efek lagi dan paging macet.
   let firstDirtyCheck = true;
   $effect(() => {
     $stockBatchesDirty;
@@ -57,7 +60,7 @@
       firstDirtyCheck = false;
       return;
     }
-    reload();
+    untrack(() => load());
   });
 
   function onListKey(e: KeyboardEvent) {

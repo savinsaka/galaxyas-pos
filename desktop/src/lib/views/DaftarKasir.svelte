@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { confirmDialog } from "$lib/dialog";
   import { get } from "svelte/store";
   import { api } from "$lib/api";
@@ -103,6 +103,9 @@
   });
 
   // Reload otomatis setelah transaksi diedit dari tab "Edit Kasir".
+  // Tetap di halaman yang sedang dibuka. Wajib untrack: tanpa itu efek ini
+  // ikut membaca `page`/`search`/`from`/`to` di dalam load(), sehingga tiap
+  // klik "Berikutnya" memicu efek lagi dan paging macet di halaman 1.
   let firstDirtyCheck = true;
   $effect(() => {
     $transactionsDirty;
@@ -110,8 +113,10 @@
       firstDirtyCheck = false;
       return;
     }
-    reload();
-    loadTodayTotal();
+    untrack(() => {
+      load();
+      loadTodayTotal();
+    });
   });
 
   function onListKey(e: KeyboardEvent) {

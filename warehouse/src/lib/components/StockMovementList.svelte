@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { api } from "$lib/api";
   import { formatQty, formatDateTime } from "$lib/format";
   import { showToast, toastError } from "$lib/toast";
@@ -49,6 +49,9 @@
     load();
   });
 
+  // Reload setelah edit/tambah, tetap di halaman yang sedang dibuka. Wajib untrack:
+  // tanpa itu efek ini ikut membaca `page`/`from`/`to` di dalam load(),
+  // sehingga tiap klik "Berikutnya" memicu efek lagi dan paging macet.
   let firstDirtyCheck = true;
   $effect(() => {
     $stockBatchesDirty;
@@ -56,7 +59,7 @@
       firstDirtyCheck = false;
       return;
     }
-    reload();
+    untrack(() => load());
   });
 
   function onListKey(e: KeyboardEvent) {

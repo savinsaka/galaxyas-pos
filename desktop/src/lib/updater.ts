@@ -4,7 +4,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 
 export type UpdateState =
   | { status: "idle" }
-  | { status: "available"; version: string }
+  | { status: "available"; version: string; notes: string }
   | { status: "downloading"; version: string; progress: number }
   | { status: "ready" }
   | { status: "error"; message: string };
@@ -13,6 +13,16 @@ export const updateState = writable<UpdateState>({ status: "idle" });
 
 let pendingUpdate: Update | null = null;
 
+// Teks bawaan lama di latest.json (rilis sebelum ada file patch note) — tidak
+// informatif untuk kasir, jadi tidak ditampilkan.
+const PLACEHOLDER_NOTES = "Lihat commit log di repo utama untuk detail perubahan.";
+
+/** Patch note dari latest.json (diisi CI dari file patch-notes/<tag>.md). */
+function cleanNotes(body: string | undefined): string {
+  const s = (body ?? "").trim();
+  return s === PLACEHOLDER_NOTES ? "" : s;
+}
+
 /** Cek update sekali saat app dibuka. Kegagalan (offline, endpoint belum siap,
  * dsb.) tidak boleh mengganggu penggunaan aplikasi — cukup dicatat ke console. */
 export async function checkForUpdate() {
@@ -20,7 +30,7 @@ export async function checkForUpdate() {
     const update = await check();
     if (!update) return;
     pendingUpdate = update;
-    updateState.set({ status: "available", version: update.version });
+    updateState.set({ status: "available", version: update.version, notes: cleanNotes(update.body) });
   } catch (e) {
     console.warn("Cek update gagal:", e);
   }

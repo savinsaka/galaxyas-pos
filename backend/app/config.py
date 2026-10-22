@@ -25,7 +25,10 @@ class Settings(BaseSettings):
 
     # Gerbang "Wajib Update" (app v1.7.0+ menanyakan ini saat dibuka). Kosong =
     # tidak ada kewajiban. Versi app < min_version: pita merah sebelum
-    # `app_update_deadline`, layar terkunci sesudahnya.
+    # `app_update_deadline`, layar terkunci sesudahnya. Deadline kosong =
+    # langsung terkunci. Dipakai PER KASUS: pemilik yang menentukan update
+    # mana yang wajib (mis. ada perubahan server); update biasa tidak wajib.
+    # Isi min_version hanya dengan versi yang SUDAH dipublish.
     pos_min_version: str = ""
     warehouse_min_version: str = ""
     app_update_deadline: datetime | None = None

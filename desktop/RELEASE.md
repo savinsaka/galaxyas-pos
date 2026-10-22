@@ -46,6 +46,8 @@ Token ini sengaja **dibatasi hanya ke repo release** (bukan repo source code) �
    - `desktop/src-tauri/Cargo.toml` → `version = "..."`
    - `desktop/src-tauri/tauri.conf.json` → `"version"`
 
+   **Tulis patch note** di `desktop/patch-notes/vX.Y.Z.md` (nama file = nama tag). Satu perubahan per baris, diawali `- `, bahasa yang dimengerti kasir. Isinya tampil di popup "Update Tersedia" di aplikasi dan jadi teks rilis di GitHub. **Wajib** — tanpa file ini CI membatalkan rilis. (Warehouse: `warehouse/patch-notes/wh-vX.Y.Z.md`.) Mengedit teks rilis di GitHub sesudahnya tidak mengubah yang tampil di aplikasi.
+
 2. **Commit** perubahan seperti biasa.
 
 3. **Tag** versi (harus diawali `v`):

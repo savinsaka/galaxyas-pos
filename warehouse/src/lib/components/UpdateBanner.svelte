@@ -13,6 +13,21 @@
       checked = false;
     }
   });
+
+  // Patch note ditulis sebagai baris biasa; baris berawalan "- " atau "* " jadi
+  // poin, judul "# ..." jadi teks tebal. Sengaja tanpa HTML mentah.
+  type NoteLine = { kind: "bullet" | "head" | "text"; text: string };
+  function noteLines(notes: string): NoteLine[] {
+    return notes
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l !== "")
+      .map((l): NoteLine => {
+        if (/^[-*•]\s+/.test(l)) return { kind: "bullet", text: l.replace(/^[-*•]\s+/, "") };
+        if (/^#+\s+/.test(l)) return { kind: "head", text: l.replace(/^#+\s+/, "") };
+        return { kind: "text", text: l };
+      });
+  }
 </script>
 
 {#if $currentUser && $updateState.status !== "idle"}
@@ -21,7 +36,19 @@
       {#if $updateState.status === "available"}
         <div class="update-icon">🔔</div>
         <h2>Update Tersedia</h2>
-        <p class="text-dim" style="margin:0.3rem 0 1rem;">Sudah ada update versi <b>{$updateState.version}</b>.</p>
+        <p class="text-dim" style="margin:0.3rem 0 0.8rem;">Sudah ada update versi <b>{$updateState.version}</b>.</p>
+        {#if $updateState.notes}
+          <div class="update-notes">
+            <div class="update-notes-title">Yang baru di versi ini:</div>
+            <ul>
+              {#each noteLines($updateState.notes) as line}
+                {#if line.kind === "bullet"}<li>{line.text}</li>
+                {:else if line.kind === "head"}<li class="head">{line.text}</li>
+                {:else}<li class="plain">{line.text}</li>{/if}
+              {/each}
+            </ul>
+          </div>
+        {/if}
         <div class="row" style="gap:0.5rem;">
           <button class="btn-ghost" style="flex:1;" onclick={dismissUpdate}>Nanti</button>
           <button class="btn-primary" style="flex:1;" onclick={installUpdate}>Update Sekarang</button>
@@ -48,7 +75,17 @@
 {/if}
 
 <style>
-  .update-modal { max-width: 360px; text-align: center; }
+  .update-modal { max-width: 440px; text-align: center; }
+  .update-notes {
+    text-align: left; background: var(--baby-blue-bg); border-radius: 8px;
+    padding: 0.6rem 0.8rem; margin-bottom: 1rem; max-height: 45vh; overflow: auto;
+    font-size: 0.88rem; line-height: 1.45;
+  }
+  .update-notes-title { font-weight: 700; margin-bottom: 0.3rem; }
+  .update-notes ul { margin: 0; padding-left: 1.2rem; }
+  .update-notes li { margin: 0.15rem 0; }
+  .update-notes li.head { list-style: none; margin-left: -1.2rem; font-weight: 700; margin-top: 0.5rem; }
+  .update-notes li.plain { list-style: none; margin-left: -1.2rem; }
   .update-icon { font-size: 2.2rem; margin-bottom: 0.3rem; }
   .update-progress-bar {
     height: 8px;
